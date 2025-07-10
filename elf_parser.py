@@ -1,11 +1,14 @@
+from typing import Literal
+
 from elftools.dwarf.die import DIE
 from elftools.elf.elffile import ELFFile
+from collections import defaultdict
 
 
 class ZephyrSymbolParser:
     def __init__(self, elf_path: str):
-        self._symbol_cache = {}
-        self._struct_member_offset_cache = {}
+        self._symbol_cache: defaultdict[str:defaultdict[str:int]] = defaultdict(defaultdict)
+        self._struct_member_offset_cache: defaultdict[str:defaultdict[str:int]] = defaultdict(defaultdict)
 
         self.file = self._open_elf_file(elf_path)
         self.elf = ELFFile(self.file)
@@ -23,9 +26,9 @@ class ZephyrSymbolParser:
             raise RuntimeError("ELF file lacks DWARF debug information.")
         return self.elf.get_dwarf_info()
 
-    def get_symbol_address(self, symbol_name: str) -> int:
-        if symbol_name in self._symbol_cache:
-            return self._symbol_cache[symbol_name]
+    def get_symbol_info(self, symbol_name: str, info: Literal["address", "size"]) -> int:
+        if symbol_name in self._symbol_cache and info in self._symbol_cache[symbol_name]:
+            return self._symbol_cache[symbol_name][info]
 
         symtab = self.elf.get_section_by_name(".symtab")
         if symtab is None:
@@ -35,15 +38,22 @@ class ZephyrSymbolParser:
         if not symbols:
             raise RuntimeError(f"Symbol '{symbol_name}' not found.")
 
-        addr = symbols[0].entry["st_value"]
-        self._symbol_cache[symbol_name] = addr
+        match info:
+            case "address":
+                value = symbols[0].entry["st_value"]
+            case "size":
+                value = symbols[0].entry["st_size"]
+            case _:
+                raise Exception(f"'{info}' is not a valid information.")
 
-        return addr
+        self._symbol_cache[symbol_name][info] = value
+
+        return value
 
     def get_struct_member_offset(self, struct_name: str, member_name: str) -> int:
-        key = (struct_name, member_name)
-        if key in self._struct_member_offset_cache:
-            return self._struct_member_offset_cache[key]
+        if struct_name in self._struct_member_offset_cache and member_name in self._struct_member_offset_cache[
+            struct_name]:
+            return self._struct_member_offset_cache[struct_name][member_name]
 
         struct_die = self._find_struct_die(struct_name)
         if not struct_die:
@@ -54,9 +64,20 @@ class ZephyrSymbolParser:
             raise RuntimeError(f"Member '{member_name}' not found in struct '{struct_name}'.")
 
         offset = self._extract_member_offset(member_die)
-        self._struct_member_offset_cache[key] = offset
+        self._struct_member_offset_cache[struct_name][member_name] = offset
 
         return offset
+
+    def get_struct_size(self, struct_name: str) -> int:
+        struct_die = self._find_struct_die(struct_name)
+        if not struct_die:
+            raise RuntimeError(f"Struct '{struct_name}' not found.")
+
+
+        if not struct_die.attributes["DW_AT_byte_size"]:
+            raise RuntimeError(f"Struct '{struct_name}' has no size information.")
+
+        return getattr(struct_die.attributes["DW_AT_byte_size"], "value")
 
     def _find_struct_die(self, struct_name: str) -> DIE | None:
         for CU in self.dwarf.iter_CUs():
