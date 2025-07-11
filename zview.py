@@ -18,6 +18,7 @@ from mcu_scraper import JLinkScraper
 class ThreadInfo:
     name: str
     cpu: float
+    active: bool
     stack_size: int
     stack_watermark: int
 
@@ -60,7 +61,7 @@ class ZViewApp(App):
             bar.complete_style = "red" if usage_percent > 90 else "yellow" if usage_percent > 75 else "green"
             bar.finished_style = "red"
             table.add_row(
-                Text(thread.name, style="cyan"),
+                Text(thread.name, style="cyan" if thread.active else "grey"),
                 f"{thread.cpu:.1f}%",
                 f"{(100 * thread.stack_watermark) / thread.stack_size: .1f}%",
                 bar,
@@ -91,70 +92,78 @@ class ZViewApp(App):
         parser = ZephyrSymbolParser(self.elf_path)
         kernel_base = parser.get_symbol_info("_kernel", info="address")
         threads_offset = parser.get_struct_member_offset("z_kernel", "threads")
+        kernel_usage_offset = parser.get_struct_member_offset("z_kernel", "usage")
         threads_addr = kernel_base + threads_offset
+        kernel_usage_addr = kernel_base + kernel_usage_offset
 
+        stack_struct_size = parser.get_struct_size("k_thread")
         stack_info_offset = parser.get_struct_member_offset("k_thread", "stack_info")
-        stack_info_size = parser.get_struct_size("k_thread")
+        base_offset = parser.get_struct_member_offset("k_thread", "base")
         offsets = {
             "next": parser.get_struct_member_offset("k_thread", "next_thread"),
             "name": parser.get_struct_member_offset("k_thread", "name"),
+            "usage": base_offset + parser.get_struct_member_offset("_thread_base", "usage"),
             "stack_start": stack_info_offset + parser.get_struct_member_offset("_thread_stack_info", "start"),
             "stack_size": stack_info_offset + parser.get_struct_member_offset("_thread_stack_info", "size"),
             "stack_delta": stack_info_offset + parser.get_struct_member_offset("_thread_stack_info", "delta"),
-            "runtime": None
         }
-        try:
-            timing_offset = parser.get_struct_member_offset("k_thread", "timing")
-            offsets["runtime"] = timing_offset + parser.get_struct_member_offset("_thread_timing_info",
-                                                                                 "total_cycles")
-        except RuntimeError:
-            pass  # CPU usage will not be available
 
         table = self.query_one(DataTable)
 
-        with JLinkScraper(target_mcu=self.target_mcu) as scraper:
+        with (JLinkScraper(target_mcu=self.target_mcu) as scraper):
+            threads_info = []
+            ptr = scraper.read32(threads_addr)[0]
+            for _ in range(50):
+                if ptr == 0:
+                    break
+
+                stack_struct_words = scraper.read32(ptr, stack_struct_size // 4)
+                stack_name_words = stack_struct_words[offsets["name"] // 4: (offsets["name"] + 32) // 4]
+                stack_name_bytes = b"".join((word.to_bytes(4, "little") for word in stack_name_words))
+                thread_static_data = {"address": ptr,
+                                      "stack_start": stack_struct_words[offsets["stack_start"] // 4],
+                                      "stack_size": stack_struct_words[offsets["stack_size"] // 4],
+                                      "name": (stack_name_bytes.partition(b'\0')[0]).decode(
+                                          errors='ignore') or f"thread_0x{ptr:X}"}
+                ptr = stack_struct_words[offsets["next"] // 4]
+
+                threads_info.append(thread_static_data)
+
+            ## Mainloop
             reading = False
-            total_cycles, last_cycles = 0, {}
-
+            last_cycles = {}
+            last_cpu_cycles = {}
+            cpus = {}
             while self.is_running:
-                threads = []
+                message = []
+                for thread_info in threads_info:
+                    thread_usage = scraper.read64(thread_info["address"] + offsets["usage"])[0]
+                    thread_usage_delta = thread_usage - last_cycles[thread_info["name"]] if last_cycles.get(
+                        thread_info["name"]) else 0
+                    last_cycles[thread_info["name"]] = thread_usage
 
-                ptr = scraper.read32(threads_addr)[0]
-                new_total = scraper.read32(parser.get_symbol_info("k_cycle_get_32", info="address"))[0] if \
-                    offsets["runtime"] else 0
-                delta_total = new_total - total_cycles if total_cycles > 0 else 0
-                total_cycles = new_total
+                    cpu_usage = scraper.read64(kernel_usage_addr)[0]
+                    cpu_usage_delta = cpu_usage - last_cpu_cycles[thread_info["name"]] if last_cpu_cycles.get(
+                        thread_info["name"]) else 0.1
+                    last_cpu_cycles[thread_info["name"]] = cpu_usage
 
-                for _ in range(24):
-                    if ptr == 0:
-                        break
+                    cpus[thread_info["name"]] = thread_usage_delta / cpu_usage_delta
 
-                    struct_bytes = bytes(scraper.read8(ptr, stack_info_size))
+                # for thread_info in threads_info:
+                    watermark = self.__calculate_dynamic_watermark(scraper, thread_info["stack_start"],
+                                                                   thread_info["stack_size"])
 
-                    stack_st = int.from_bytes(struct_bytes[offsets["stack_start"]:offsets["stack_start"] + 4], 'little')
-                    stack_sz = int.from_bytes(struct_bytes[offsets["stack_size"]:offsets["stack_size"] + 4], 'little')
-                    name = (struct_bytes[offsets["name"]: offsets["name"] + 32]
-                            .partition(b'\0')[0]
-                            .decode(errors='ignore') or f"thread_0x{ptr:X}")
-                    watermark = self.__calculate_dynamic_watermark(scraper, stack_st, stack_sz)
-
-                    cpu = 0.0
-                    if offsets["runtime"] is not None:
-                        cycles = int.from_bytes(struct_bytes[offsets["runtime"]:offsets["runtime"] + 8], 'little')
-                        prev_cycles = last_cycles.get(name, 0)
-                        if delta_total > 0:
-                            cpu = ((cycles - prev_cycles) / delta_total * 100)
-                        last_cycles[name] = cycles
-
-                    threads.append(ThreadInfo(name, min(cpu, 100.0), stack_sz, watermark))
-                    ptr = int.from_bytes(struct_bytes[offsets["next"]:offsets["next"] + 4], 'little')
+                    message.append(
+                        ThreadInfo(thread_info["name"], cpus[thread_info["name"]] * 100, thread_usage_delta > 0,
+                                   thread_info["stack_size"],
+                                   watermark))
 
                 if self.is_running:
                     if not reading:
                         self.call_from_thread(table.add_columns, f"Thread", "CPU %", "Watermark %", "Stack Usage",
                                               "Watermark (Bytes)")
                         reading = True
-                    if not self.post_message(self.UpdateThreads(sorted(threads, key=lambda t: t.name))):
+                    if not self.post_message(self.UpdateThreads(sorted(message, key=lambda t: t.name))):
                         raise Exception("Unable to send message")
 
                 await asyncio.sleep(0.2)
