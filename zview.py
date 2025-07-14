@@ -62,7 +62,7 @@ class ZViewApp(App):
             bar.finished_style = "red"
             table.add_row(
                 Text(thread.name, style="cyan" if thread.active else "grey"),
-                f"{thread.cpu:.1f}%",
+                f"{round(thread.cpu, 1) if thread.cpu > 0 else 0}%",
                 f"{(100 * thread.stack_watermark) / thread.stack_size: .1f}%",
                 bar,
                 f"{thread.stack_watermark} / {thread.stack_size}",
@@ -92,9 +92,10 @@ class ZViewApp(App):
         parser = ZephyrSymbolParser(self.elf_path)
         kernel_base = parser.get_symbol_info("_kernel", info="address")
         threads_offset = parser.get_struct_member_offset("z_kernel", "threads")
-        kernel_usage_offset = parser.get_struct_member_offset("z_kernel", "usage")
+        kernel_cpu_offset = parser.get_struct_member_offset("z_kernel", "cpus")
+        kernel_usage0_offset = parser.get_struct_member_offset("_cpu", "usage0")
         threads_addr = kernel_base + threads_offset
-        kernel_usage_addr = kernel_base + kernel_usage_offset
+        kernel_usage_addr = kernel_base + kernel_cpu_offset + kernel_usage0_offset
 
         stack_struct_size = parser.get_struct_size("k_thread")
         stack_info_offset = parser.get_struct_member_offset("k_thread", "stack_info")
@@ -133,6 +134,7 @@ class ZViewApp(App):
             reading = False
             last_cycles = {}
             last_cpu_cycles = {}
+            bkp_cpu_delta = {}
             cpus = {}
             while self.is_running:
                 message = []
@@ -142,19 +144,27 @@ class ZViewApp(App):
                         thread_info["name"]) else 0
                     last_cycles[thread_info["name"]] = thread_usage
 
-                    cpu_usage = scraper.read64(kernel_usage_addr)[0]
-                    cpu_usage_delta = cpu_usage - last_cpu_cycles[thread_info["name"]] if last_cpu_cycles.get(
-                        thread_info["name"]) else 0.1
-                    last_cpu_cycles[thread_info["name"]] = cpu_usage
+                    cpu_usage = scraper.read32(kernel_usage_addr)[0]
+                    if cpu_usage != 0:
+                        cpu_usage = last_cpu_cycles[thread_info["name"]] if cpu_usage == 0 else cpu_usage
+                        cpu_usage_delta = cpu_usage - last_cpu_cycles[thread_info["name"]] if last_cpu_cycles.get(
+                            thread_info["name"]) else 1
+                        last_cpu_cycles[thread_info["name"]] = cpu_usage
+                        bkp_cpu_delta[thread_info["name"]] = cpu_usage_delta
 
-                    cpus[thread_info["name"]] = thread_usage_delta / cpu_usage_delta
+                        cpus[thread_info["name"]] = (thread_usage_delta / cpu_usage_delta) * 100
+                    elif bkp_cpu_delta.get(thread_info["name"]):
+                        cpus[thread_info["name"]] = (thread_usage_delta / bkp_cpu_delta[thread_info["name"]]) * 100
+                        last_cpu_cycles[thread_info["name"]] += bkp_cpu_delta[thread_info["name"]]
+                    else:
+                        cpus[thread_info["name"]] = -1
 
-                # for thread_info in threads_info:
+                    # for thread_info in threads_info:
                     watermark = self.__calculate_dynamic_watermark(scraper, thread_info["stack_start"],
                                                                    thread_info["stack_size"])
 
                     message.append(
-                        ThreadInfo(thread_info["name"], cpus[thread_info["name"]] * 100, thread_usage_delta > 0,
+                        ThreadInfo(thread_info["name"], cpus[thread_info["name"]], thread_usage_delta > 0,
                                    thread_info["stack_size"],
                                    watermark))
 
