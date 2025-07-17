@@ -1,5 +1,6 @@
 import argparse
 import curses
+import enum
 import threading
 import queue
 import time
@@ -21,6 +22,17 @@ class ThreadInfo:
     active: bool
     stack_size: int
     stack_watermark: int
+
+
+class ZViewState(enum.Enum):
+    DEFAULT_VIEW = 1
+    THREAD_DETAIL = 2
+
+
+class SpecialCode:
+    QUIT = ord("q")
+    NEWLINE = ord("\n")
+    RETURN = ord("\r")
 
 
 class ZView:
@@ -52,6 +64,13 @@ class ZView:
         self.stop_event = threading.Event()
         self.polling_thread: Optional[threading.Thread] = None
 
+        self.state: ZViewState = ZViewState.DEFAULT_VIEW
+
+        self.cursor = 0
+
+        self.detailing_thread: None | str = None
+        self.detailing_thread_usages = []
+
         self._init_curses()
         self._start_polling_thread()
 
@@ -74,6 +93,7 @@ class ZView:
             curses.init_pair(5, curses.COLOR_RED, curses.COLOR_BLACK)  # Progress bar: high usage
             curses.init_pair(6, curses.COLOR_WHITE, curses.COLOR_BLUE)  # Header/Footer background
             curses.init_pair(7, curses.COLOR_RED, curses.COLOR_BLACK)  # Error message text
+            curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Error message text
 
             self.ATTR_ACTIVE_THREAD = curses.color_pair(1)
             self.ATTR_INACTIVE_THREAD = curses.color_pair(2)
@@ -82,6 +102,7 @@ class ZView:
             self.ATTR_PROGRESS_BAR_HIGH = curses.color_pair(5)
             self.ATTR_HEADER_FOOTER = curses.color_pair(6)
             self.ATTR_ERROR = curses.color_pair(7)
+            self.ATTR_CURSOR = curses.color_pair(8)
 
     def _start_polling_thread(self):
         """
@@ -128,8 +149,7 @@ class ZView:
 
         return watermark
 
-    @staticmethod
-    def _poll_threads_worker(data_queue: queue.Queue, stop_event: threading.Event, elf_path: str,
+    def _poll_threads_worker(self, data_queue: queue.Queue, stop_event: threading.Event, elf_path: str,
                              target_mcu: Optional[str], inspection_period=0.2):
         """
         Worker function executed by the polling thread.
@@ -166,7 +186,7 @@ class ZView:
             }
 
             with JLinkScraper(target_mcu=target_mcu) as scraper:
-                static_threads_info = []
+                self.static_threads_info = {}
                 ptr = scraper.read32(threads_addr)[0] if threads_addr else 0
 
                 words_to_read = stack_struct_size // 4
@@ -191,7 +211,7 @@ class ZView:
                         thread_name = (name_bytes_raw.partition(b'\0')[0]).decode(
                             errors='ignore') or f"thread_0x{ptr:X}"
 
-                        static_threads_info.append({
+                        self.static_threads_info[thread_name] = ({
                             "address": ptr,
                             "stack_start": stack_struct_words[stack_start_word_idx],
                             "stack_size": stack_struct_words[stack_size_word_idx],
@@ -227,7 +247,12 @@ class ZView:
                         elif cpu_cycles_delta <= 0 < last_cpu_delta:
                             cpu_cycles_delta = last_cpu_delta
 
-                        for thread_info in static_threads_info:
+                        if self.state == ZViewState.DEFAULT_VIEW:
+                            thread_pool = self.static_threads_info.values()
+                        elif self.state == ZViewState.THREAD_DETAIL:
+                            thread_pool = [self.static_threads_info[self.detailing_thread]]
+
+                        for thread_info in thread_pool:
                             try:
                                 # Read current thread usage cycles (64-bit)
                                 thread_usage = scraper.read64(thread_info["address"] + thread_info["usage_offset"])[0]
@@ -273,7 +298,7 @@ class ZView:
         except Exception as e:
             data_queue.put({"error": f"Polling thread initialization error: {e}"})
 
-    def _draw_ui(self):
+    def _draw_thread_detail(self):
         """
         Draws all UI elements, including header, footer, status bar, and the thread data table.
         The UI is redrawn completely on each update cycle.
@@ -314,7 +339,106 @@ class ZView:
             current_col_x += col_width[header] + 1
 
         current_row_y = table_start_row + 1
-        for thread in self.threads_data:
+        thread = self.threads_data[0]
+
+        col_pos = 0
+
+        # Thread name
+        thread_name_display = thread.name[:col_width["Thread"]].ljust(col_width["Thread"])
+        thread_name_attr = self.ATTR_ACTIVE_THREAD if thread.active else self.ATTR_INACTIVE_THREAD
+        self.stdscr.attron(thread_name_attr)
+        self.stdscr.addstr(current_row_y, col_pos, thread_name_display[:width - col_pos])
+        self.stdscr.attroff(thread_name_attr)
+        col_pos += col_width["Thread"] + 1
+
+        # Thread CPUs
+        cpu_display = f"{round(thread.cpu, 1)}%".ljust(col_width["CPU %"])
+        self.stdscr.addstr(current_row_y, col_pos, cpu_display[:width - col_pos])
+        col_pos += col_width["CPU %"] + 1
+
+        # Thread Watermark Progress Bar
+        usage_percent = (thread.stack_watermark / thread.stack_size * 100) if thread.stack_size > 0 else 0
+        if usage_percent > 90:
+            bar_color_attr = self.ATTR_PROGRESS_BAR_HIGH
+        elif usage_percent > 75:
+            bar_color_attr = self.ATTR_PROGRESS_BAR_MEDIUM
+        else:
+            bar_color_attr = self.ATTR_PROGRESS_BAR_LOW
+        bar_width = col_width["Stack Usage (Watermark)"] - 2
+        completed_chars = int(bar_width * (usage_percent / 100))
+        remaining_chars = bar_width - completed_chars
+        bar_str = "│" + "█" * completed_chars + "-" * remaining_chars + "│"
+        bar_str = bar_str[:width - col_pos]
+        self.stdscr.attron(bar_color_attr)
+        self.stdscr.addstr(current_row_y, col_pos, bar_str)
+
+        # Thread Watermark %
+        watermark_percent_display = f"{(100 * thread.stack_watermark) / thread.stack_size:.1f}%" \
+            if thread.stack_size > 0 else "N/A"
+        overlap = watermark_percent_display.center(len(bar_str))[:completed_chars].strip()
+        self.stdscr.addstr(current_row_y, col_pos + (col_width["Stack Usage (Watermark)"] // 2) - (
+                len(watermark_percent_display) // 2), watermark_percent_display[:width - col_pos])
+        self.stdscr.attron(curses.A_REVERSE)
+        self.stdscr.addstr(current_row_y, col_pos + (col_width["Stack Usage (Watermark)"] // 2) - (
+                len(watermark_percent_display) // 2), overlap[:width - col_pos])
+        self.stdscr.attroff(curses.A_REVERSE)
+        self.stdscr.attroff(bar_color_attr)
+        col_pos += col_width["Stack Usage (Watermark)"] + 1
+
+        # Thread Watermark Bytes
+        watermark_bytes_display = f"{thread.stack_watermark} / {thread.stack_size}".ljust(
+            col_width["Watermark (Bytes)"])
+        self.stdscr.addstr(current_row_y, col_pos, watermark_bytes_display[:width - col_pos])
+
+        current_row_y += 1
+
+        self.detailing_thread_usages.append(round(thread.cpu, 1))
+        #self.stdscr.addstr(current_row_y, current_col_x, f"{self.detailing_thread_usages}")
+
+        self.stdscr.refresh()
+
+    def _draw_default_view(self):
+        """
+        Draws all UI elements, including header, footer, status bar, and the thread data table.
+        The UI is redrawn completely on each update cycle.
+        """
+        self.stdscr.clear()
+        height, width = self.stdscr.getmaxyx()
+
+        header_text = "ZView - Zephyr RTOS Runtime Viewer"
+        self.stdscr.attron(self.ATTR_HEADER_FOOTER)
+        self.stdscr.addstr(0, 0, header_text.center(width))
+        self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
+
+        footer_text = "Press 'q' to quit"
+        self.stdscr.attron(self.ATTR_HEADER_FOOTER)
+        self.stdscr.addstr(height - 2, 0, footer_text.ljust(width))
+        self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
+
+        status_row = height - 3
+        if self.status_message.startswith("Error"):
+            self.stdscr.attron(self.ATTR_ERROR)
+        self.stdscr.addstr(status_row, 0, self.status_message.ljust(width)[:width])
+        if self.status_message.startswith("Error"):
+            self.stdscr.attroff(self.ATTR_ERROR)
+
+        table_start_row = 2
+        table_height = height - table_start_row - 3
+        if table_height <= 0:
+            self.stdscr.addstr(table_start_row, 0, "Window too small to display table. Resize terminal.")
+            self.stdscr.refresh()
+            return
+
+        col_width = {"Thread": 30, "CPU %": 6, "Stack Usage (Watermark)": 30, "Watermark (Bytes)": 20}
+
+        current_col_x = 0
+        for header in col_width.keys():
+            display_header = header.center(col_width[header])
+            self.stdscr.addstr(table_start_row, current_col_x, display_header[:width - current_col_x])
+            current_col_x += col_width[header] + 1
+
+        current_row_y = table_start_row + 1
+        for idx, thread in enumerate(self.threads_data):
             if current_row_y >= table_start_row + table_height:
                 break
 
@@ -322,7 +446,8 @@ class ZView:
 
             # Thread names
             thread_name_display = thread.name[:col_width["Thread"]].ljust(col_width["Thread"])
-            thread_name_attr = self.ATTR_ACTIVE_THREAD if thread.active else self.ATTR_INACTIVE_THREAD
+            thread_name_attr = self.ATTR_CURSOR if self.cursor is idx else (
+                self.ATTR_ACTIVE_THREAD if thread.active else self.ATTR_INACTIVE_THREAD)
             self.stdscr.attron(thread_name_attr)
             self.stdscr.addstr(current_row_y, col_pos, thread_name_display[:width - col_pos])
             self.stdscr.attroff(thread_name_attr)
@@ -390,14 +515,26 @@ class ZView:
             except queue.Empty:
                 pass
 
-            self._draw_ui()
-
-            try:
-                key = self.stdscr.getch()
-                if key == ord('q'):
+            match self.stdscr.getch():
+                case curses.KEY_DOWN:
+                    self.cursor += self.cursor < len(self.threads_data) - 1
+                case curses.KEY_UP:
+                    self.cursor -= self.cursor > 0
+                case curses.KEY_ENTER | SpecialCode.NEWLINE | SpecialCode.RETURN:
+                    self.state = ZViewState.THREAD_DETAIL if self.state is ZViewState.DEFAULT_VIEW else ZViewState.DEFAULT_VIEW
+                    self.detailing_thread = self.threads_data[self.cursor].name
+                    self.cursor = 0
+                case SpecialCode.QUIT:
                     self.running = False
-            except curses.error:
-                pass
+                case _:
+                    pass
+
+            match self.state:
+                case ZViewState.DEFAULT_VIEW:
+                    self._draw_default_view()
+                case ZViewState.THREAD_DETAIL:
+                    self._draw_thread_detail()
+                    pass
 
             time.sleep(0.05)
 
