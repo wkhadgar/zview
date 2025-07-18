@@ -24,6 +24,12 @@ class ThreadInfo:
     stack_watermark: int
 
 
+@dataclass
+class ZViewUI:
+    col_headers: list[str]
+    col_widths: list[int]
+
+
 class ZViewState(enum.Enum):
     DEFAULT_VIEW = 1
     THREAD_DETAIL = 2
@@ -65,6 +71,7 @@ class ZView:
         self.polling_thread: Optional[threading.Thread] = None
 
         self.state: ZViewState = ZViewState.DEFAULT_VIEW
+        self.ui: dict[ZViewState:ZViewUI] = {}
 
         self.cursor = 0
 
@@ -72,6 +79,7 @@ class ZView:
         self.detailing_thread_usages = []
 
         self._init_curses()
+        self._set_ui_schemes()
         self._start_polling_thread()
 
     def _init_curses(self):
@@ -93,7 +101,8 @@ class ZView:
             curses.init_pair(5, curses.COLOR_RED, curses.COLOR_BLACK)  # Progress bar: high usage
             curses.init_pair(6, curses.COLOR_WHITE, curses.COLOR_BLUE)  # Header/Footer background
             curses.init_pair(7, curses.COLOR_RED, curses.COLOR_BLACK)  # Error message text
-            curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Error message text
+            curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Cursor selection
+            curses.init_pair(9, curses.COLOR_MAGENTA, curses.COLOR_BLACK)  # Graphs
 
             self.ATTR_ACTIVE_THREAD = curses.color_pair(1)
             self.ATTR_INACTIVE_THREAD = curses.color_pair(2)
@@ -103,6 +112,172 @@ class ZView:
             self.ATTR_HEADER_FOOTER = curses.color_pair(6)
             self.ATTR_ERROR = curses.color_pair(7)
             self.ATTR_CURSOR = curses.color_pair(8)
+            self.ATTR_GRAPH = curses.color_pair(9)
+
+    def _set_ui_schemes(self):
+        thread_basic_info_scheme = {"Thread": 30, "CPU %": 6, "Stack Usage (Watermark)": 30, "Watermark (Bytes)": 20}
+        self.ui[ZViewState.DEFAULT_VIEW] = ZViewUI(list(thread_basic_info_scheme.keys()),
+                                                   list(thread_basic_info_scheme.values()))
+        self.ui[ZViewState.THREAD_DETAIL] = ZViewUI(list(thread_basic_info_scheme.keys()),
+                                                    list(thread_basic_info_scheme.values()))
+
+    def _draw_graph(self, y, x, h, w, points, title="", maximum=100, length=100):
+        horizontal_limit = ("─" * (w - 2))
+        self.stdscr.addstr(y, x, "┌" + horizontal_limit + "┐")
+        self.stdscr.addstr(y + h, x, "└" + horizontal_limit + "┘")
+        self.stdscr.addstr(y, 1, title)
+
+        blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+        x_idx = len(points)
+        for x_step in range(w):
+            for y_step in range(h - 1):
+                y_pos = y + y_step + 1
+                x_pos = x + w - x_step - 1
+                if x_step == 0 or x_step == w - 1:
+                    self.stdscr.addstr(y_pos, x_pos, "│")
+                else:
+                    full_blocks = int((points[x_idx] / maximum) * (h - 2))
+                    last_block = int((((points[x_idx] / maximum) * (h - 2)) - full_blocks) * (len(blocks) - 1))
+                    self.stdscr.addstr(y_pos, x_pos,
+                                       " " if y_step < ((h - 1) - full_blocks) else blocks[-1])
+                    self.stdscr.addstr(y_pos, x_pos,
+                                       blocks[last_block] if y_step == ((h - 2) - full_blocks) else "")
+            x_idx -= 1 if x_idx else 0
+
+    def _draw_progress_bar(self, y, x, width: int, percentage: float, medium_threshold: float, high_threshold: float):
+        if percentage > high_threshold:
+            bar_color_attr = self.ATTR_PROGRESS_BAR_HIGH
+        elif percentage > medium_threshold:
+            bar_color_attr = self.ATTR_PROGRESS_BAR_MEDIUM
+        else:
+            bar_color_attr = self.ATTR_PROGRESS_BAR_LOW
+        bar_width = width - 2
+        completed_chars = int(bar_width * (percentage / 100))
+        remaining_chars = bar_width - completed_chars
+        bar_str = "│" + "█" * completed_chars + "-" * remaining_chars + "│"
+        self.stdscr.attron(bar_color_attr)
+        self.stdscr.addstr(y, x, bar_str)
+
+        percent_display = f"{percentage:.1f}%" if percentage > 0 else "N/A"
+        overlap = percent_display.center(len(bar_str))[:completed_chars].strip()
+        self.stdscr.addstr(y, x + (width // 2) - (len(percent_display) // 2), percent_display)
+        self.stdscr.attron(curses.A_REVERSE)
+        self.stdscr.addstr(y, x + (width // 2) - (len(percent_display) // 2), overlap)
+        self.stdscr.attroff(curses.A_REVERSE)
+        self.stdscr.attroff(bar_color_attr)
+
+    def _base_draw(self, scr_size: tuple[int, int]):
+        self.stdscr.clear()
+
+        header_text = "ZView - Zephyr RTOS Runtime Viewer"
+        self.stdscr.attron(self.ATTR_HEADER_FOOTER)
+        self.stdscr.addstr(0, 0, header_text.center(scr_size[1]))
+        self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
+
+        footer_text = "Press 'q' to quit"
+        self.stdscr.attron(self.ATTR_HEADER_FOOTER)
+        self.stdscr.addstr(scr_size[0] - 2, 0, footer_text.rjust(scr_size[1]))
+        self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
+
+        status_row = scr_size[0] - 3
+        if self.status_message.startswith("Error"):
+            self.stdscr.attron(self.ATTR_ERROR)
+        self.stdscr.addstr(status_row, 0, self.status_message.ljust(scr_size[1])[:scr_size[1]])
+        if self.status_message.startswith("Error"):
+            self.stdscr.attroff(self.ATTR_ERROR)
+
+        if (scr_size[0] - 1) <= 0:
+            self.stdscr.addstr(2, 0, "Window too small to display table. Resize terminal.")
+            self.stdscr.refresh()
+            return
+
+        current_col_x = 0
+        for header, width in zip(self.ui[self.state].col_headers, self.ui[self.state].col_widths):
+            display_header = header.center(width)
+            self.stdscr.addstr(2, current_col_x, display_header[:scr_size[1] - current_col_x])
+            current_col_x += width + 1
+
+    def _draw_thread_info(self, y, thread_info: ThreadInfo, selected: bool = False):
+        col_pos = 0
+
+        # Widths
+        scheme = self.ui[self.state]
+        thread_name_width = scheme.col_widths[0]
+        cpu_usage_width = scheme.col_widths[1]
+        stack_usage_width = scheme.col_widths[2]
+        stack_bytes_width = scheme.col_widths[3]
+
+        # Thread name
+        thread_name_display = thread_info.name[:thread_name_width].ljust(thread_name_width)
+        thread_name_attr = self.ATTR_CURSOR if selected else (
+            self.ATTR_ACTIVE_THREAD if thread_info.active else self.ATTR_INACTIVE_THREAD)
+        self.stdscr.attron(thread_name_attr)
+        self.stdscr.addstr(y, col_pos, thread_name_display)
+        self.stdscr.attroff(thread_name_attr)
+        col_pos += thread_name_width + 1
+
+        # Thread CPUs
+        cpu_display = f"{round(thread_info.cpu, 1)}%".ljust(cpu_usage_width)
+        self.stdscr.addstr(y, col_pos, cpu_display)
+        col_pos += cpu_usage_width + 1
+
+        # Thread Watermark Progress Bar
+        usage_ratio = (thread_info.stack_watermark / thread_info.stack_size) if thread_info.stack_size > 0 else 0
+        self._draw_progress_bar(y, col_pos, stack_usage_width, usage_ratio * 100, 70, 90)
+        col_pos += stack_usage_width + 1
+
+        # Thread Watermark Bytes
+        watermark_bytes_display = f"{thread_info.stack_watermark} / {thread_info.stack_size}".ljust(stack_bytes_width)
+        self.stdscr.addstr(y, col_pos, watermark_bytes_display)
+
+    def _draw_default_view(self):
+        """
+        Draws all UI elements, including header, footer, status bar, and the thread data table.
+        The UI is redrawn completely on each update cycle.
+        """
+        height, width = self.stdscr.getmaxyx()
+
+        self._base_draw((height, width))
+
+        table_start_row = 2
+        current_row_y = table_start_row + 1
+        table_height = height - 1
+        for idx, thread in enumerate(self.threads_data):
+            if current_row_y >= table_start_row + table_height:
+                break
+
+            self._draw_thread_info(current_row_y, thread, selected=idx == self.cursor)
+
+            current_row_y += 1
+
+        self.stdscr.refresh()
+
+    def _draw_thread_detail(self):
+        """
+        Draws all UI elements, including header, footer, status bar, and the thread data table.
+        The UI is redrawn completely on each update cycle.
+        """
+        height, width = self.stdscr.getmaxyx()
+
+        self._base_draw((height, width))
+
+        current_row_y = 3
+        data_amount = sum(self.ui[self.state].col_widths)
+        for thread in self.threads_data:
+            if thread.name != self.detailing_thread:
+                continue
+            self._draw_thread_info(current_row_y, thread)
+
+            self.detailing_thread_usages.append(round(thread.cpu, 1))
+            if len(self.detailing_thread_usages) > data_amount:
+                self.detailing_thread_usages = self.detailing_thread_usages[1:]
+
+            current_row_y += 2
+            self.stdscr.attron(self.ATTR_GRAPH)
+            self._draw_graph(current_row_y, 0, 12, data_amount, self.detailing_thread_usages, title="CPU%")
+            self.stdscr.attroff(self.ATTR_GRAPH)
+
+        self.stdscr.refresh()
 
     def _start_polling_thread(self):
         """
@@ -297,204 +472,6 @@ class ZView:
 
         except Exception as e:
             data_queue.put({"error": f"Polling thread initialization error: {e}"})
-
-    def _draw_thread_detail(self):
-        """
-        Draws all UI elements, including header, footer, status bar, and the thread data table.
-        The UI is redrawn completely on each update cycle.
-        """
-        self.stdscr.clear()
-        height, width = self.stdscr.getmaxyx()
-
-        header_text = "ZView - Zephyr RTOS Runtime Viewer"
-        self.stdscr.attron(self.ATTR_HEADER_FOOTER)
-        self.stdscr.addstr(0, 0, header_text.center(width))
-        self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
-
-        footer_text = "Press 'q' to quit"
-        self.stdscr.attron(self.ATTR_HEADER_FOOTER)
-        self.stdscr.addstr(height - 2, 0, footer_text.ljust(width))
-        self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
-
-        status_row = height - 3
-        if self.status_message.startswith("Error"):
-            self.stdscr.attron(self.ATTR_ERROR)
-        self.stdscr.addstr(status_row, 0, self.status_message.ljust(width)[:width])
-        if self.status_message.startswith("Error"):
-            self.stdscr.attroff(self.ATTR_ERROR)
-
-        table_start_row = 2
-        table_height = height - table_start_row - 3
-        if table_height <= 0:
-            self.stdscr.addstr(table_start_row, 0, "Window too small to display table. Resize terminal.")
-            self.stdscr.refresh()
-            return
-
-        col_width = {"Thread": 30, "CPU %": 6, "Stack Usage (Watermark)": 30, "Watermark (Bytes)": 20}
-
-        current_col_x = 0
-        for header in col_width.keys():
-            display_header = header.center(col_width[header])
-            self.stdscr.addstr(table_start_row, current_col_x, display_header[:width - current_col_x])
-            current_col_x += col_width[header] + 1
-
-        current_row_y = table_start_row + 1
-        thread = self.threads_data[0]
-
-        col_pos = 0
-
-        # Thread name
-        thread_name_display = thread.name[:col_width["Thread"]].ljust(col_width["Thread"])
-        thread_name_attr = self.ATTR_ACTIVE_THREAD if thread.active else self.ATTR_INACTIVE_THREAD
-        self.stdscr.attron(thread_name_attr)
-        self.stdscr.addstr(current_row_y, col_pos, thread_name_display[:width - col_pos])
-        self.stdscr.attroff(thread_name_attr)
-        col_pos += col_width["Thread"] + 1
-
-        # Thread CPUs
-        cpu_display = f"{round(thread.cpu, 1)}%".ljust(col_width["CPU %"])
-        self.stdscr.addstr(current_row_y, col_pos, cpu_display[:width - col_pos])
-        col_pos += col_width["CPU %"] + 1
-
-        # Thread Watermark Progress Bar
-        usage_percent = (thread.stack_watermark / thread.stack_size * 100) if thread.stack_size > 0 else 0
-        if usage_percent > 90:
-            bar_color_attr = self.ATTR_PROGRESS_BAR_HIGH
-        elif usage_percent > 75:
-            bar_color_attr = self.ATTR_PROGRESS_BAR_MEDIUM
-        else:
-            bar_color_attr = self.ATTR_PROGRESS_BAR_LOW
-        bar_width = col_width["Stack Usage (Watermark)"] - 2
-        completed_chars = int(bar_width * (usage_percent / 100))
-        remaining_chars = bar_width - completed_chars
-        bar_str = "│" + "█" * completed_chars + "-" * remaining_chars + "│"
-        bar_str = bar_str[:width - col_pos]
-        self.stdscr.attron(bar_color_attr)
-        self.stdscr.addstr(current_row_y, col_pos, bar_str)
-
-        # Thread Watermark %
-        watermark_percent_display = f"{(100 * thread.stack_watermark) / thread.stack_size:.1f}%" \
-            if thread.stack_size > 0 else "N/A"
-        overlap = watermark_percent_display.center(len(bar_str))[:completed_chars].strip()
-        self.stdscr.addstr(current_row_y, col_pos + (col_width["Stack Usage (Watermark)"] // 2) - (
-                len(watermark_percent_display) // 2), watermark_percent_display[:width - col_pos])
-        self.stdscr.attron(curses.A_REVERSE)
-        self.stdscr.addstr(current_row_y, col_pos + (col_width["Stack Usage (Watermark)"] // 2) - (
-                len(watermark_percent_display) // 2), overlap[:width - col_pos])
-        self.stdscr.attroff(curses.A_REVERSE)
-        self.stdscr.attroff(bar_color_attr)
-        col_pos += col_width["Stack Usage (Watermark)"] + 1
-
-        # Thread Watermark Bytes
-        watermark_bytes_display = f"{thread.stack_watermark} / {thread.stack_size}".ljust(
-            col_width["Watermark (Bytes)"])
-        self.stdscr.addstr(current_row_y, col_pos, watermark_bytes_display[:width - col_pos])
-
-        current_row_y += 1
-
-        self.detailing_thread_usages.append(round(thread.cpu, 1))
-        #self.stdscr.addstr(current_row_y, current_col_x, f"{self.detailing_thread_usages}")
-
-        self.stdscr.refresh()
-
-    def _draw_default_view(self):
-        """
-        Draws all UI elements, including header, footer, status bar, and the thread data table.
-        The UI is redrawn completely on each update cycle.
-        """
-        self.stdscr.clear()
-        height, width = self.stdscr.getmaxyx()
-
-        header_text = "ZView - Zephyr RTOS Runtime Viewer"
-        self.stdscr.attron(self.ATTR_HEADER_FOOTER)
-        self.stdscr.addstr(0, 0, header_text.center(width))
-        self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
-
-        footer_text = "Press 'q' to quit"
-        self.stdscr.attron(self.ATTR_HEADER_FOOTER)
-        self.stdscr.addstr(height - 2, 0, footer_text.ljust(width))
-        self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
-
-        status_row = height - 3
-        if self.status_message.startswith("Error"):
-            self.stdscr.attron(self.ATTR_ERROR)
-        self.stdscr.addstr(status_row, 0, self.status_message.ljust(width)[:width])
-        if self.status_message.startswith("Error"):
-            self.stdscr.attroff(self.ATTR_ERROR)
-
-        table_start_row = 2
-        table_height = height - table_start_row - 3
-        if table_height <= 0:
-            self.stdscr.addstr(table_start_row, 0, "Window too small to display table. Resize terminal.")
-            self.stdscr.refresh()
-            return
-
-        col_width = {"Thread": 30, "CPU %": 6, "Stack Usage (Watermark)": 30, "Watermark (Bytes)": 20}
-
-        current_col_x = 0
-        for header in col_width.keys():
-            display_header = header.center(col_width[header])
-            self.stdscr.addstr(table_start_row, current_col_x, display_header[:width - current_col_x])
-            current_col_x += col_width[header] + 1
-
-        current_row_y = table_start_row + 1
-        for idx, thread in enumerate(self.threads_data):
-            if current_row_y >= table_start_row + table_height:
-                break
-
-            col_pos = 0
-
-            # Thread names
-            thread_name_display = thread.name[:col_width["Thread"]].ljust(col_width["Thread"])
-            thread_name_attr = self.ATTR_CURSOR if self.cursor is idx else (
-                self.ATTR_ACTIVE_THREAD if thread.active else self.ATTR_INACTIVE_THREAD)
-            self.stdscr.attron(thread_name_attr)
-            self.stdscr.addstr(current_row_y, col_pos, thread_name_display[:width - col_pos])
-            self.stdscr.attroff(thread_name_attr)
-            col_pos += col_width["Thread"] + 1
-
-            # Thread CPUs
-            cpu_display = f"{round(thread.cpu, 1)}%".ljust(col_width["CPU %"])
-            self.stdscr.addstr(current_row_y, col_pos, cpu_display[:width - col_pos])
-            col_pos += col_width["CPU %"] + 1
-
-            # Thread Watermark Progress Bar
-            usage_percent = (thread.stack_watermark / thread.stack_size * 100) if thread.stack_size > 0 else 0
-            if usage_percent > 90:
-                bar_color_attr = self.ATTR_PROGRESS_BAR_HIGH
-            elif usage_percent > 75:
-                bar_color_attr = self.ATTR_PROGRESS_BAR_MEDIUM
-            else:
-                bar_color_attr = self.ATTR_PROGRESS_BAR_LOW
-            bar_width = col_width["Stack Usage (Watermark)"] - 2
-            completed_chars = int(bar_width * (usage_percent / 100))
-            remaining_chars = bar_width - completed_chars
-            bar_str = "│" + "█" * completed_chars + "-" * remaining_chars + "│"
-            bar_str = bar_str[:width - col_pos]
-            self.stdscr.attron(bar_color_attr)
-            self.stdscr.addstr(current_row_y, col_pos, bar_str)
-
-            # Thread Watermark %
-            watermark_percent_display = f"{(100 * thread.stack_watermark) / thread.stack_size:.1f}%" \
-                if thread.stack_size > 0 else "N/A"
-            overlap = watermark_percent_display.center(len(bar_str))[:completed_chars].strip()
-            self.stdscr.addstr(current_row_y, col_pos + (col_width["Stack Usage (Watermark)"] // 2) - (
-                    len(watermark_percent_display) // 2), watermark_percent_display[:width - col_pos])
-            self.stdscr.attron(curses.A_REVERSE)
-            self.stdscr.addstr(current_row_y, col_pos + (col_width["Stack Usage (Watermark)"] // 2) - (
-                    len(watermark_percent_display) // 2), overlap[:width - col_pos])
-            self.stdscr.attroff(curses.A_REVERSE)
-            self.stdscr.attroff(bar_color_attr)
-            col_pos += col_width["Stack Usage (Watermark)"] + 1
-
-            # Thread Watermark Bytes
-            watermark_bytes_display = f"{thread.stack_watermark} / {thread.stack_size}".ljust(
-                col_width["Watermark (Bytes)"])
-            self.stdscr.addstr(current_row_y, col_pos, watermark_bytes_display[:width - col_pos])
-
-            current_row_y += 1
-
-        self.stdscr.refresh()
 
     def run(self):
         """
