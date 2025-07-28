@@ -68,7 +68,7 @@ class ZView:
         self.cursor = 0
 
         self.detailing_thread: None | str = None
-        self.detailing_thread_usages = []
+        self.detailing_thread_usages = {}
 
         self._init_curses()
         self._set_ui_schemes()
@@ -106,7 +106,7 @@ class ZView:
             self.ATTR_GRAPH = curses.color_pair(9)
 
     def _set_ui_schemes(self):
-        thread_basic_info_scheme = {"Thread": 30, "CPU %": 6, "Stack Usage (Watermark)": 30, "Watermark (Bytes)": 20}
+        thread_basic_info_scheme = {"Thread": 30, "CPU %": 6, "Stack Usage (Watermark)": 30, "Watermark (Bytes)": 16}
         self.ui[ZViewState.DEFAULT_VIEW] = ZViewUI(list(thread_basic_info_scheme.keys()),
                                                    list(thread_basic_info_scheme.values()))
         self.ui[ZViewState.THREAD_DETAIL] = ZViewUI(list(thread_basic_info_scheme.keys()),
@@ -263,16 +263,22 @@ class ZView:
         for thread in self.threads_data:
             if thread.name != self.detailing_thread:
                 continue
+
             self._draw_thread_info(current_row_y, thread)
 
-            self.detailing_thread_usages.append(round(thread.cpu, 1))
+            if not self.detailing_thread_usages.get(thread.name):
+                self.detailing_thread_usages[thread.name] = []
+            self.detailing_thread_usages[thread.name].append(round(thread.cpu, 1))
+
             if len(self.detailing_thread_usages) > data_amount:
-                self.detailing_thread_usages = self.detailing_thread_usages[1:]
+                self.detailing_thread_usages[thread.name] = self.detailing_thread_usages[thread.name][1:]
 
             current_row_y += 2
             self.stdscr.attron(self.ATTR_GRAPH)
-            self._draw_graph(current_row_y, 0, 12, data_amount, self.detailing_thread_usages, title="CPU%")
+            self._draw_graph(current_row_y, 0, 12, data_amount, self.detailing_thread_usages[thread.name],
+                             title="CPU%")
             self.stdscr.attroff(self.ATTR_GRAPH)
+            current_row_y += 7
 
         self.stdscr.refresh()
 
@@ -283,13 +289,33 @@ class ZView:
         This loop continuously checks for new data from the polling thread,
         updates the UI, and processes user input (e.g., 'q' to quit).
         """
+        top = 100_00
+        usage = top
+        usages = []
+        for i in range(4):
+            usages.append(random.randint(0, top))
+
+        usages.sort(reverse=True)
+        for i in range(4):
+            next_split = usages[i]
+            usages[i] = (usage - next_split) / 100
+            usage = next_split
+        usages.append(next_split / 100)
+
         self.status_message = f"Initializing..."
+        toggle = False
         while self.running:
+            toggle = not toggle
             try:
+                def salt():
+                    return (random.randint(0, 2_50) - 1_25) / 100
+
                 data = {"threads": [
-                    ThreadInfo("thread_name_foo", random.random() * 100, True, 1024, 256),
-                    ThreadInfo("thread_name_bar_longer", random.random() * 100, True, 1024, 892),
-                    ThreadInfo("thread_name_very_long_almost_unreadable", random.random() * 100, True, 1024, 998),
+                    ThreadInfo("idle", (usages[0] + salt()) + (usages[4] if not toggle else 0), True, 512, 208),
+                    ThreadInfo("thread_name_small", (usages[1] + salt()), True, 1024, 512),
+                    ThreadInfo("thread_name_somewhat_longer", (usages[2] + salt()), True, 1024, 796),
+                    ThreadInfo("thread_name_very_long_almost_unreadable", usages[3] + salt(), True, 1024, 968),
+                    ThreadInfo("thread_name_intermittent", (usages[4] + salt()) * toggle, toggle, 2048, 512),
                 ]}
                 if "threads" in data:
                     self.threads_data = data["threads"]
@@ -320,7 +346,7 @@ class ZView:
                     self._draw_thread_detail()
                     pass
 
-            time.sleep(0.1)
+            time.sleep(0.25)
 
 
 def main(stdscr, parser_args: Namespace):
