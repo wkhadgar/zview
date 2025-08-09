@@ -15,11 +15,8 @@ from pyocd.core.session import Session
 from pyocd.core.target import Target
 
 
-class PyOCDScraper:
+class AbstractScraper:
     def __init__(self, target_mcu: str | None):
-        self.session: Session | None = None
-        self.target: Target | None = None
-
         self.target_mcu: str | None = target_mcu
 
     def __enter__(self):
@@ -29,6 +26,27 @@ class PyOCDScraper:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.disconnect()
+
+    def connect(self):
+        print("Connect was called")
+
+    def disconnect(self):
+        print("Disconnect was called")
+
+    def read8(self, at: int, amount: int = 1) -> Sequence[int]:
+        print(f"Read {amount} bytes from {hex(at)}")
+        return []
+
+    def read32(self, at: int, amount: int = 1) -> Sequence[int]:
+        print(f"Read {amount} words from {hex(at)}")
+        return []
+
+
+class PyOCDScraper(AbstractScraper):
+    def __init__(self, target_mcu: str | None):
+        super().__init__(target_mcu)
+        self.session: Session | None = None
+        self.target: Target | None = None
 
     def connect(self):
         try:
@@ -53,19 +71,10 @@ class PyOCDScraper:
         return self.target.read_memory_block32(at, amount)
 
 
-class JLinkScraper:
+class JLinkScraper(AbstractScraper):
     def __init__(self, target_mcu: str | None):
+        super().__init__(target_mcu)
         self.probe = JLink()
-
-        self.target_mcu: str | None = target_mcu
-
-    def __enter__(self):
-        self.connect()
-
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.disconnect()
 
     def connect(self):
         try:
