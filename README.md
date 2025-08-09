@@ -27,15 +27,16 @@ Then just run ZView on your Zephyr env:
 (.venv) $ python zview.py --mcu YOUR_MCU_TAG_NAME -e path/to/your/elf
 ```
 
-> [!NOTE] 
+> [!NOTE]
 > The MCU tag name is the name attributed to tour MCU for JLink connection.
 
 ****
+
 ## How it works
 
 ZView attempts to be a neat tool for those who need to debug applications without the need of a shell/UART for stack
 statistics. The intent is to achieve minimal footprint and behaviour branching for the binary, avoiding statistics
-stdout and processing threads. 
+stdout and processing threads.
 
 The keypoint is to take advantage of the debug probes ability to read runtime memory
 without CPU halting from the APB bus, since ELF file contains all information needed about the kernel objects, we just
@@ -43,6 +44,7 @@ scan through the stack list and runtime analyse watermarks and CPU usages, so yo
 debug implementations.
 
 ****
+
 ## Navigation
 
 ZView acts as a TUI, so you navigate with the arrow keys UP and DOWN from the default view:
@@ -51,3 +53,16 @@ ZView acts as a TUI, so you navigate with the arrow keys UP and DOWN from the de
 
 To track CPU usage for a thread just hit ENTER over it:
 ![Thread tracking](./docs/assets/thread_track.png)
+
+
+****
+
+### In the future...
+
+Listening to community feedback, ZView is ongoing some new features development, such as, and not limited to:
+
+- Heap visualization
+- Extra thread information (like number of context switches and so)
+- Full Zephyr integration through West (maybe an in-tree west command?)
+- Live global variables tracking
+- IDK, feel free to open an [issue](https://github.com/wkhadgar/zview/issues) if you feel like this has some potential!
