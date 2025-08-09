@@ -1,3 +1,7 @@
+# Copyright (c) 2025 Paulo Santos (@wkhadgar)
+#
+# SPDX-License-Identifier: Apache-2.0
+
 from typing import Literal
 
 from elftools.dwarf.die import DIE
