@@ -1,3 +1,8 @@
+# Copyright (c) 2025 Paulo Santos (@wkhadgar)
+#
+# SPDX-License-Identifier: Apache-2.0
+
+
 import argparse
 import curses
 import enum

@@ -1,12 +1,8 @@
-"""
- :file: mcu_scraper.py
- :author: Paulo Santos (pauloxrms@gmail.com)
- :brief: MCU runtime data scraper.
- :version: 0.1
- :date: 13-06-2025
+# Copyright (c) 2025 Paulo Santos (@wkhadgar)
+#
+# SPDX-License-Identifier: Apache-2.0
 
- :copyright: Copyright (c) Paulo Santos 2025
-"""
+
 from collections.abc import Sequence
 
 from pylink import JLink, JLinkException, JLinkInterfaces
