@@ -1,3 +1,8 @@
+# Copyright (c) 2025 Paulo Santos (@wkhadgar)
+#
+# SPDX-License-Identifier: Apache-2.0
+
+
 import argparse
 import curses
 import enum
@@ -76,7 +81,7 @@ class ZView:
         self.cursor = 0
 
         self.detailing_thread: None | str = None
-        self.detailing_thread_usages = []
+        self.detailing_thread_usages = {}
 
         self._init_curses()
         self._set_ui_schemes()
@@ -115,7 +120,7 @@ class ZView:
             self.ATTR_GRAPH = curses.color_pair(9)
 
     def _set_ui_schemes(self):
-        thread_basic_info_scheme = {"Thread": 30, "CPU %": 6, "Stack Usage (Watermark)": 30, "Watermark (Bytes)": 20}
+        thread_basic_info_scheme = {"Thread": 30, "CPU %": 6, "Stack Usage (Watermark)": 30, "Watermark (Bytes)": 16}
         self.ui[ZViewState.DEFAULT_VIEW] = ZViewUI(list(thread_basic_info_scheme.keys()),
                                                    list(thread_basic_info_scheme.values()))
         self.ui[ZViewState.THREAD_DETAIL] = ZViewUI(list(thread_basic_info_scheme.keys()),
@@ -126,8 +131,6 @@ class ZView:
         self.stdscr.addstr(y, x, "┌" + horizontal_limit + "┐")
         self.stdscr.addstr(y + h, x, "└" + horizontal_limit + "┘")
         self.stdscr.addstr(y, 1, title)
-
-        self.stdscr.addstr(y, x + 2, "│\n" * h)
 
         blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
         x_idx = len(points)
@@ -145,6 +148,9 @@ class ZView:
                     self.stdscr.addstr(y_pos, x_pos,
                                        blocks[last_block] if y_step == ((h - 2) - full_blocks) else "")
             x_idx -= 1 if x_idx else 0
+
+        self.stdscr.addstr(y + 1, x + w - (len(f"{maximum}")), str(maximum))
+        self.stdscr.addstr(y + h - 1, x + w - 1, "0")
 
     def _draw_progress_bar(self, y, x, width: int, percentage: float, medium_threshold: float, high_threshold: float):
         if percentage > high_threshold:
@@ -211,6 +217,9 @@ class ZView:
 
         # Thread name
         thread_name_display = thread_info.name[:thread_name_width].ljust(thread_name_width)
+        if len(thread_info.name) > thread_name_width:
+            thread_name_display = thread_name_display[:-3] + "..."
+
         thread_name_attr = self.ATTR_CURSOR if selected else (
             self.ATTR_ACTIVE_THREAD if thread_info.active else self.ATTR_INACTIVE_THREAD)
         self.stdscr.attron(thread_name_attr)
@@ -268,15 +277,19 @@ class ZView:
         for thread in self.threads_data:
             if thread.name != self.detailing_thread:
                 continue
+
             self._draw_thread_info(current_row_y, thread)
 
-            self.detailing_thread_usages.append(round(thread.cpu, 1))
-            if len(self.detailing_thread_usages) > data_amount:
-                self.detailing_thread_usages = self.detailing_thread_usages[1:]
+            if not self.detailing_thread_usages.get(thread.name):
+                self.detailing_thread_usages[thread.name] = []
+            self.detailing_thread_usages[thread.name].append(round(thread.cpu, 1))
+
+            if len(self.detailing_thread_usages[thread.name]) > data_amount:
+                self.detailing_thread_usages[thread.name] = self.detailing_thread_usages[thread.name][1:]
 
             current_row_y += 2
             self.stdscr.attron(self.ATTR_GRAPH)
-            self._draw_graph(current_row_y, 0, 12, data_amount, self.detailing_thread_usages, title="CPU%")
+            self._draw_graph(current_row_y, 0, 12, data_amount, self.detailing_thread_usages[thread.name], title="CPU%")
             self.stdscr.attroff(self.ATTR_GRAPH)
 
         self.stdscr.refresh()
@@ -515,7 +528,7 @@ class ZView:
                     self._draw_thread_detail()
                     pass
 
-            time.sleep(0.05)
+            time.sleep(0.20)
 
 
 def main(stdscr, parser_args: Namespace):

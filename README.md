@@ -35,7 +35,7 @@ Then just run ZView on your Zephyr env:
 
 ZView attempts to be a neat tool for those who need to debug applications without the need of a shell/UART for stack
 statistics. The intent is to achieve minimal footprint and behaviour branching for the binary, avoiding statistics
-stdouts and processing threads. 
+stdout and processing threads. 
 
 The keypoint is to take advantage of the debug probes ability to read runtime memory
 without CPU halting from the APB bus, since ELF file contains all information needed about the kernel objects, we just
