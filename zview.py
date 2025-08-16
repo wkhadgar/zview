@@ -54,7 +54,9 @@ class ZView:
     and updates the display with real-time thread statistics from a connected MCU.
     """
 
-    def __init__(self, stdscr, elf_path: str, target_mcu: Optional[str] = None, inspection_period: float = 0.2):
+    def __init__(self, scraper: AbstractScraper, stdscr, elf_path: str, target_mcu: Optional[str] = None,
+                 inspection_period: float = 0.2,
+                 ):
         """
         Initializes the ZView application.
 
@@ -86,7 +88,7 @@ class ZView:
         self.min_dimensions = (21, 86)
         self._init_curses()
         self._set_ui_schemes()
-        self._start_polling_thread()
+        self._start_polling_thread(scraper=scraper)
 
     def _init_curses(self):
         """
@@ -295,19 +297,19 @@ class ZView:
 
         self.stdscr.refresh()
 
-    def _start_polling_thread(self):
+    def _start_polling_thread(self, scraper: AbstractScraper):
         """
         Starts a separate daemon thread to continuously poll data from the MCU.
         """
         self.polling_thread = threading.Thread(
             target=self._poll_threads_worker,
-            args=(self.data_queue, self.stop_event, self.elf_path, self.target_mcu, self.inspection_period)
+            args=(scraper, self.data_queue, self.stop_event, self.elf_path, self.inspection_period)
         )
         self.polling_thread.daemon = True
         self.polling_thread.start()
 
     @staticmethod
-    def _calculate_dynamic_watermark(scraper: JLinkScraper, stack_start: int, stack_size: int) -> int:
+    def _calculate_dynamic_watermark(scraper: AbstractScraper, stack_start: int, stack_size: int) -> int:
         """
         Reads a thread's stack memory and scans for the 0xAA fill pattern
         to determine the current stack watermark (lowest point of stack usage).
@@ -340,8 +342,8 @@ class ZView:
 
         return watermark
 
-    def _poll_threads_worker(self, data_queue: queue.Queue, stop_event: threading.Event, elf_path: str,
-                             target_mcu: Optional[str], inspection_period=0.2):
+    def _poll_threads_worker(self, scraper: AbstractScraper, data_queue: queue.Queue, stop_event: threading.Event,
+                             elf_path: str, inspection_period=0.2):
         """
         Worker function executed by the polling thread.
 
@@ -352,7 +354,6 @@ class ZView:
             data_queue: A queue for sending processed thread data to the main UI thread.
             stop_event: An event to signal the polling thread to terminate.
             elf_path: Path to the Zephyr application's ELF file.
-            target_mcu: Optional J-Link target MCU name.
         """
         try:
             parser = ZephyrSymbolParser(elf_path)
@@ -376,115 +377,106 @@ class ZView:
                 "stack_delta": stack_info_offset + parser.get_struct_member_offset("_thread_stack_info", "delta"),
             }
 
-            with JLinkScraper(target_mcu=target_mcu) as scraper:
-                self.static_threads_info = {}
-                ptr = scraper.read32(threads_addr)[0] if threads_addr else 0
+            self.static_threads_info = {}
+            ptr = scraper.read32(threads_addr)[0] if threads_addr else 0
 
-                words_to_read = stack_struct_size // 4
-                next_ptr_word_idx = offsets["next"] // 4
-                name_word_idx = offsets["name"] // 4
-                stack_start_word_idx = offsets["stack_start"] // 4
-                stack_size_word_idx = offsets["stack_size"] // 4
+            words_to_read = stack_struct_size // 4
+            next_ptr_word_idx = offsets["next"] // 4
+            name_word_idx = offsets["name"] // 4
+            stack_start_word_idx = offsets["stack_start"] // 4
+            stack_size_word_idx = offsets["stack_size"] // 4
 
-                for _ in range(50):
-                    if ptr == 0:
-                        break
+            for _ in range(50):
+                if ptr == 0:
+                    break
 
-                    try:
-                        stack_struct_words = scraper.read32(ptr, words_to_read)
-                        name_bytes_raw = b""
-                        for i in range(8):
-                            if (name_word_idx + i) < len(stack_struct_words):
-                                name_bytes_raw += stack_struct_words[name_word_idx + i].to_bytes(4, "little")
-                            else:
-                                break
+                try:
+                    stack_struct_words = scraper.read32(ptr, words_to_read)
+                    name_bytes_raw = b""
+                    for i in range(8):
+                        if (name_word_idx + i) < len(stack_struct_words):
+                            name_bytes_raw += stack_struct_words[name_word_idx + i].to_bytes(4, "little")
+                        else:
+                            break
 
-                        thread_name = (name_bytes_raw.partition(b"\0")[0]).decode(
-                            errors='ignore') or f"thread_0x{ptr:X}"
+                    thread_name = (name_bytes_raw.partition(b"\0")[0]).decode(
+                        errors='ignore') or f"thread_0x{ptr:X}"
 
-                        self.static_threads_info[thread_name] = ({
-                            "address": ptr,
-                            "stack_start": stack_struct_words[stack_start_word_idx],
-                            "stack_size": stack_struct_words[stack_size_word_idx],
-                            "name": thread_name,
-                            "usage_offset": offsets["usage"]
-                        })
+                    self.static_threads_info[thread_name] = ({
+                        "address": ptr,
+                        "stack_start": stack_struct_words[stack_start_word_idx],
+                        "stack_size": stack_struct_words[stack_size_word_idx],
+                        "name": thread_name,
+                        "usage_offset": offsets["usage"]
+                    })
 
-                        ptr = stack_struct_words[next_ptr_word_idx]
-                    except Exception as e:
-                        data_queue.put({"error": f"Error parsing thread struct at 0x{ptr:X}: {e}"})
-                        break
+                    ptr = stack_struct_words[next_ptr_word_idx]
+                except Exception as e:
+                    data_queue.put({"error": f"Error parsing thread struct at 0x{ptr:X}: {e}"})
+                    break
 
-                # Main loop for dynamic data polling
-                last_thread_cycles = {}  # Stores last read usage cycles for each thread
-                last_cpu_cycles = {}  # Stores last read total CPU cycles for each thread (to mitigate I/O read delays)
-                last_cpu_delta = 0
+            # Main loop for dynamic data polling
+            last_thread_cycles = {}  # Stores last read usage cycles for each thread
+            last_cpu_cycles = {}  # Stores last read total CPU cycles for each thread (to mitigate I/O read delays)
+            last_cpu_delta = 0
 
-                while not stop_event.is_set():
-                    current_threads_data = []
+            while not stop_event.is_set():
+                current_threads_data = []
 
-                    try:
-                        # Read current total CPU cycles
-                        current_cpu_cycles = scraper.read32(kernel_usage_addr)[0]
+                try:
+                    current_cpu_cycles = scraper.read32(kernel_usage_addr)[0]
 
-                        # Calculate the delta for total CPU cycles
-                        cpu_cycles_delta = current_cpu_cycles - last_cpu_cycles if last_cpu_cycles else 0
-                        last_cpu_cycles = current_cpu_cycles
+                    cpu_cycles_delta = current_cpu_cycles - last_cpu_cycles if last_cpu_cycles else 0
+                    last_cpu_cycles = current_cpu_cycles
 
-                        # If total CPU cycles didn't change, use the last known non-zero delta
-                        # to avoid division by zero and provide a more stable CPU percentage.
-                        if cpu_cycles_delta > 0:
-                            last_cpu_delta = cpu_cycles_delta
-                        elif cpu_cycles_delta <= 0 < last_cpu_delta:
-                            cpu_cycles_delta = last_cpu_delta
+                    if cpu_cycles_delta > 0:
+                        last_cpu_delta = cpu_cycles_delta
+                    elif cpu_cycles_delta <= 0 < last_cpu_delta:
+                        cpu_cycles_delta = last_cpu_delta
 
-                        if self.state == ZViewState.DEFAULT_VIEW:
-                            thread_pool = self.static_threads_info.values()
-                        elif self.state == ZViewState.THREAD_DETAIL:
-                            thread_pool = [self.static_threads_info[self.detailing_thread]]
+                    if self.state == ZViewState.DEFAULT_VIEW:
+                        thread_pool = self.static_threads_info.values()
+                    elif self.state == ZViewState.THREAD_DETAIL:
+                        thread_pool = [self.static_threads_info[self.detailing_thread]]
 
-                        for thread_info in thread_pool:
-                            try:
-                                # Read current thread usage cycles (64-bit)
-                                thread_usage = scraper.read64(thread_info["address"] + thread_info["usage_offset"])[0]
+                    for thread_info in thread_pool:
+                        try:
+                            thread_usage = scraper.read64(thread_info["address"] + thread_info["usage_offset"])[0]
 
-                                thread_usage_delta = thread_usage - last_thread_cycles.get(thread_info["name"], 0)
-                                last_thread_cycles[thread_info["name"]] = thread_usage
+                            thread_usage_delta = thread_usage - last_thread_cycles.get(thread_info["name"], 0)
+                            last_thread_cycles[thread_info["name"]] = thread_usage
 
-                                cpu_percent = 0.0
-                                if cpu_cycles_delta > 0:
-                                    cpu_percent = (thread_usage_delta / cpu_cycles_delta) * 100
-                                elif thread_usage_delta > 0:
-                                    # If total CPU cycles didn't change but thread usage did,
-                                    # it implies a very high CPU usage for this thread.
-                                    cpu_percent = (thread_usage_delta / last_cpu_delta) * 100
+                            cpu_percent = 0.0
+                            if cpu_cycles_delta > 0:
+                                cpu_percent = (thread_usage_delta / cpu_cycles_delta) * 100
+                            elif thread_usage_delta > 0:
+                                cpu_percent = (thread_usage_delta / last_cpu_delta) * 100
 
-                                is_active = thread_usage_delta > 0
+                            is_active = thread_usage_delta > 0
 
-                                # Calculate stack watermark
-                                watermark = ZView._calculate_dynamic_watermark(
-                                    scraper, thread_info["stack_start"], thread_info["stack_size"]
+                            watermark = ZView._calculate_dynamic_watermark(
+                                scraper, thread_info["stack_start"], thread_info["stack_size"]
+                            )
+
+                            current_threads_data.append(
+                                ThreadInfo(
+                                    thread_info["name"],
+                                    cpu_percent,
+                                    is_active,
+                                    thread_info["stack_size"],
+                                    watermark
                                 )
+                            )
+                        except Exception as e:
+                            data_queue.put({"error": f"Error polling thread {thread_info['name']}: {e}"})
+                            continue
 
-                                current_threads_data.append(
-                                    ThreadInfo(
-                                        thread_info["name"],
-                                        cpu_percent,
-                                        is_active,
-                                        thread_info["stack_size"],
-                                        watermark
-                                    )
-                                )
-                            except Exception as e:
-                                data_queue.put({"error": f"Error polling thread {thread_info['name']}: {e}"})
-                                continue
+                except Exception as e:
+                    data_queue.put({"error": f"Error reading global CPU cycles: {e}"})
+                    continue
 
-                    except Exception as e:
-                        data_queue.put({"error": f"Error reading global CPU cycles: {e}"})
-                        continue
-
-                    data_queue.put({"threads": sorted(current_threads_data, key=lambda t: t.name)})
-                    time.sleep(inspection_period)
+                data_queue.put({"threads": sorted(current_threads_data, key=lambda t: t.name)})
+                time.sleep(inspection_period)
 
         except Exception as e:
             data_queue.put({"error": f"Polling thread initialization error: {e}"})
@@ -550,10 +542,11 @@ def main(stdscr, parser_args: Namespace):
     curses library initialization and cleanup.
 
     Args:
-        stdscr: The standard screen window object provided by `curses.wrapper`.
-        parser_args: Command-line arguments parsed by `argparse`.
+        :param stdscr: The standard screen window object provided by `curses.wrapper`.
+        :param parser_args: Command-line arguments parsed by `argparse`.
     """
-    app = ZView(stdscr, elf_path=parser_args.elf_file, target_mcu=parser_args.mcu, inspection_period=parser_args.period)
+    app = ZView(mcu_scraper, stdscr, elf_path=parser_args.elf_file, target_mcu=parser_args.mcu,
+                inspection_period=parser_args.period)
     try:
         app.run()
     finally:
@@ -572,4 +565,5 @@ if __name__ == "__main__":
                             help="Minimum period to update system information.")
     args = arg_parser.parse_args()
 
-    curses.wrapper(main, args)
+    with PyOCDScraper(args.mcu) as mcu_scraper:
+        curses.wrapper(main, args)

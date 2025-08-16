@@ -37,6 +37,10 @@ class AbstractScraper:
         print(f"Read {amount} words from {hex(at)}")
         return []
 
+    def read64(self, at: int, amount: int = 1) -> Sequence[int]:
+        print(f"Read {amount} double words from {hex(at)}")
+        return []
+
 
 class PyOCDScraper(AbstractScraper):
     def __init__(self, target_mcu: str | None):
@@ -51,11 +55,10 @@ class PyOCDScraper(AbstractScraper):
                                                                        connect_mode="attach")
             else:
                 self.session = ConnectHelper.session_with_chosen_probe(connect_mode="attach")
+            self.session.open()
             self.target = self.session.target
         except:
             raise Exception(f"\nUnable to connect with MCU [{self.target_mcu}].")
-
-        raise Exception(f"{self.target.cores}")
 
     def disconnect(self):
         self.session.close()
@@ -65,6 +68,14 @@ class PyOCDScraper(AbstractScraper):
 
     def read32(self, at: int, amount: int = 1) -> Sequence[int]:
         return self.target.read_memory_block32(at, amount)
+
+    def read64(self, at, amount: int = 1) -> Sequence[int]:
+        words = self.read32(at, amount * 2)
+        dwords = []
+        for i in range(0, len(words), 2):
+            dwords.append(((words[i] << 32) | words[i + 1]))
+
+        return dwords
 
 
 class JLinkScraper(AbstractScraper):
