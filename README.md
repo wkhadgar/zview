@@ -56,11 +56,12 @@ runtime analyse watermarks and CPU usages, so your source code can be kept free 
 ## Navigation
 
 ZViewTUI acts as a TUI (who would guess?), so you navigate with the arrow keys UP and DOWN from the default view:
-![TUI Default](./docs/assets/default_view_0.png)
 ![TUI Navigation](./docs/assets/default_view_1.png)
+![TUI Navigation example 2](./docs/assets/default_view_2.png)
 
-To track CPU usage for a thread just hit ENTER over it:
-![Thread tracking](./docs/assets/thread_track.png)
+To track CPU usage for a thread (and return to all threads) just hit ENTER over it:
+![Thread tracking](./docs/assets/thread_track_1.png)
+![Thread tracking](./docs/assets/thread_track_2.png)
 
 
 ****
