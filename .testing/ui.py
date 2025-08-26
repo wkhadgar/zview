@@ -68,13 +68,14 @@ class ZView:
         self.stop_event = threading.Event()
 
         self.state: ZViewState = ZViewState.DEFAULT_VIEW
-        self.ui: dict[ZViewState:ZViewUI] = {}
+        self.ui: dict[ZViewState, ZViewUI] = {}
 
         self.cursor = 0
 
         self.detailing_thread: None | str = None
         self.detailing_thread_usages = {}
 
+        self.min_dimensions = (21, 86)
         self._init_curses()
         self._set_ui_schemes()
 
@@ -344,12 +345,25 @@ class ZView:
                 case _:
                     pass
 
-            match self.state:
-                case ZViewState.DEFAULT_VIEW:
-                    self._draw_default_view()
-                case ZViewState.THREAD_DETAIL:
-                    self._draw_thread_detail()
+            current_dims = self.stdscr.getmaxyx()
+            if current_dims[0] < self.min_dimensions[0] or current_dims[1] < self.min_dimensions[1]:
+                self.stdscr.clear()
+                msg0 = f"Terminal is too small."
+                msg1 = f"Please resize your terminal to at least {self.min_dimensions[1]}x{self.min_dimensions[0]}."
+                msg2 = f"Current dimensions {current_dims[1]}x{current_dims[0]}."
+                try:
+                    self.stdscr.addstr((current_dims[0] // 2) - 1, (current_dims[1] - len(msg0)) // 2, msg0)
+                    self.stdscr.addstr(current_dims[0] // 2, (current_dims[1] - len(msg1)) // 2, msg1)
+                    self.stdscr.addstr((current_dims[0] // 2) + 1, (current_dims[1] - len(msg2)) // 2, msg2)
+                except:
                     pass
+            else:
+                match self.state:
+                    case ZViewState.DEFAULT_VIEW:
+                        self._draw_default_view()
+                    case ZViewState.THREAD_DETAIL:
+                        self._draw_thread_detail()
+                        pass
 
             time.sleep(0.25)
 
