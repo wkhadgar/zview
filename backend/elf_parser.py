@@ -11,8 +11,8 @@ from collections import defaultdict
 
 class ZephyrSymbolParser:
     def __init__(self, elf_path: str):
-        self._symbol_cache: defaultdict[str:defaultdict[str:int]] = defaultdict(defaultdict)
-        self._struct_member_offset_cache: defaultdict[str:defaultdict[str:int]] = defaultdict(defaultdict)
+        self._symbol_cache: defaultdict[str, defaultdict[str, int]] = defaultdict(defaultdict)
+        self._struct_member_offset_cache: defaultdict[str, defaultdict[str, int]] = defaultdict(defaultdict)
 
         self.file = self._open_elf_file(elf_path)
         self.elf = ELFFile(self.file)
@@ -76,7 +76,6 @@ class ZephyrSymbolParser:
         struct_die = self._find_struct_die(struct_name)
         if not struct_die:
             raise RuntimeError(f"Struct '{struct_name}' not found.")
-
 
         if not struct_die.attributes["DW_AT_byte_size"]:
             raise RuntimeError(f"Struct '{struct_name}' has no size information.")
