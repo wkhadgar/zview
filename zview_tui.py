@@ -47,6 +47,7 @@ class ZView:
         Args:
             stdscr: The main curses window object provided by curses.wrapper.
         """
+        self.min_dimensions = (21, 86)
         self.stdscr = stdscr
         self.scraper = scraper
         self.running = True
@@ -312,16 +313,26 @@ class ZView:
                 case _:
                     pass
 
-            match self.state:
-                case ZViewState.DEFAULT_VIEW:
-                    self.scraper.thread_pool = list(self.scraper.all_threads.values())
-                    self._draw_default_view()
-                case ZViewState.THREAD_DETAIL:
-                    self.scraper.thread_pool = [self.scraper.all_threads[self.detailing_thread]]
-                    self._draw_thread_detail()
-                    pass
+            current_dims = self.stdscr.getmaxyx()
+            if current_dims[0] < self.min_dimensions[0] or current_dims[1] < self.min_dimensions[1]:
+                self.stdscr.clear()
+                msg0 = f"Terminal is too small."
+                msg1 = f"Please resize your terminal to at least {self.min_dimensions[1]}x{self.min_dimensions[0]}."
+                msg2 = f"Current dimensions {current_dims[1]}x{current_dims[0]}."
+                self.stdscr.addstr((current_dims[0] // 2) - 1, (current_dims[1] - len(msg0)) // 2, msg0)
+                self.stdscr.addstr(current_dims[0] // 2, (current_dims[1] - len(msg1)) // 2, msg1)
+                self.stdscr.addstr((current_dims[0] // 2) + 1, (current_dims[1] - len(msg2)) // 2, msg2)
+            else:
+                match self.state:
+                    case ZViewState.DEFAULT_VIEW:
+                        self.scraper.thread_pool = list(self.scraper.all_threads.values())
+                        self._draw_default_view()
+                    case ZViewState.THREAD_DETAIL:
+                        self.scraper.thread_pool = [self.scraper.all_threads[self.detailing_thread]]
+                        self._draw_thread_detail()
+                        pass
 
-            time.sleep(inspection_period)
+                time.sleep(inspection_period)
 
 
 def main(stdscr, inspection_period):
