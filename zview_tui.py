@@ -6,25 +6,13 @@
 import argparse
 import curses
 import enum
-import random
 import threading
 import queue
 import time
-from argparse import Namespace
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 
-
-@dataclass
-class ThreadInfo:
-    """
-    Data class to hold information about a single Zephyr RTOS thread.
-    """
-    name: str
-    cpu: float
-    active: bool
-    stack_size: int
-    stack_watermark: int
+from backend.z_scraper import ZScraper, ThreadInfo, PyOCDScraper, JLinkScraper
 
 
 @dataclass
@@ -52,19 +40,19 @@ class ZView:
     and updates the display with real-time thread statistics from a connected MCU.
     """
 
-    def __init__(self, stdscr, inspection_period: float = 0.2):
+    def __init__(self, scraper: ZScraper, stdscr):
         """
         Initializes the ZView application.
 
         Args:
             stdscr: The main curses window object provided by curses.wrapper.
-            inspection_period: Period for system information gathering and update.
         """
-        self.inspection_period = inspection_period
         self.stdscr = stdscr
+        self.scraper = scraper
         self.running = True
         self.threads_data: List[ThreadInfo] = []
         self.status_message: str = ""
+        self.data_queue = queue.Queue()
         self.stop_event = threading.Event()
 
         self.state: ZViewState = ZViewState.DEFAULT_VIEW
@@ -72,10 +60,9 @@ class ZView:
 
         self.cursor = 0
 
-        self.detailing_thread: None | str = None
+        self.detailing_thread: str | None = None
         self.detailing_thread_usages = {}
 
-        self.min_dimensions = (21, 86)
         self._init_curses()
         self._set_ui_schemes()
 
@@ -211,26 +198,30 @@ class ZView:
         thread_name_display = thread_info.name[:thread_name_width].ljust(thread_name_width)
         if len(thread_info.name) > thread_name_width:
             thread_name_display = thread_name_display[:-3] + "..."
+        elif thread_info.name == "idle":
+            thread_name_display = thread_name_display[:4] + "*" + thread_name_display[4:-1]
 
         thread_name_attr = self.ATTR_CURSOR if selected else (
-            self.ATTR_ACTIVE_THREAD if thread_info.active else self.ATTR_INACTIVE_THREAD)
+            self.ATTR_ACTIVE_THREAD if thread_info.runtime.active else self.ATTR_INACTIVE_THREAD)
         self.stdscr.attron(thread_name_attr)
         self.stdscr.addstr(y, col_pos, thread_name_display)
         self.stdscr.attroff(thread_name_attr)
         col_pos += thread_name_width + 1
 
         # Thread CPUs
-        cpu_display = f"{round(thread_info.cpu, 1)}%".ljust(cpu_usage_width)
+        cpu_display = f"{round(thread_info.runtime.cpu, 1)}%".ljust(cpu_usage_width)
         self.stdscr.addstr(y, col_pos, cpu_display)
         col_pos += cpu_usage_width + 1
 
         # Thread Watermark Progress Bar
-        usage_ratio = (thread_info.stack_watermark / thread_info.stack_size) if thread_info.stack_size > 0 else 0
+        usage_ratio = (
+                thread_info.runtime.stack_watermark / thread_info.stack_size) if thread_info.stack_size > 0 else 0
         self._draw_progress_bar(y, col_pos, stack_usage_width, usage_ratio * 100, 70, 90)
         col_pos += stack_usage_width + 1
 
         # Thread Watermark Bytes
-        watermark_bytes_display = f"{thread_info.stack_watermark} / {thread_info.stack_size}".ljust(stack_bytes_width)
+        watermark_bytes_display = f"{thread_info.runtime.stack_watermark} / {thread_info.stack_size}".ljust(
+            stack_bytes_width)
         self.stdscr.addstr(y, col_pos, watermark_bytes_display)
 
     def _draw_default_view(self):
@@ -274,55 +265,31 @@ class ZView:
 
             if not self.detailing_thread_usages.get(thread.name):
                 self.detailing_thread_usages[thread.name] = []
-            self.detailing_thread_usages[thread.name].append(round(thread.cpu, 1))
+            self.detailing_thread_usages[thread.name].append(round(thread.runtime.cpu, 1))
 
-            if len(self.detailing_thread_usages) > data_amount:
+            if len(self.detailing_thread_usages[thread.name]) > data_amount:
                 self.detailing_thread_usages[thread.name] = self.detailing_thread_usages[thread.name][1:]
 
             current_row_y += 2
             self.stdscr.attron(self.ATTR_GRAPH)
-            self._draw_graph(current_row_y, 0, 12, data_amount, self.detailing_thread_usages[thread.name],
-                             title="CPU%")
+            self._draw_graph(current_row_y, 0, 12, data_amount, self.detailing_thread_usages[thread.name], title="CPU%")
             self.stdscr.attroff(self.ATTR_GRAPH)
-            current_row_y += 7
 
         self.stdscr.refresh()
 
-    def run(self):
+    def run(self, inspection_period):
         """
         The main application loop.
 
         This loop continuously checks for new data from the polling thread,
         updates the UI, and processes user input (e.g., 'q' to quit).
         """
-        top = 100_00
-        usage = top
-        usages = []
-        for i in range(4):
-            usages.append(random.randint(0, top))
-
-        usages.sort(reverse=True)
-        for i in range(4):
-            next_split = usages[i]
-            usages[i] = (usage - next_split) / 100
-            usage = next_split
-        usages.append(next_split / 100)
-
         self.status_message = f"Initializing..."
-        toggle = False
+        self.scraper.start_polling_thread(self.data_queue, self.stop_event, inspection_period)
+        self.scraper.thread_pool = self.scraper.all_threads.values()
         while self.running:
-            toggle = not toggle
             try:
-                def salt():
-                    return (random.randint(0, 2_50) - 1_25) / 100
-
-                data = {"threads": [
-                    ThreadInfo("idle", (usages[0] + salt()) + (usages[4] if not toggle else 0), True, 512, 208),
-                    ThreadInfo("thread_name_small", (usages[1] + salt()), True, 1024, 512),
-                    ThreadInfo("thread_name_somewhat_longer", (usages[2] + salt()), True, 1024, 796),
-                    ThreadInfo("thread_name_very_long_almost_unreadable", usages[3] + salt(), True, 1024, 968),
-                    ThreadInfo("thread_name_intermittent", (usages[4] + salt()) * toggle, toggle, 2048, 512),
-                ]}
+                data = self.data_queue.get_nowait()
                 if "threads" in data:
                     self.threads_data = data["threads"]
                     self.status_message = f"Running..."
@@ -345,30 +312,19 @@ class ZView:
                 case _:
                     pass
 
-            current_dims = self.stdscr.getmaxyx()
-            if current_dims[0] < self.min_dimensions[0] or current_dims[1] < self.min_dimensions[1]:
-                self.stdscr.clear()
-                msg0 = f"Terminal is too small."
-                msg1 = f"Please resize your terminal to at least {self.min_dimensions[1]}x{self.min_dimensions[0]}."
-                msg2 = f"Current dimensions {current_dims[1]}x{current_dims[0]}."
-                try:
-                    self.stdscr.addstr((current_dims[0] // 2) - 1, (current_dims[1] - len(msg0)) // 2, msg0)
-                    self.stdscr.addstr(current_dims[0] // 2, (current_dims[1] - len(msg1)) // 2, msg1)
-                    self.stdscr.addstr((current_dims[0] // 2) + 1, (current_dims[1] - len(msg2)) // 2, msg2)
-                except:
+            match self.state:
+                case ZViewState.DEFAULT_VIEW:
+                    self.scraper.thread_pool = list(self.scraper.all_threads.values())
+                    self._draw_default_view()
+                case ZViewState.THREAD_DETAIL:
+                    self.scraper.thread_pool = [self.scraper.all_threads[self.detailing_thread]]
+                    self._draw_thread_detail()
                     pass
-            else:
-                match self.state:
-                    case ZViewState.DEFAULT_VIEW:
-                        self._draw_default_view()
-                    case ZViewState.THREAD_DETAIL:
-                        self._draw_thread_detail()
-                        pass
 
-            time.sleep(0.25)
+            time.sleep(inspection_period)
 
 
-def main(stdscr, parser_args: Namespace):
+def main(stdscr, inspection_period):
     """
     The entry point for the curses application.
 
@@ -376,20 +332,26 @@ def main(stdscr, parser_args: Namespace):
     curses library initialization and cleanup.
 
     Args:
-        stdscr: The standard screen window object provided by `curses.wrapper`.
-        parser_args: Command-line arguments parsed by `argparse`.
+        :param inspection_period: Period for inspection, in seconds.
+        :param stdscr: The standard screen window object provided by `curses.wrapper`.
     """
-    app = ZView(stdscr, inspection_period=parser_args.period)
+    app = ZView(z_scraper, stdscr)
     try:
-        app.run()
+        app.run(inspection_period)
     finally:
-        app.stop_event.set()
+        app.scraper.finish_polling_thread()
 
 
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser(description="ZView - A real-time thread viewer for Zephyr RTOS.")
+    arg_parser.add_argument("--mcu", required=False, default=None, help="Override target MCU (e.g., 'STM32F407VG').")
+    arg_parser.add_argument("-e", "--elf-file", required=True, help="Path to the application's .elf firmware file.")
+    arg_parser.add_argument("--runner", default="jlink", choices=["jlink", "pyocd"],
+                            help="Runner to start analysis with.")
     arg_parser.add_argument("-p", "--period", default=0.2, required=False, type=float,
                             help="Minimum period to update system information.")
     args = arg_parser.parse_args()
 
-    curses.wrapper(main, args)
+    with (PyOCDScraper(args.mcu) if args.runner == "pyocd" else JLinkScraper(args.mcu)) as meta_scraper:
+        z_scraper = ZScraper(meta_scraper, args.elf_file)
+        curses.wrapper(main, args.period)
