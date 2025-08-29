@@ -30,6 +30,8 @@ class SpecialCode:
     QUIT = ord("q")
     NEWLINE = ord("\n")
     RETURN = ord("\r")
+    SORT = ord("s")
+    INVERSE = ord("i")
 
 
 class ZView:
@@ -288,6 +290,8 @@ class ZView:
         self.status_message = f"Initializing..."
         self.scraper.start_polling_thread(self.data_queue, self.stop_event, inspection_period)
         self.scraper.thread_pool = self.scraper.all_threads.values()
+        sortings = ["name", "cpu", "watermark_p", "watermark_b"]
+        current_sort = 0
         while self.running:
             try:
                 data = self.data_queue.get_nowait()
@@ -308,6 +312,11 @@ class ZView:
                     self.state = ZViewState.THREAD_DETAIL if self.state is ZViewState.DEFAULT_VIEW else ZViewState.DEFAULT_VIEW
                     self.detailing_thread = self.threads_data[self.cursor].name
                     self.cursor = 0
+                case SpecialCode.SORT:
+                    current_sort = (current_sort + 1) % len(sortings)
+                    self.scraper.sort_by = sortings[current_sort]
+                case SpecialCode.INVERSE:
+                    self.scraper.invert_sorting = not self.scraper.invert_sorting
                 case SpecialCode.QUIT:
                     self.running = False
                 case _:

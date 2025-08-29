@@ -9,6 +9,8 @@ import time
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from threading import Event
+
 from pylink import JLink, JLinkException, JLinkInterfaces
 from pyocd.core.helpers import ConnectHelper
 from pyocd.core.session import Session
@@ -115,16 +117,12 @@ class AbstractScraper:
 class PyOCDScraper(AbstractScraper):
     def __init__(self, target_mcu: str | None):
         super().__init__(target_mcu)
-        self.session: Session | None = None
+        self.session: Session | None = ConnectHelper.session_with_chosen_probe(target_override=self._target_mcu,
+                                                                               connect_mode="attach")
         self.target: Target | None = None
 
     def connect(self):
         try:
-            if self._target_mcu is not None:
-                self.session = ConnectHelper.session_with_chosen_probe(target_override=self._target_mcu,
-                                                                       connect_mode="attach")
-            else:
-                self.session = ConnectHelper.session_with_chosen_probe(connect_mode="attach")
             self.session.open()
             self.target = self.session.target
         except:
@@ -145,7 +143,7 @@ class PyOCDScraper(AbstractScraper):
         words = self.read32(at, amount * 2)
         dwords = []
         for i in range(0, len(words), 2):
-            dwords.append(((words[i+1] << 32) | words[i]))
+            dwords.append(((words[i + 1] << 32) | words[i]))
 
         return dwords
 
@@ -192,11 +190,12 @@ class ZScraper:
         self._m_scraper: AbstractScraper = meta_scraper
         self._polling_thread: threading.Thread | None = None
         self._thread_pool: list[ThreadInfo] | None = None
+        self._stop_event: Event | None = None
 
-        self._sort_by: Literal["name", "cpu", "watermark"] = "name"
+        self._sort_by: Literal["name", "cpu", "watermark_p", "watermark_b"] = "name"
         self._invert_sorting: bool = False
 
-        # Get these from KConfig
+        # TODO: Get these from KConfig
         self._MAX_THREADS: int = 50
         self._MAX_THREAD_NAME_BYTES: int = 32
 
@@ -225,10 +224,7 @@ class ZScraper:
         }
 
         self._kernel_base_address = self._elf_parser.get_symbol_info("_kernel", info="address")
-
-        # Verify if this is the best source for global usage counting.
-        self._cpu_usage_address = self._kernel_base_address + self._offsets["kernel"][
-            "usage"]
+        self._cpu_usage_address = self._kernel_base_address + self._offsets["kernel"]["usage"]
         self._threads_address = self._kernel_base_address + self._offsets["kernel"]["threads"]
 
     def __enter__(self):
@@ -254,8 +250,8 @@ class ZScraper:
         return self._sort_by
 
     @sort_by.setter
-    def sort_by(self, sorting: Literal["name", "cpu", "watermark"]):
-        valid_options = ["name", "cpu", "watermark"]
+    def sort_by(self, sorting: Literal["name", "cpu", "watermark_p", "watermark_b"]):
+        valid_options = ["name", "cpu", "watermark_p", "watermark_b"]
         if sorting not in valid_options:
             raise NotImplementedError(
                 f"Sort by '{sorting}' is not available. Valid options are: {[f'{op}' for op in valid_options]}")
@@ -419,17 +415,18 @@ class ZScraper:
 
                 thread_info.runtime = ThreadRuntime(cpu_percent, is_active, watermark)
 
-            try:
-                if self._sort_by == "name":
-                    out = sorted(self.thread_pool, key=lambda t: t.name, reverse=self._invert_sorting)
-                elif self._sort_by == "cpu":
-                    out = sorted(self.thread_pool, key=lambda t: t.runtime.cpu, reverse=self._invert_sorting)
-                elif self._sort_by == "watermark":
-                    out = sorted(self.thread_pool, key=lambda t: t.runtime.stack_watermark,
-                                 reverse=self._invert_sorting)
-            except:
-                data_queue.put({"error": f"Unable to mount thread data: {self.thread_pool}"})
-                continue
+            if self._sort_by == "name":
+                out = sorted(self.thread_pool, key=lambda t: t.name, reverse=self._invert_sorting)
+            elif self._sort_by == "cpu":
+                out = sorted(self.thread_pool, key=lambda t: t.runtime.cpu, reverse=self._invert_sorting)
+            elif self._sort_by == "watermark_p":
+                out = sorted(self.thread_pool, key=lambda t: t.runtime.stack_watermark / t.stack_size,
+                             reverse=self._invert_sorting)
+            elif self._sort_by == "watermark_b":
+                out = sorted(self.thread_pool, key=lambda t: t.runtime.stack_watermark,
+                             reverse=self._invert_sorting)
+            else:
+                out = self.thread_pool
 
             data_queue.put({"threads": out})
 
