@@ -79,7 +79,8 @@ class AbstractScraper:
         print(f"Read {amount} double words from {hex(at)}")
         return []
 
-    def calculate_dynamic_watermark(self, stack_start: int, stack_size: int, unused_pattern: int = 0xAA) -> int:
+    def calculate_dynamic_watermark(self, stack_start: int, stack_size: int,
+                                    unused_pattern: int = 0xAA) -> int:
         """
         Reads a stack memory and scans for the 0xAA fill pattern
         to determine the current stack watermark (lowest point of stack usage).
@@ -97,19 +98,12 @@ class AbstractScraper:
             return 0
 
         watermark = stack_size
-        stack_words = self.read32(stack_start, stack_size // 4)
-        fill_hw = (unused_pattern << 8) | unused_pattern
-        fill_w = (fill_hw << 16) | fill_hw
-        for word_index, word in enumerate(stack_words):
-            if word == fill_w:
-                watermark -= 4
-            else:
-                word_bytes = word.to_bytes(4, 'little')
-                for byte_index, byte_value in enumerate(word_bytes):
-                    if byte_value != unused_pattern:
-                        watermark -= (4 - byte_index)
-                        break
+        stack_words = self.read8(stack_start, stack_size)
+        for word in stack_words:
+            if word != unused_pattern:
                 break
+
+            watermark -= 1
 
         return watermark
 
@@ -152,6 +146,7 @@ class JLinkScraper(AbstractScraper):
     def __init__(self, target_mcu: str | None):
         super().__init__(target_mcu)
         self.probe = JLink()
+        self.probe.set_reset_strategy(0) # Avoid resetting the target via nRST pin (mode 2)
 
     def connect(self):
         try:
@@ -334,8 +329,8 @@ class ZScraper:
 
         self._polling_thread = threading.Thread(
             target=self._poll_threads_worker,
-            args=(data_queue, stop_event, inspection_period)
-        )
+            args=(data_queue, stop_event, inspection_period),
+            daemon=True)
         self._stop_event = stop_event
         self._polling_thread.daemon = True
         self._polling_thread.start()
@@ -366,7 +361,7 @@ class ZScraper:
             if not self._m_scraper.is_connected:
                 self._m_scraper.connect()
 
-            init_cpu_cycles = self._m_scraper.read64(self._cpu_usage_address)[0]
+            init_cpu_cycles = self._m_scraper.read32(self._cpu_usage_address)[0]
         except Exception as e:
             data_queue.put({"error": f"Polling thread initialization error: {e}"})
             return
@@ -392,7 +387,7 @@ class ZScraper:
             for thread_info in self._thread_pool:
                 try:
                     thread_usage = \
-                        self._m_scraper.read64(thread_info.address + self._offsets["thread_info"]["usage"])[0]
+                        self._m_scraper.read32(thread_info.address + self._offsets["thread_info"]["usage"])[0]
 
                     watermark = self._m_scraper.calculate_dynamic_watermark(thread_info.stack_start,
                                                                             thread_info.stack_size)

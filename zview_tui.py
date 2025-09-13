@@ -368,7 +368,7 @@ if __name__ == "__main__":
     arg_parser.add_argument("-e", "--elf-file", required=True, help="Path to the application's .elf firmware file.")
     arg_parser.add_argument("--runner", default="jlink", choices=["jlink", "pyocd"],
                             help="Runner to start analysis with.")
-    arg_parser.add_argument("-p", "--period", default=0.2, required=False, type=float,
+    arg_parser.add_argument("-p", "--period", default=0.025, required=False, type=float,
                             help="Minimum period to update system information.")
     args = arg_parser.parse_args()
 
