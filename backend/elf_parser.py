@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Paulo Santos (@wkhadgar)
 #
 # SPDX-License-Identifier: Apache-2.0
-
+import argparse
 from typing import Literal
 
 from elftools.dwarf.die import DIE
@@ -59,11 +59,11 @@ class ZephyrSymbolParser:
             struct_name]:
             return self._struct_member_offset_cache[struct_name][member_name]
 
-        struct_die = self._find_struct_die(struct_name)
-        if not struct_die:
+        struct_dies = self._find_struct_dies(struct_name)
+        if struct_dies is None:
             raise RuntimeError(f"Struct '{struct_name}' not found.")
 
-        member_die = self._find_member_die(struct_die, member_name)
+        member_die = self._find_member_die(struct_dies[0], member_name)
         if not member_die:
             raise RuntimeError(f"Member '{member_name}' not found in struct '{struct_name}'.")
 
@@ -73,24 +73,25 @@ class ZephyrSymbolParser:
         return offset
 
     def get_struct_size(self, struct_name: str) -> int:
-        struct_die = self._find_struct_die(struct_name)
-        if not struct_die:
+        struct_dies = self._find_struct_dies(struct_name)
+        if struct_dies is None:
             raise RuntimeError(f"Struct '{struct_name}' not found.")
 
-        if not struct_die.attributes["DW_AT_byte_size"]:
+        if not struct_dies[0].attributes["DW_AT_byte_size"]:
             raise RuntimeError(f"Struct '{struct_name}' has no size information.")
 
-        return getattr(struct_die.attributes["DW_AT_byte_size"], "value")
+        return getattr(struct_dies[0].attributes["DW_AT_byte_size"], "value")
 
-    def _find_struct_die(self, struct_name: str) -> DIE | None:
+    def _find_struct_dies(self, struct_name: str) -> list[DIE] | None:
+        dies = []
         for CU in self.dwarf.iter_CUs():
             for die in CU.iter_DIEs():
                 if (die.tag == "DW_TAG_structure_type"
                         and die.attributes.get("DW_AT_name")
                         and die.attributes["DW_AT_name"].value.decode(errors="ignore") == struct_name):
-                    return die
+                    dies.append(die)
 
-        return None
+        return dies if len(dies) else None
 
     @staticmethod
     def _find_member_die(struct_die: DIE, member_name: str) -> DIE | None:
@@ -110,3 +111,39 @@ class ZephyrSymbolParser:
 
     def close(self):
         self.file.close()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Find addresses of variables of a specific struct type in an ELF file.",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    parser.add_argument('elf_file', help='Path to the ELF file (e.g., zephyr.elf)')
+    parser.add_argument(
+        'struct_name',
+        help='Name of the struct to find (e.g., "k_heap" or "struct k_heap")'
+    )
+
+    args = parser.parse_args()
+
+    zp = ZephyrSymbolParser(args.elf_file)
+
+    st_dies = zp._find_struct_die(args.struct_name)
+
+    results = []
+    for CU_ in zp.dwarf.iter_CUs():
+        for die_ in CU_.iter_DIEs():
+            if die_.tag == "DW_TAG_variable":
+                die_type_offset = die_.attributes.get("DW_AT_type")
+                die_name = die_.attributes.get("DW_AT_name")
+                # if die_name is not None:
+                #     print(die_name.value.decode("utf-8"))
+                if die_type_offset is not None and die_type_offset.value + die_.cu.cu_offset in [st_die.offset for st_die in st_dies]:
+                    results.append(die_name.value.decode("utf-8"))
+
+    if not results:
+        print("\nNo variables of that struct type were found.")
+    else:
+        print("\n--- Summary ---")
+        for var in set(results):
+            print(f"Variable: {var:<30}")
