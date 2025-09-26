@@ -10,6 +10,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from threading import Event
+from typing import Sequence
 
 from pylink import JLink, JLinkException, JLinkInterfaces
 from pyocd.core.helpers import ConnectHelper
@@ -218,7 +219,8 @@ class ZScraper:
                 "_thread_stack_info", "delta"),
         }
 
-        self._kernel_base_address = self._elf_parser.get_symbol_info("_kernel", info="address")
+        # Known to be only one (at least, expected)
+        self._kernel_base_address = self._elf_parser.get_symbol_info("_kernel", info="address")[0]
         self._cpu_usage_address = self._kernel_base_address + self._offsets["kernel"]["usage"]
         self._threads_address = self._kernel_base_address + self._offsets["kernel"]["threads"]
 
@@ -261,14 +263,14 @@ class ZScraper:
     def invert_sorting(self, invert: bool):
         self._invert_sorting = invert
 
-    def read_variable(self, var_name: str) -> Sequence[int]:
+    def read_variable(self, var_name: str) -> list[Sequence[int]]:
         if not self._m_scraper.is_connected:
             self._m_scraper.connect()
 
-        var_address = self._elf_parser.get_symbol_info(var_name, "address")
-        var_size = self._elf_parser.get_symbol_info(var_name, "size")
+        var_addresses = self._elf_parser.get_symbol_info(var_name, "address")
+        var_sizes = self._elf_parser.get_symbol_info(var_name, "size")
 
-        return self._m_scraper.read8(var_address, var_size)
+        return [self._m_scraper.read8(var_address, var_size) for var_address, var_size in zip(var_addresses, var_sizes)]
 
     def update_available_threads(self):
         try:
