@@ -11,7 +11,7 @@ from collections import defaultdict
 
 class ZephyrSymbolParser:
     def __init__(self, elf_path: str):
-        self._symbol_cache: defaultdict[str, defaultdict[str, int]] = defaultdict(defaultdict)
+        self._symbol_cache: defaultdict[str, defaultdict[str, list[int]]] = defaultdict(defaultdict)
         self._struct_member_offset_cache: defaultdict[str, defaultdict[str, int]] = defaultdict(defaultdict)
 
         self.file = self._open_elf_file(elf_path)
@@ -30,7 +30,7 @@ class ZephyrSymbolParser:
             raise RuntimeError("ELF file lacks DWARF debug information.")
         return self.elf.get_dwarf_info()
 
-    def get_symbol_info(self, symbol_name: str, info: Literal["address", "size"]) -> int:
+    def get_symbol_info(self, symbol_name: str, info: Literal["address", "size"]) -> list[int]:
         if symbol_name in self._symbol_cache and info in self._symbol_cache[symbol_name]:
             return self._symbol_cache[symbol_name][info]
 
@@ -39,16 +39,24 @@ class ZephyrSymbolParser:
             raise RuntimeError("'.symtab' section not found.")
 
         symbols = symtab.get_symbol_by_name(symbol_name)
-        if not symbols:
+        if symbols is None:
             raise RuntimeError(f"Symbol '{symbol_name}' not found.")
-
-        match info:
-            case "address":
-                value = symbols[0].entry["st_value"]
-            case "size":
-                value = symbols[0].entry["st_size"]
-            case _:
-                raise Exception(f"'{info}' is not a valid information.")
+        elif len(symbols) == 1:
+            match info:
+                case "address":
+                    value = [symbols[0].entry["st_value"]]
+                case "size":
+                    value = [symbols[0].entry["st_size"]]
+                case _:
+                    raise Exception(f"'{info}' is not a valid information.")
+        else:
+            match info:
+                case "address":
+                    value = [symbol.entry["st_value"] for symbol in symbols]
+                case "size":
+                    value = [symbol.entry["st_size"] for symbol in symbols]
+                case _:
+                    raise Exception(f"'{info}' is not a valid information.")
 
         self._symbol_cache[symbol_name][info] = value
 
@@ -86,14 +94,16 @@ class ZephyrSymbolParser:
         dies = []
         for CU in self.dwarf.iter_CUs():
             for die in CU.iter_DIEs():
-                if (die.tag == "DW_TAG_structure_type"
-                        and die.attributes.get("DW_AT_name")
-                        and die.attributes["DW_AT_name"].value.decode(errors="ignore") == struct_name):
-                    dies.append(die)
+                if die.tag == "DW_TAG_structure_type":
+                    if struct_name == "*" and die.attributes.get("DW_AT_name"):
+                        dies.append(die)
+                    if (die.attributes.get("DW_AT_name")
+                            and die.attributes["DW_AT_name"].value.decode(errors="ignore") == struct_name):
+                        dies.append(die)
 
         return dies if len(dies) else None
 
-    def _find_struct_variables_(self, struct_name: str) -> list[str]:
+    def find_struct_variable_names(self, struct_name: str) -> list[str] | None:
         struct_dies = self._find_struct_dies(struct_name)
         if struct_dies is None:
             raise RuntimeError(f"Struct '{struct_name}' not found.")
@@ -109,7 +119,8 @@ class ZephyrSymbolParser:
                         die_name = die_.attributes.get("DW_AT_name").value
                         struct_variables.append(die_name.decode("utf-8"))
 
-        return struct_variables
+        found_variables = list(set(struct_variables))
+        return found_variables if len(found_variables) else None
 
     @staticmethod
     def _find_member_die(struct_die: DIE, member_name: str) -> DIE | None:
@@ -139,12 +150,16 @@ if __name__ == "__main__":
     parser.add_argument('elf_file', help='Path to the ELF file (e.g., zephyr.elf)')
     parser.add_argument(
         'struct_name',
-        help='Name of the struct to find (e.g., "k_heap" or "struct k_heap")'
+        help='Name of the struct to find (e.g., "k_heap" or "struct k_heap", or "_" for all structs visible from symbol table)'
     )
 
     args = parser.parse_args()
 
     zp = ZephyrSymbolParser(args.elf_file)
 
-    for v in set(zp._find_struct_variables_(args.struct_name)):
-        print(v, hex(zp.get_symbol_info(v, "address")))
+    for v in sorted((zp.find_struct_variable_names(args.struct_name))):
+        try:
+            addresses = [hex(i) for i in zp.get_symbol_info(v, 'address')]
+            print(f"{v:<50}", f"{', '.join(addresses)}")
+        except RuntimeError:
+            continue
