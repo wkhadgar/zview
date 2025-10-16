@@ -247,7 +247,7 @@ class ZView:
         watermark_width = scheme.col_widths[3]
 
         # Heap name
-        heap_name_display = (heap_info.name[:heap_name_width]+f"@{heap_info.address}").ljust(heap_name_width)
+        heap_name_display = heap_info.name[:heap_name_width].ljust(heap_name_width)
         if len(heap_info.name) > heap_name_width:
             heap_name_display = heap_name_display[:-3] + "..."
 
@@ -394,7 +394,9 @@ class ZView:
                 case SpecialCode.INVERSE:
                     self.scraper.invert_sorting = not self.scraper.invert_sorting
                 case SpecialCode.HEAPS:
-                    if self.state == ZViewState.HEAPS_DETAIL:
+                    if not self.scraper.has_heaps:
+                        pass
+                    elif self.state == ZViewState.HEAPS_DETAIL:
                         self.state = ZViewState.DEFAULT_VIEW
                     else:
                         self.state = ZViewState.HEAPS_DETAIL

@@ -239,19 +239,23 @@ class ZScraper:
                 "_thread_stack_info", "delta"),
         }
 
-        self._offsets["heap_info"] = {
-            "z_heap_base": self._offsets["k_heap"]["heap"] + self._offsets["sys_heap"]["heap"],
-            "free_bytes": self._elf_parser.get_struct_member_offset("z_heap", "free_bytes"),
-            "allocated_bytes": self._elf_parser.get_struct_member_offset("z_heap",
-                                                                         "allocated_bytes"),
-            "max_allocated_bytes": self._elf_parser.get_struct_member_offset("z_heap",
-                                                                             "max_allocated_bytes"),
-        }
-
         # Known to be only one (at least, expected)
         self._kernel_base_address = self._elf_parser.get_symbol_info("_kernel", info="address")[0]
         self._cpu_usage_address = self._kernel_base_address + self._offsets["kernel"]["usage"]
         self._threads_address = self._kernel_base_address + self._offsets["kernel"]["threads"]
+
+        try:
+            self._offsets["heap_info"] = {
+                "z_heap_base": self._offsets["k_heap"]["heap"] + self._offsets["sys_heap"]["heap"],
+                "free_bytes": self._elf_parser.get_struct_member_offset("z_heap", "free_bytes"),
+                "allocated_bytes": self._elf_parser.get_struct_member_offset("z_heap",
+                                                                             "allocated_bytes"),
+                "max_allocated_bytes": self._elf_parser.get_struct_member_offset("z_heap",
+                                                                                 "max_allocated_bytes"),
+            }
+        except IndexError:
+            self.has_heaps = False
+            return
 
         self.has_heaps = False
         self._k_heap_addresses = {}
@@ -489,6 +493,8 @@ class ZScraper:
 
         while not stop_event.is_set():
             get_thread_info()
-            get_heap_info()
+
+            if self.has_heaps:
+                get_heap_info()
 
             time.sleep(inspection_period)

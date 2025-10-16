@@ -17,6 +17,9 @@ CONFIG_THREAD_NAME=y           # For thread names
 CONFIG_THREAD_MONITOR=y        # For thread search
 CONFIG_THREAD_STACK_INFO=y     # For thread information
 CONFIG_THREAD_RUNTIME_STATS=y  # For CPU usage tracking
+
+CONFIG_SYS_HEAP_RUNTIME_STATS=y # For heap runtime stats, if needed
+
 ```
 
 You will also need a debug probe capable of SWD debugging, currently only Segger JLink and PyOCD compatible probes are
@@ -63,7 +66,10 @@ To track CPU usage for a thread (and return to all threads) just hit ENTER over 
 ![Thread tracking](./docs/assets/thread_track_1.png)
 ![Thread tracking](./docs/assets/thread_track_2.png)
 
-
+> [!NOTE]
+> NEW:
+> It is also possible to sort the data by pressing S, and invert the sorting by pressing I. 
+> To access the heap runtime visualization, press H. 
 ****
 
 ### In the future...
