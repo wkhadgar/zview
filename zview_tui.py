@@ -12,11 +12,11 @@ import time
 from dataclasses import dataclass
 from typing import List
 
-from backend.z_scraper import ZScraper, ThreadInfo, PyOCDScraper, JLinkScraper
+from backend.z_scraper import ZScraper, ThreadInfo, PyOCDScraper, JLinkScraper, HeapInfo
 
 
 @dataclass
-class ZViewUI:
+class ZViewTUIScheme:
     col_headers: list[str]
     col_widths: list[int]
 
@@ -24,6 +24,7 @@ class ZViewUI:
 class ZViewState(enum.Enum):
     DEFAULT_VIEW = 1
     THREAD_DETAIL = 2
+    HEAPS_DETAIL = 3
 
 
 class SpecialCode:
@@ -32,6 +33,7 @@ class SpecialCode:
     RETURN = ord("\r")
     SORT = ord("s")
     INVERSE = ord("i")
+    HEAPS = ord("h")
 
 
 class ZView:
@@ -54,12 +56,13 @@ class ZView:
         self.scraper = scraper
         self.running = True
         self.threads_data: List[ThreadInfo] = []
+        self.heaps_data: List[HeapInfo] = []
         self.status_message: str = ""
         self.data_queue = queue.Queue()
         self.stop_event = threading.Event()
 
         self.state: ZViewState = ZViewState.DEFAULT_VIEW
-        self.ui: dict[ZViewState, ZViewUI] = {}
+        self.ui: dict[ZViewState, ZViewTUIScheme] = {}
 
         self.cursor = 0
 
@@ -103,10 +106,14 @@ class ZView:
 
     def _set_ui_schemes(self):
         thread_basic_info_scheme = {"Thread": 30, "CPU %": 6, "Stack Usage (Watermark)": 30, "Watermark (Bytes)": 16}
-        self.ui[ZViewState.DEFAULT_VIEW] = ZViewUI(list(thread_basic_info_scheme.keys()),
-                                                   list(thread_basic_info_scheme.values()))
-        self.ui[ZViewState.THREAD_DETAIL] = ZViewUI(list(thread_basic_info_scheme.keys()),
-                                                    list(thread_basic_info_scheme.values()))
+        heaps_info_scheme = {"Heap": 30, "Free Bytes": 12, "Allocated Bytes": 16, "Watermark (Bytes)": 16}
+
+        thread_scheme = ZViewTUIScheme(list(thread_basic_info_scheme.keys()), list(thread_basic_info_scheme.values()))
+        heap_scheme = ZViewTUIScheme(list(heaps_info_scheme.keys()), list(heaps_info_scheme.values()))
+
+        self.ui[ZViewState.DEFAULT_VIEW] = thread_scheme
+        self.ui[ZViewState.THREAD_DETAIL] = thread_scheme
+        self.ui[ZViewState.HEAPS_DETAIL] = heap_scheme
 
     def _draw_graph(self, y, x, h, w, points, title="", maximum=100, length=100):
         horizontal_limit = ("─" * (w - 2))
@@ -148,7 +155,7 @@ class ZView:
         self.stdscr.attron(bar_color_attr)
         self.stdscr.addstr(y, x, bar_str)
 
-        percent_display = f"{percentage:.1f}%" if percentage > 0 else "N/A"
+        percent_display = f"{percentage:.1f}%"
         overlap = percent_display.center(len(bar_str))[:completed_chars].strip()
         self.stdscr.addstr(y, x + (width // 2) - (len(percent_display) // 2), percent_display)
         self.stdscr.attron(curses.A_REVERSE)
@@ -156,7 +163,9 @@ class ZView:
         self.stdscr.attroff(curses.A_REVERSE)
         self.stdscr.attroff(bar_color_attr)
 
-    def _base_draw(self, scr_size: tuple[int, int]):
+    def _base_draw(self):
+        scr_size = self.stdscr.getmaxyx()
+
         self.stdscr.clear()
 
         header_text = "ZView - Zephyr RTOS Runtime Viewer"
@@ -227,15 +236,51 @@ class ZView:
             stack_bytes_width)
         self.stdscr.addstr(y, col_pos, watermark_bytes_display)
 
+    def _draw_heap_info(self, y, heap_info: HeapInfo, selected: bool = False):
+        col_pos = 0
+
+        # Widths
+        scheme = self.ui[self.state]
+        heap_name_width = scheme.col_widths[0]
+        free_bytes_width = scheme.col_widths[1]
+        allocated_bytes_width = scheme.col_widths[2]
+        watermark_width = scheme.col_widths[3]
+
+        # Heap name
+        heap_name_display = (heap_info.name[:heap_name_width]+f"@{heap_info.address}").ljust(heap_name_width)
+        if len(heap_info.name) > heap_name_width:
+            heap_name_display = heap_name_display[:-3] + "..."
+
+        heap_name_attr = self.ATTR_CURSOR if selected else self.ATTR_ACTIVE_THREAD
+        self.stdscr.attron(heap_name_attr)
+        self.stdscr.addstr(y, col_pos, heap_name_display)
+        self.stdscr.attroff(heap_name_attr)
+        col_pos += heap_name_width + 1
+
+        # Free bytes
+        free_bytes_display = f"{heap_info.free_bytes}".ljust(free_bytes_width)
+        self.stdscr.addstr(y, col_pos, free_bytes_display)
+        col_pos += free_bytes_width + 1
+
+        heap_size = heap_info.allocated_bytes + heap_info.free_bytes
+        # Heap Usage Progress Bar
+        usage_ratio = (heap_info.allocated_bytes / heap_size) if heap_info.allocated_bytes > 0 else 0
+        self._draw_progress_bar(y, col_pos, allocated_bytes_width, usage_ratio * 100, 70, 90)
+        col_pos += allocated_bytes_width + 1
+
+        # Heap Watermark Bytes
+        watermark_bytes_display = f"{heap_info.max_allocated_bytes} / {heap_size}".ljust(
+            watermark_width)
+        self.stdscr.addstr(y, col_pos, watermark_bytes_display)
+
     def _draw_default_view(self):
         """
         Draws all UI elements, including header, footer, status bar, and the thread data table.
         The UI is redrawn completely on each update cycle.
         """
-        height, width = self.stdscr.getmaxyx()
+        self._base_draw()
 
-        self._base_draw((height, width))
-
+        height, _ = self.stdscr.getmaxyx()
         table_start_row = 2
         current_row_y = table_start_row + 1
         table_height = height - 1
@@ -254,9 +299,8 @@ class ZView:
         Draws all UI elements, including header, footer, status bar, and the thread data table.
         The UI is redrawn completely on each update cycle.
         """
-        height, width = self.stdscr.getmaxyx()
 
-        self._base_draw((height, width))
+        self._base_draw()
 
         current_row_y = 3
         data_amount = sum(self.ui[self.state].col_widths)
@@ -280,6 +324,23 @@ class ZView:
 
         self.stdscr.refresh()
 
+    def _draw_heaps_view(self):
+        self._base_draw()
+
+        height, _ = self.stdscr.getmaxyx()
+        table_start_row = 2
+        current_row_y = table_start_row + 1
+        table_height = height - 1
+        for idx, heap in enumerate(self.heaps_data):
+            if current_row_y >= table_start_row + table_height:
+                break
+
+            self._draw_heap_info(current_row_y, heap, selected=idx == self.cursor)
+
+            current_row_y += 1
+
+        self.stdscr.refresh()
+
     def run(self, inspection_period):
         """
         The main application loop.
@@ -295,11 +356,17 @@ class ZView:
         while self.running:
             try:
                 data = self.data_queue.get_nowait()
-                if "threads" in data:
-                    self.threads_data = data["threads"]
-                    self.status_message = f"Running..."
-                elif "error" in data:
+                if "error" in data:
                     self.status_message = f"Error: {data['error']}"
+                else:
+                    self.status_message = f"Running..."
+                    threads_data = data.get("threads")
+                    heaps_data = data.get("heaps")
+
+                    if threads_data is not None:
+                        self.threads_data = threads_data
+                    if heaps_data is not None:
+                        self.heaps_data = heaps_data
             except queue.Empty:
                 pass
 
@@ -309,14 +376,28 @@ class ZView:
                 case curses.KEY_UP:
                     self.cursor -= self.cursor > 0
                 case curses.KEY_ENTER | SpecialCode.NEWLINE | SpecialCode.RETURN:
-                    self.state = ZViewState.THREAD_DETAIL if self.state is ZViewState.DEFAULT_VIEW else ZViewState.DEFAULT_VIEW
-                    self.detailing_thread = self.threads_data[self.cursor].name
-                    self.cursor = 0
+                    match self.state:
+                        case ZViewState.DEFAULT_VIEW:
+                            self.detailing_thread = self.threads_data[self.cursor].name
+                            self.scraper.thread_pool = [self.scraper.all_threads[self.detailing_thread]]
+                            self.state = ZViewState.THREAD_DETAIL
+                            self.cursor = 0
+                        case ZViewState.THREAD_DETAIL:
+                            self.scraper.thread_pool = list(self.scraper.all_threads.values())
+                            self.state = ZViewState.DEFAULT_VIEW
+                        case _:
+                            self.scraper.thread_pool = []
+                            pass
                 case SpecialCode.SORT:
                     current_sort = (current_sort + 1) % len(sortings)
                     self.scraper.sort_by = sortings[current_sort]
                 case SpecialCode.INVERSE:
                     self.scraper.invert_sorting = not self.scraper.invert_sorting
+                case SpecialCode.HEAPS:
+                    if self.state == ZViewState.HEAPS_DETAIL:
+                        self.state = ZViewState.DEFAULT_VIEW
+                    else:
+                        self.state = ZViewState.HEAPS_DETAIL
                 case SpecialCode.QUIT:
                     self.running = False
                 case _:
@@ -334,12 +415,11 @@ class ZView:
             else:
                 match self.state:
                     case ZViewState.DEFAULT_VIEW:
-                        self.scraper.thread_pool = list(self.scraper.all_threads.values())
                         self._draw_default_view()
                     case ZViewState.THREAD_DETAIL:
-                        self.scraper.thread_pool = [self.scraper.all_threads[self.detailing_thread]]
                         self._draw_thread_detail()
-                        pass
+                    case ZViewState.HEAPS_DETAIL:
+                        self._draw_heaps_view()
 
                 time.sleep(inspection_period)
 

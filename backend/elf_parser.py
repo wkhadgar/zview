@@ -71,9 +71,14 @@ class ZephyrSymbolParser:
         if struct_dies is None:
             raise RuntimeError(f"Struct '{struct_name}' not found.")
 
-        member_die = self._find_member_die(struct_dies[0], member_name)
-        if not member_die:
+        member_dies = []
+        for struct_die in struct_dies:
+            member_dies.append(self._find_member_die(struct_die, member_name))
+        if len(member_dies) == 0:
             raise RuntimeError(f"Member '{member_name}' not found in struct '{struct_name}'.")
+
+        member_dies[:] = [die for die in member_dies if die is not None]
+        member_die = member_dies[0]
 
         offset = self._extract_member_offset(member_die)
         self._struct_member_offset_cache[struct_name][member_name] = offset
@@ -109,7 +114,7 @@ class ZephyrSymbolParser:
             raise RuntimeError(f"Struct '{struct_name}' not found.")
 
         struct_variables = []
-        for CU_ in zp.dwarf.iter_CUs():
+        for CU_ in self.dwarf.iter_CUs():
             for die_ in CU_.iter_DIEs():
                 if die_.tag == "DW_TAG_variable":
                     die_type_offset = die_.attributes.get("DW_AT_type")
@@ -126,9 +131,10 @@ class ZephyrSymbolParser:
     def _find_member_die(struct_die: DIE, member_name: str) -> DIE | None:
         for child in struct_die.iter_children():
             if (child.tag == "DW_TAG_member" and
-                    child.attributes.get("DW_AT_name") and
-                    child.attributes["DW_AT_name"].value.decode(errors="ignore") == member_name):
-                return child
+                    child.attributes.get("DW_AT_name")):
+                child_member = child.attributes["DW_AT_name"].value.decode(errors="ignore")
+                if child_member == member_name:
+                    return child
         return None
 
     @staticmethod

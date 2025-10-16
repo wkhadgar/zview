@@ -7,7 +7,6 @@ import queue
 import threading
 import time
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from threading import Event
 from typing import Sequence
@@ -41,6 +40,15 @@ class ThreadInfo:
     stack_size: int
     name: str
     runtime: ThreadRuntime | None
+
+
+@dataclass
+class HeapInfo:
+    name: str
+    address: int
+    free_bytes: int
+    allocated_bytes: int
+    max_allocated_bytes: int
 
 
 class AbstractScraper:
@@ -80,8 +88,7 @@ class AbstractScraper:
         print(f"Read {amount} double words from {hex(at)}")
         return []
 
-    def calculate_dynamic_watermark(self, stack_start: int, stack_size: int,
-                                    unused_pattern: int = 0xAA) -> int:
+    def calculate_dynamic_watermark(self, stack_start: int, stack_size: int, unused_pattern: int = 0xAA) -> int:
         """
         Reads a stack memory and scans for the 0xAA fill pattern
         to determine the current stack watermark (lowest point of stack usage).
@@ -99,12 +106,19 @@ class AbstractScraper:
             return 0
 
         watermark = stack_size
-        stack_words = self.read8(stack_start, stack_size)
-        for word in stack_words:
-            if word != unused_pattern:
+        stack_words = self.read32(stack_start, stack_size // 4)
+        fill_hw = (unused_pattern << 8) | unused_pattern
+        fill_w = (fill_hw << 16) | fill_hw
+        for word_index, word in enumerate(stack_words):
+            if word == fill_w:
+                watermark -= 4
+            else:
+                word_bytes = word.to_bytes(4, 'little')
+                for byte_index, byte_value in enumerate(word_bytes):
+                    if byte_value != unused_pattern:
+                        watermark -= (4 - byte_index)
+                        break
                 break
-
-            watermark -= 1
 
         return watermark
 
@@ -147,7 +161,6 @@ class JLinkScraper(AbstractScraper):
     def __init__(self, target_mcu: str | None):
         super().__init__(target_mcu)
         self.probe = JLink()
-        self.probe.set_reset_strategy(0) # Avoid resetting the target via nRST pin (mode 2)
 
     def connect(self):
         try:
@@ -207,7 +220,14 @@ class ZScraper:
                 "stack_info": self._elf_parser.get_struct_member_offset("k_thread", "stack_info"),
                 "next_thread": self._elf_parser.get_struct_member_offset("k_thread", "next_thread"),
             },
+            "k_heap": {
+                "heap": self._elf_parser.get_struct_member_offset("k_heap", "heap"),
+            },
+            "sys_heap": {
+                "heap": self._elf_parser.get_struct_member_offset("sys_heap", "heap"),
+            },
         }
+
         self._offsets["thread_info"] = {
             "usage": self._offsets["k_thread"]["base"] + self._elf_parser.get_struct_member_offset("_thread_base",
                                                                                                    "usage"),
@@ -219,10 +239,26 @@ class ZScraper:
                 "_thread_stack_info", "delta"),
         }
 
+        self._offsets["heap_info"] = {
+            "z_heap_base": self._offsets["k_heap"]["heap"] + self._offsets["sys_heap"]["heap"],
+            "free_bytes": self._elf_parser.get_struct_member_offset("z_heap", "free_bytes"),
+            "allocated_bytes": self._elf_parser.get_struct_member_offset("z_heap",
+                                                                         "allocated_bytes"),
+            "max_allocated_bytes": self._elf_parser.get_struct_member_offset("z_heap",
+                                                                             "max_allocated_bytes"),
+        }
+
         # Known to be only one (at least, expected)
         self._kernel_base_address = self._elf_parser.get_symbol_info("_kernel", info="address")[0]
         self._cpu_usage_address = self._kernel_base_address + self._offsets["kernel"]["usage"]
         self._threads_address = self._kernel_base_address + self._offsets["kernel"]["threads"]
+
+        self.has_heaps = False
+        self._k_heap_addresses = {}
+        all_heaps = self._elf_parser.find_struct_variable_names("k_heap")
+        for heap in all_heaps:
+            self.has_heaps = True
+            self._k_heap_addresses[heap] = self._elf_parser.get_symbol_info(heap, 'address')
 
     def __enter__(self):
         self._m_scraper.connect()
@@ -330,7 +366,7 @@ class ZScraper:
             return
 
         self._polling_thread = threading.Thread(
-            target=self._poll_threads_worker,
+            target=self._poll_thread_worker,
             args=(data_queue, stop_event, inspection_period),
             daemon=True)
         self._stop_event = stop_event
@@ -347,37 +383,28 @@ class ZScraper:
             if self._polling_thread.is_alive():
                 print("Warning: Polling thread did not terminate gracefully.")
 
-    def _poll_threads_worker(self, data_queue: queue.Queue, stop_event: threading.Event, inspection_period: float):
+    def _poll_thread_worker(self, data_queue: queue.Queue, stop_event: threading.Event, inspection_period: float):
         """
         Worker function executed by the polling thread.
 
         Connects to the MCU via J-Link, parses Zephyr kernel symbols from the ELF file,
-        and continuously reads and processes thread runtime data, pushing it to `data_queue`.
+        and continuously reads and processes runtime data, pushing it to `data_queue`.
 
         Args:
-            data_queue: A queue for sending processed thread data to the main UI thread.
+            data_queue: A queue for sending processed data to the main UI thread.
             stop_event: An event to signal the polling thread to terminate.
         """
 
-        try:
-            if not self._m_scraper.is_connected:
-                self._m_scraper.connect()
+        def get_thread_info():
+            nonlocal last_cpu_delta
+            nonlocal last_cpu_cycles
+            nonlocal last_thread_cycles
 
-            init_cpu_cycles = self._m_scraper.read32(self._cpu_usage_address)[0]
-        except Exception as e:
-            data_queue.put({"error": f"Polling thread initialization error: {e}"})
-            return
-
-        last_cpu_cycles = init_cpu_cycles  # Stores last read total CPU cycles for each thread (to mitigate I/O read delays)
-        last_thread_cycles = {}  # Stores last read usage cycles for each thread
-        last_cpu_delta = 1000
-
-        while not stop_event.is_set():
             try:
                 current_cpu_cycles = self._m_scraper.read32(self._cpu_usage_address)[0]
             except Exception as e:
                 data_queue.put({"error": f"Error reading global CPU cycles: {e}"})
-                continue
+                return
 
             cpu_cycles_delta = current_cpu_cycles - last_cpu_cycles
             last_cpu_cycles = current_cpu_cycles
@@ -389,7 +416,7 @@ class ZScraper:
             for thread_info in self._thread_pool:
                 try:
                     thread_usage = \
-                        self._m_scraper.read32(thread_info.address + self._offsets["thread_info"]["usage"])[0]
+                        self._m_scraper.read64(thread_info.address + self._offsets["thread_info"]["usage"])[0]
 
                     watermark = self._m_scraper.calculate_dynamic_watermark(thread_info.stack_start,
                                                                             thread_info.stack_size)
@@ -426,5 +453,42 @@ class ZScraper:
                 out = self.thread_pool
 
             data_queue.put({"threads": out})
+
+        def get_heap_info():
+            heap_info = []
+            for heap_name, heap_addresses in self._k_heap_addresses.items():
+                for heap_address in heap_addresses:
+                    heap_address = self._m_scraper.read32(heap_address)[0]
+                    try:
+                        free_bytes = self._m_scraper.read32(heap_address + self._offsets["heap_info"]["free_bytes"])[0]
+                        allocated_bytes = \
+                            self._m_scraper.read32(heap_address + self._offsets["heap_info"]["allocated_bytes"])[0]
+                        max_allocated_bytes = \
+                            self._m_scraper.read32(heap_address + self._offsets["heap_info"]["max_allocated_bytes"])[0]
+                    except Exception as e:
+                        data_queue.put({"error": f"Error reading heap info: {e}"})
+                        return
+
+                    heap_info.append(
+                        HeapInfo(heap_name, heap_address, free_bytes, allocated_bytes, max_allocated_bytes))
+
+                    data_queue.put({"heaps": heap_info})
+
+        try:
+            if not self._m_scraper.is_connected:
+                self._m_scraper.connect()
+
+            init_cpu_cycles = self._m_scraper.read64(self._cpu_usage_address)[0]
+        except Exception as e:
+            data_queue.put({"error": f"Polling thread initialization error: {e}"})
+            return
+
+        last_cpu_delta = 1000
+        last_cpu_cycles = init_cpu_cycles  # Stores last read total CPU cycles for each thread (to mitigate I/O read delays)
+        last_thread_cycles = {}  # Stores last read usage cycles for each thread
+
+        while not stop_event.is_set():
+            get_thread_info()
+            get_heap_info()
 
             time.sleep(inspection_period)
