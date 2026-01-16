@@ -1,0 +1,6 @@
+pyocd
+pylink-square
+pyelftools
+
+
+
