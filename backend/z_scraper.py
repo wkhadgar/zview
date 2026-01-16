@@ -25,6 +25,7 @@ class ThreadRuntime:
     """
     Data class to hold runtime information about the thread.
     """
+
     cpu: float
     active: bool
     stack_watermark: int
@@ -35,11 +36,12 @@ class ThreadInfo:
     """
     Data class to hold information about a single Zephyr RTOS thread.
     """
+
     address: int
     stack_start: int
     stack_size: int
     name: str
-    runtime: ThreadRuntime | None
+    runtime: ThreadRuntime
 
 
 @dataclass
@@ -88,7 +90,9 @@ class AbstractScraper:
         print(f"Read {amount} double words from {hex(at)}")
         return []
 
-    def calculate_dynamic_watermark(self, stack_start: int, stack_size: int, unused_pattern: int = 0xAA) -> int:
+    def calculate_dynamic_watermark(
+        self, stack_start: int, stack_size: int, unused_pattern: int = 0xAA
+    ) -> int:
         """
         Reads a stack memory and scans for the 0xAA fill pattern
         to determine the current stack watermark (lowest point of stack usage).
@@ -109,14 +113,14 @@ class AbstractScraper:
         stack_words = self.read32(stack_start, stack_size // 4)
         fill_hw = (unused_pattern << 8) | unused_pattern
         fill_w = (fill_hw << 16) | fill_hw
-        for word_index, word in enumerate(stack_words):
+        for word in stack_words:
             if word == fill_w:
                 watermark -= 4
             else:
-                word_bytes = word.to_bytes(4, 'little')
+                word_bytes = word.to_bytes(4, "little")
                 for byte_index, byte_value in enumerate(word_bytes):
                     if byte_value != unused_pattern:
-                        watermark -= (4 - byte_index)
+                        watermark -= 4 - byte_index
                         break
                 break
 
@@ -126,26 +130,40 @@ class AbstractScraper:
 class PyOCDScraper(AbstractScraper):
     def __init__(self, target_mcu: str | None):
         super().__init__(target_mcu)
-        self.session: Session | None = ConnectHelper.session_with_chosen_probe(target_override=self._target_mcu,
-                                                                               connect_mode="attach")
+        self.session: Session | None = ConnectHelper.session_with_chosen_probe(
+            target_override=self._target_mcu, connect_mode="attach"
+        )
         self.target: Target | None = None
 
     def connect(self):
+        if self.session is None:
+            raise Exception("Unable to create a PyOCD session.")
+
         try:
             self.session.open()
             self.target = self.session.target
-        except:
-            raise Exception(f"\nUnable to connect with MCU [{self._target_mcu}].")
+        except Exception as e:
+            raise Exception(f"\nUnable to connect with MCU [{self._target_mcu}].\n {e}")
+
         self._is_connected = True
 
     def disconnect(self):
+        if self.session is None:
+            return
+
         self.session.close()
         self._is_connected = False
 
     def read8(self, at: int, amount: int = 1) -> Sequence[int]:
+        if self.target is None:
+            raise Exception("No target available.")
+
         return self.target.read_memory_block8(at, amount)
 
     def read32(self, at: int, amount: int = 1) -> Sequence[int]:
+        if self.target is None:
+            raise Exception("No target available.")
+
         return self.target.read_memory_block32(at, amount)
 
     def read64(self, at, amount: int = 1) -> Sequence[int]:
@@ -175,7 +193,9 @@ class JLinkScraper(AbstractScraper):
             self.probe.connect(self._target_mcu)
         except JLinkException:
             self.probe.close()
-            raise Exception(f"\nNão foi possível conectar com a MCU [{self._target_mcu}], verifique suas conexões.")
+            raise Exception(
+                f"\nNão foi possível conectar com a MCU [{self._target_mcu}], verifique suas conexões."
+            )
         self._is_connected = True
 
     def disconnect(self):
@@ -201,7 +221,7 @@ class ZScraper:
         self._thread_pool: list[ThreadInfo] | None = None
         self._stop_event: Event | None = None
 
-        self._sort_by: Literal["name", "cpu", "watermark_p", "watermark_b"] = "name"
+        self._sort_by: str = "name"
         self._invert_sorting: bool = False
 
         # TODO: Get these from KConfig
@@ -211,14 +231,20 @@ class ZScraper:
         self._offsets = {
             "kernel": {
                 "cpu": self._elf_parser.get_struct_member_offset("z_kernel", "cpus"),
-                "threads": self._elf_parser.get_struct_member_offset("z_kernel", "threads"),
+                "threads": self._elf_parser.get_struct_member_offset(
+                    "z_kernel", "threads"
+                ),
                 "usage": self._elf_parser.get_struct_member_offset("z_kernel", "usage"),
             },
             "k_thread": {
                 "base": self._elf_parser.get_struct_member_offset("k_thread", "base"),
                 "name": self._elf_parser.get_struct_member_offset("k_thread", "name"),
-                "stack_info": self._elf_parser.get_struct_member_offset("k_thread", "stack_info"),
-                "next_thread": self._elf_parser.get_struct_member_offset("k_thread", "next_thread"),
+                "stack_info": self._elf_parser.get_struct_member_offset(
+                    "k_thread", "stack_info"
+                ),
+                "next_thread": self._elf_parser.get_struct_member_offset(
+                    "k_thread", "next_thread"
+                ),
             },
             "k_heap": {
                 "heap": self._elf_parser.get_struct_member_offset("k_heap", "heap"),
@@ -229,40 +255,57 @@ class ZScraper:
         }
 
         self._offsets["thread_info"] = {
-            "usage": self._offsets["k_thread"]["base"] + self._elf_parser.get_struct_member_offset("_thread_base",
-                                                                                                   "usage"),
-            "stack_start": self._offsets["k_thread"]["stack_info"] + self._elf_parser.get_struct_member_offset(
-                "_thread_stack_info", "start"),
-            "stack_size": self._offsets["k_thread"]["stack_info"] + self._elf_parser.get_struct_member_offset(
-                "_thread_stack_info", "size"),
-            "stack_delta": self._offsets["k_thread"]["stack_info"] + self._elf_parser.get_struct_member_offset(
-                "_thread_stack_info", "delta"),
+            "usage": self._offsets["k_thread"]["base"]
+            + self._elf_parser.get_struct_member_offset("_thread_base", "usage"),
+            "stack_start": self._offsets["k_thread"]["stack_info"]
+            + self._elf_parser.get_struct_member_offset("_thread_stack_info", "start"),
+            "stack_size": self._offsets["k_thread"]["stack_info"]
+            + self._elf_parser.get_struct_member_offset("_thread_stack_info", "size"),
+            "stack_delta": self._offsets["k_thread"]["stack_info"]
+            + self._elf_parser.get_struct_member_offset("_thread_stack_info", "delta"),
         }
 
         # Known to be only one (at least, expected)
-        self._kernel_base_address = self._elf_parser.get_symbol_info("_kernel", info="address")[0]
-        self._cpu_usage_address = self._kernel_base_address + self._offsets["kernel"]["usage"]
-        self._threads_address = self._kernel_base_address + self._offsets["kernel"]["threads"]
+        self._kernel_base_address = self._elf_parser.get_symbol_info(
+            "_kernel", info="address"
+        )[0]
+        self._cpu_usage_address = (
+            self._kernel_base_address + self._offsets["kernel"]["usage"]
+        )
+        self._threads_address = (
+            self._kernel_base_address + self._offsets["kernel"]["threads"]
+        )
 
         try:
             self._offsets["heap_info"] = {
-                "z_heap_base": self._offsets["k_heap"]["heap"] + self._offsets["sys_heap"]["heap"],
-                "free_bytes": self._elf_parser.get_struct_member_offset("z_heap", "free_bytes"),
-                "allocated_bytes": self._elf_parser.get_struct_member_offset("z_heap",
-                                                                             "allocated_bytes"),
-                "max_allocated_bytes": self._elf_parser.get_struct_member_offset("z_heap",
-                                                                                 "max_allocated_bytes"),
+                "z_heap_base": self._offsets["k_heap"]["heap"]
+                + self._offsets["sys_heap"]["heap"],
+                "free_bytes": self._elf_parser.get_struct_member_offset(
+                    "z_heap", "free_bytes"
+                ),
+                "allocated_bytes": self._elf_parser.get_struct_member_offset(
+                    "z_heap", "allocated_bytes"
+                ),
+                "max_allocated_bytes": self._elf_parser.get_struct_member_offset(
+                    "z_heap", "max_allocated_bytes"
+                ),
             }
         except IndexError:
             self.has_heaps = False
             return
 
-        self.has_heaps = False
-        self._k_heap_addresses = {}
         all_heaps = self._elf_parser.find_struct_variable_names("k_heap")
+
+        if all_heaps is None:
+            self.has_heaps = False
+            return
+
+        self._k_heap_addresses = {}
         for heap in all_heaps:
             self.has_heaps = True
-            self._k_heap_addresses[heap] = self._elf_parser.get_symbol_info(heap, 'address')
+            self._k_heap_addresses[heap] = self._elf_parser.get_symbol_info(
+                heap, "address"
+            )
 
     def __enter__(self):
         self._m_scraper.connect()
@@ -287,11 +330,14 @@ class ZScraper:
         return self._sort_by
 
     @sort_by.setter
-    def sort_by(self, sorting: Literal["name", "cpu", "watermark_p", "watermark_b"]):
+    def sort_by(
+        self, sorting: str | Literal["name", "cpu", "watermark_p", "watermark_b"]
+    ):
         valid_options = ["name", "cpu", "watermark_p", "watermark_b"]
         if sorting not in valid_options:
             raise NotImplementedError(
-                f"Sort by '{sorting}' is not available. Valid options are: {[f'{op}' for op in valid_options]}")
+                f"Sort by '{sorting}' is not available. Valid options are: {[f'{op}' for op in valid_options]}"
+            )
 
         self._sort_by = sorting
 
@@ -310,16 +356,23 @@ class ZScraper:
         var_addresses = self._elf_parser.get_symbol_info(var_name, "address")
         var_sizes = self._elf_parser.get_symbol_info(var_name, "size")
 
-        return [self._m_scraper.read8(var_address, var_size) for var_address, var_size in zip(var_addresses, var_sizes)]
+        return [
+            self._m_scraper.read8(var_address, var_size)
+            for var_address, var_size in zip(var_addresses, var_sizes)
+        ]
 
     def update_available_threads(self):
         try:
             if not self._m_scraper.is_connected:
                 self._m_scraper.connect()
 
-            thread_ptr = self._m_scraper.read32(self._threads_address)[0] if self._threads_address else 0
-        except:
-            raise RuntimeError("Unable to read kernel thread list.")
+            thread_ptr = (
+                self._m_scraper.read32(self._threads_address)[0]
+                if self._threads_address
+                else 0
+            )
+        except Exception as e:
+            raise RuntimeError(f"Unable to read kernel thread list. {e}")
 
         stack_struct_size = self._elf_parser.get_struct_size("k_thread")
         words_to_read = stack_struct_size // 4
@@ -339,28 +392,38 @@ class ZScraper:
                     if (name_word_idx + i) >= len(stack_struct_words):
                         break
 
-                    name_bytes_raw += stack_struct_words[name_word_idx + i].to_bytes(4, "little")
+                    name_bytes_raw += stack_struct_words[name_word_idx + i].to_bytes(
+                        4, "little"
+                    )
 
-                thread_name = name_bytes_raw.partition(b"\0")[0].decode(errors='ignore') or f"thread_0x{thread_ptr:X}"
+                thread_name = (
+                    name_bytes_raw.partition(b"\0")[0].decode(errors="ignore")
+                    or f"thread_0x{thread_ptr:X}"
+                )
 
                 self._all_threads_info[thread_name] = ThreadInfo(
                     thread_ptr,
                     stack_struct_words[stack_start_word_idx],
                     stack_struct_words[stack_size_word_idx],
                     thread_name,
-                    None,
+                    ThreadRuntime(0, False, 0),
                 )
 
                 thread_ptr = stack_struct_words[next_ptr_word_idx]
             except Exception as e:
                 raise Exception(f"Error parsing thread struct at 0x{thread_ptr:X}: {e}")
 
-    def start_polling_thread(self, data_queue: queue.Queue, stop_event: threading.Event, inspection_period: float):
+    def start_polling_thread(
+        self,
+        data_queue: queue.Queue,
+        stop_event: threading.Event,
+        inspection_period: float,
+    ):
         """
         Starts a separate daemon thread to continuously poll data from the MCU.
         """
         if self._polling_thread is not None:
-            data_queue.put({"error": f"Already started..."})
+            data_queue.put({"error": "Already started..."})
             return
 
         try:
@@ -372,13 +435,14 @@ class ZScraper:
         self._polling_thread = threading.Thread(
             target=self._poll_thread_worker,
             args=(data_queue, stop_event, inspection_period),
-            daemon=True)
+            daemon=True,
+        )
         self._stop_event = stop_event
         self._polling_thread.daemon = True
         self._polling_thread.start()
 
     def finish_polling_thread(self):
-        if self._polling_thread is None:
+        if self._polling_thread is None or self._stop_event is None:
             return
 
         self._stop_event.set()
@@ -387,7 +451,12 @@ class ZScraper:
             if self._polling_thread.is_alive():
                 print("Warning: Polling thread did not terminate gracefully.")
 
-    def _poll_thread_worker(self, data_queue: queue.Queue, stop_event: threading.Event, inspection_period: float):
+    def _poll_thread_worker(
+        self,
+        data_queue: queue.Queue,
+        stop_event: threading.Event,
+        inspection_period: float,
+    ):
         """
         Worker function executed by the polling thread.
 
@@ -414,21 +483,32 @@ class ZScraper:
             last_cpu_cycles = current_cpu_cycles
             if cpu_cycles_delta > 0:
                 last_cpu_delta = cpu_cycles_delta
-            elif cpu_cycles_delta <= 0:  # When current_cpu_cycles is 0 due to context resets
+            elif (
+                cpu_cycles_delta <= 0
+            ):  # When current_cpu_cycles is 0 due to context resets
                 cpu_cycles_delta = last_cpu_delta
 
-            for thread_info in self._thread_pool:
-                try:
-                    thread_usage = \
-                        self._m_scraper.read64(thread_info.address + self._offsets["thread_info"]["usage"])[0]
+            if self.thread_pool is None:
+                return
 
-                    watermark = self._m_scraper.calculate_dynamic_watermark(thread_info.stack_start,
-                                                                            thread_info.stack_size)
+            for thread_info in self.thread_pool:
+                try:
+                    thread_usage = self._m_scraper.read64(
+                        thread_info.address + self._offsets["thread_info"]["usage"]
+                    )[0]
+
+                    watermark = self._m_scraper.calculate_dynamic_watermark(
+                        thread_info.stack_start, thread_info.stack_size
+                    )
                 except Exception as e:
-                    data_queue.put({"error": f"Error polling thread {thread_info}: {e}"})
+                    data_queue.put(
+                        {"error": f"Error polling thread {thread_info}: {e}"}
+                    )
                     continue
 
-                thread_usage_delta = thread_usage - last_thread_cycles.get(thread_info.name, 0)
+                thread_usage_delta = thread_usage - last_thread_cycles.get(
+                    thread_info.name, 0
+                )
                 last_thread_cycles[thread_info.name] = thread_usage
 
                 if thread_info.name == "idle":
@@ -444,15 +524,27 @@ class ZScraper:
                 thread_info.runtime = ThreadRuntime(cpu_percent, is_active, watermark)
 
             if self._sort_by == "name":
-                out = sorted(self.thread_pool, key=lambda t: t.name, reverse=self._invert_sorting)
+                out = sorted(
+                    self.thread_pool, key=lambda t: t.name, reverse=self._invert_sorting
+                )
             elif self._sort_by == "cpu":
-                out = sorted(self.thread_pool, key=lambda t: t.runtime.cpu, reverse=self._invert_sorting)
+                out = sorted(
+                    self.thread_pool,
+                    key=lambda t: t.runtime.cpu,
+                    reverse=self._invert_sorting,
+                )
             elif self._sort_by == "watermark_p":
-                out = sorted(self.thread_pool, key=lambda t: t.runtime.stack_watermark / t.stack_size,
-                             reverse=self._invert_sorting)
+                out = sorted(
+                    self.thread_pool,
+                    key=lambda t: t.runtime.stack_watermark / t.stack_size,
+                    reverse=self._invert_sorting,
+                )
             elif self._sort_by == "watermark_b":
-                out = sorted(self.thread_pool, key=lambda t: t.runtime.stack_watermark,
-                             reverse=self._invert_sorting)
+                out = sorted(
+                    self.thread_pool,
+                    key=lambda t: t.runtime.stack_watermark,
+                    reverse=self._invert_sorting,
+                )
             else:
                 out = self.thread_pool
 
@@ -464,17 +556,29 @@ class ZScraper:
                 for heap_address in heap_addresses:
                     heap_address = self._m_scraper.read32(heap_address)[0]
                     try:
-                        free_bytes = self._m_scraper.read32(heap_address + self._offsets["heap_info"]["free_bytes"])[0]
-                        allocated_bytes = \
-                            self._m_scraper.read32(heap_address + self._offsets["heap_info"]["allocated_bytes"])[0]
-                        max_allocated_bytes = \
-                            self._m_scraper.read32(heap_address + self._offsets["heap_info"]["max_allocated_bytes"])[0]
+                        free_bytes = self._m_scraper.read32(
+                            heap_address + self._offsets["heap_info"]["free_bytes"]
+                        )[0]
+                        allocated_bytes = self._m_scraper.read32(
+                            heap_address + self._offsets["heap_info"]["allocated_bytes"]
+                        )[0]
+                        max_allocated_bytes = self._m_scraper.read32(
+                            heap_address
+                            + self._offsets["heap_info"]["max_allocated_bytes"]
+                        )[0]
                     except Exception as e:
                         data_queue.put({"error": f"Error reading heap info: {e}"})
                         return
 
                     heap_info.append(
-                        HeapInfo(heap_name, heap_address, free_bytes, allocated_bytes, max_allocated_bytes))
+                        HeapInfo(
+                            heap_name,
+                            heap_address,
+                            free_bytes,
+                            allocated_bytes,
+                            max_allocated_bytes,
+                        )
+                    )
 
                     data_queue.put({"heaps": heap_info})
 
