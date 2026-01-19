@@ -15,7 +15,6 @@ from pylink import JLink, JLinkException, JLinkInterfaces
 from pyocd.core.helpers import ConnectHelper
 from pyocd.core.session import Session
 from pyocd.core.target import Target
-from typing_extensions import Literal
 
 from backend.elf_parser import ZephyrSymbolParser
 
@@ -198,18 +197,15 @@ class JLinkScraper(AbstractScraper):
         try:
             self.probe.open()
         except JLinkException:
-            raise Exception("\nNão foi possível iniciar o JLink, ele está conectado?")
+            raise Exception("\nUnable to connect to JLink")
 
         self.probe.set_tif(JLinkInterfaces.SWD)
-        print(f"Pesquisando MCU via {self.probe.product_name}")
 
         try:
             self.probe.connect(self._target_mcu)
         except JLinkException:
             self.probe.close()
-            raise Exception(
-                f"\nNão foi possível conectar com a MCU [{self._target_mcu}], verifique suas conexões."
-            )
+            raise Exception(f"\nUnable to connect with [{self._target_mcu}]")
         self._is_connected = True
 
     def disconnect(self):
@@ -227,7 +223,13 @@ class JLinkScraper(AbstractScraper):
 
 
 class ZScraper:
-    def __init__(self, meta_scraper: AbstractScraper, elf_path: str):
+    def __init__(
+        self,
+        meta_scraper: AbstractScraper,
+        elf_path: str,
+        max_threads: int,
+        thread_name_size: int,
+    ):
         self._all_threads_info: dict[str, ThreadInfo] = {}
         self._elf_parser: ZephyrSymbolParser = ZephyrSymbolParser(elf_path)
         self._m_scraper: AbstractScraper = meta_scraper
@@ -235,12 +237,8 @@ class ZScraper:
         self._thread_pool: list[ThreadInfo] | None = None
         self._stop_event: Event | None = None
 
-        self._sort_by: str = "name"
-        self._invert_sorting: bool = False
-
-        # TODO: Get these from KConfig
-        self._MAX_THREADS: int = 50
-        self._MAX_THREAD_NAME_BYTES: int = 32
+        self._MAX_THREADS: int = max_threads
+        self._MAX_THREAD_NAME_BYTES: int = thread_name_size
 
         self._offsets = {
             "kernel": {
@@ -338,30 +336,6 @@ class ZScraper:
     @thread_pool.setter
     def thread_pool(self, new: list[ThreadInfo]):
         self._thread_pool = new
-
-    @property
-    def sort_by(self):
-        return self._sort_by
-
-    @sort_by.setter
-    def sort_by(
-        self, sorting: str | Literal["name", "cpu", "watermark_p", "watermark_b"]
-    ):
-        valid_options = ["name", "cpu", "watermark_p", "watermark_b"]
-        if sorting not in valid_options:
-            raise NotImplementedError(
-                f"Sort by '{sorting}' is not available. Valid options are: {[f'{op}' for op in valid_options]}"
-            )
-
-        self._sort_by = sorting
-
-    @property
-    def invert_sorting(self):
-        return self._invert_sorting
-
-    @invert_sorting.setter
-    def invert_sorting(self, invert: bool):
-        self._invert_sorting = invert
 
     def read_variable(self, var_name: str) -> list[Sequence[int]]:
         if not self._m_scraper.is_connected:
@@ -538,33 +512,9 @@ class ZScraper:
                 is_active = thread_usage_delta > 0
 
                 thread_info.runtime = ThreadRuntime(cpu_percent, is_active, watermark)
-
-            if self._sort_by == "name":
-                out = sorted(
-                    self.thread_pool, key=lambda t: t.name, reverse=self._invert_sorting
-                )
-            elif self._sort_by == "cpu":
-                out = sorted(
-                    self.thread_pool,
-                    key=lambda t: t.runtime.cpu,
-                    reverse=self._invert_sorting,
-                )
-            elif self._sort_by == "watermark_p":
-                out = sorted(
-                    self.thread_pool,
-                    key=lambda t: t.runtime.stack_watermark / t.stack_size,
-                    reverse=self._invert_sorting,
-                )
-            elif self._sort_by == "watermark_b":
-                out = sorted(
-                    self.thread_pool,
-                    key=lambda t: t.runtime.stack_watermark,
-                    reverse=self._invert_sorting,
-                )
-            else:
                 out = self.thread_pool
 
-            data_queue.put({"threads": out})
+                data_queue.put({"threads": out})
 
         def get_heap_info():
             heap_info = []

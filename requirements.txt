@@ -1,3 +1,0 @@
-pyocd
-pylink-square
-pyelftools

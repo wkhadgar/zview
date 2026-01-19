@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import List
 
 from backend.z_scraper import ZScraper, ThreadInfo, PyOCDScraper, JLinkScraper, HeapInfo
+from backend.runner_parser import RunnerParser
 
 
 @dataclass
@@ -66,6 +67,9 @@ class ZView:
 
         self.cursor = 0
 
+        self.sorting_options = ["name", "cpu", "watermark_p", "watermark_b"]
+        self._sort_by: str = self.sorting_options[0]
+        self._invert_sorting: bool = False
         self.detailing_thread: str | None = None
         self.detailing_thread_usages = {}
 
@@ -119,6 +123,27 @@ class ZView:
             self.ATTR_ERROR = curses.color_pair(7)
             self.ATTR_CURSOR = curses.color_pair(8)
             self.ATTR_GRAPH = curses.color_pair(9)
+
+    @property
+    def sort_by(self):
+        return self._sort_by
+
+    @sort_by.setter
+    def sort_by(self, sorting: str):
+        if sorting not in self.sorting_options:
+            raise NotImplementedError(
+                f"Sort by '{sorting}' is not available. Valid options are: {[f'{op}' for op in self.sorting_options]}"
+            )
+
+        self._sort_by = sorting
+
+    @property
+    def invert_sorting(self):
+        return self._invert_sorting
+
+    @invert_sorting.setter
+    def invert_sorting(self, invert: bool):
+        self._invert_sorting = invert
 
     def _set_ui_schemes(self):
         thread_basic_info_scheme = {
@@ -368,7 +393,31 @@ class ZView:
         table_start_row = 2
         current_row_y = table_start_row + 1
         table_height = height - 1
-        for idx, thread in enumerate(self.threads_data):
+
+        if self._sort_by == "cpu":
+            sorted_threads = sorted(
+                self.threads_data,
+                key=lambda t: t.runtime.cpu,
+                reverse=self._invert_sorting,
+            )
+        elif self._sort_by == "watermark_p":
+            sorted_threads = sorted(
+                self.threads_data,
+                key=lambda t: t.runtime.stack_watermark / t.stack_size,
+                reverse=self._invert_sorting,
+            )
+        elif self._sort_by == "watermark_b":
+            sorted_threads = sorted(
+                self.threads_data,
+                key=lambda t: t.runtime.stack_watermark,
+                reverse=self._invert_sorting,
+            )
+        else:
+            sorted_threads = sorted(
+                self.threads_data, key=lambda t: t.name, reverse=self._invert_sorting
+            )
+
+        for idx, thread in enumerate(sorted_threads):
             if current_row_y >= table_start_row + table_height:
                 break
 
@@ -448,7 +497,6 @@ class ZView:
             self.data_queue, self.stop_event, inspection_period
         )
         self.scraper.thread_pool = list(self.scraper.all_threads.values())
-        sortings = ["name", "cpu", "watermark_p", "watermark_b"]
         current_sort = 0
         while self.running:
             try:
@@ -490,10 +538,10 @@ class ZView:
                             self.scraper.thread_pool = []
                             pass
                 case SpecialCode.SORT:
-                    current_sort = (current_sort + 1) % len(sortings)
-                    self.scraper.sort_by = sortings[current_sort]
+                    current_sort = (current_sort + 1) % len(self.sorting_options)
+                    self.sort_by = self.sorting_options[current_sort]
                 case SpecialCode.INVERSE:
-                    self.scraper.invert_sorting = not self.scraper.invert_sorting
+                    self.invert_sorting = not self.invert_sorting
                 case SpecialCode.HEAPS:
                     if not self.scraper.has_heaps:
                         pass
@@ -536,7 +584,7 @@ class ZView:
                 time.sleep(inspection_period)
 
 
-def main(stdscr, inspection_period):
+def curses_main(stdscr, scraper: ZScraper, inspection_period):
     """
     The entry point for the curses application.
 
@@ -547,22 +595,16 @@ def main(stdscr, inspection_period):
         :param inspection_period: Period for inspection, in seconds.
         :param stdscr: The standard screen window object provided by `curses.wrapper`.
     """
-    app = ZView(z_scraper, stdscr)
+    app = ZView(scraper, stdscr)
     try:
         app.run(inspection_period)
     finally:
         app.scraper.finish_polling_thread()
 
 
-if __name__ == "__main__":
+def main():
     arg_parser = argparse.ArgumentParser(
         description="ZView - A real-time thread viewer for Zephyr RTOS."
-    )
-    arg_parser.add_argument(
-        "--mcu",
-        required=False,
-        default=None,
-        help="Override target MCU (e.g., 'STM32F407VG').",
     )
     arg_parser.add_argument(
         "-e",
@@ -571,23 +613,73 @@ if __name__ == "__main__":
         help="Path to the application's .elf firmware file.",
     )
     arg_parser.add_argument(
+        "--runners_yaml",
+        default=None,
+        help="Path to the generated runners YAML",
+    )
+    arg_parser.add_argument(
         "--runner",
-        default="jlink",
         choices=["jlink", "pyocd"],
         help="Runner to start analysis with.",
     )
     arg_parser.add_argument(
-        "-p",
         "--period",
         default=0.025,
         required=False,
         type=float,
         help="Minimum period to update system information.",
     )
+    arg_parser.add_argument(
+        "-n",
+        "--has_thread_names",
+        action="store_true",
+        help="Target was built with thread names enabled.",
+    )
+    arg_parser.add_argument(
+        "-r",
+        "--has_thread_runtime_stats",
+        action="store_true",
+        help="Target was built with thread runtime statistics enabled.",
+    )
+    arg_parser.add_argument(
+        "-m",
+        "--has_heap_stats",
+        action="store_true",
+        help="Target was built with heap statistics enabled.",
+    )
+    arg_parser.add_argument(
+        "--max_threads",
+        type=int,
+        default=32,
+        help="Maximum number of threads for the target.",
+    )
+    arg_parser.add_argument(
+        "--thread_name_size",
+        type=int,
+        default=32,
+        help="Maximum thread name size, if available.",
+    )
     args = arg_parser.parse_args()
 
+    if not args.has_thread_names:
+        print("NO thread names will be shown (CONFIG_THREAD_NAME=n)")
+    if not args.has_thread_runtime_stats:
+        print("NO cpu stats will be shown (CONFIG_THREAD_RUNTIME_STATS=n)")
+    if not args.has_heap_stats:
+        print("NO heap stats will be shown (CONFIG_SYS_HEAP_RUNTIME_STATS=n)")
+
+    runner = args.runner
+    target_mcu = None
+    if args.runners_yaml:
+        runner_parser = RunnerParser(args.runners_yaml)
+        runner, target_mcu = runner_parser.get_config(preferred_runner=runner)
+        if runner != "jlink":
+            runner, target_mcu = runner_parser.get_config(preferred_runner="pyocd")
+
     with (
-        PyOCDScraper(args.mcu) if args.runner == "pyocd" else JLinkScraper(args.mcu)
+        PyOCDScraper(target_mcu) if runner != "jlink" else JLinkScraper(target_mcu)
     ) as meta_scraper:
-        z_scraper = ZScraper(meta_scraper, args.elf_file)
-        curses.wrapper(main, args.period)
+        z_scraper = ZScraper(
+            meta_scraper, args.elf_file, args.max_threads, args.thread_name_size
+        )
+        curses.wrapper(curses_main, z_scraper, args.period)
