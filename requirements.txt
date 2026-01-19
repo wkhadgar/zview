@@ -1,6 +1,3 @@
 pyocd
 pylink-square
 pyelftools
-
-
-

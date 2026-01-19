@@ -57,6 +57,7 @@ class AbstractScraper:
     def __init__(self, target_mcu: str | None):
         self._target_mcu: str | None = target_mcu
         self._is_connected: bool = False
+        self.watermark_cache = {}
 
     def __enter__(self):
         self.connect()
@@ -64,6 +65,10 @@ class AbstractScraper:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type:
+            with open("zview.log", "w") as log:
+                log.write(f"{exc_type}\n{exc_val}\n{exc_tb}")
+
         self.disconnect()
 
     @property
@@ -91,7 +96,12 @@ class AbstractScraper:
         return []
 
     def calculate_dynamic_watermark(
-        self, stack_start: int, stack_size: int, unused_pattern: int = 0xAA
+        self,
+        stack_start: int,
+        stack_size: int,
+        unused_pattern: int = 0xAA_AA_AA_AA,
+        *,
+        id,
     ) -> int:
         """
         Reads a stack memory and scans for the 0xAA fill pattern
@@ -100,7 +110,8 @@ class AbstractScraper:
         Args:
             :param stack_start: The starting address of the thread's stack.
             :param stack_size: The total size of the thread's stack in bytes.
-            :param unused_pattern: Unused stack fill pattern.
+            :param unused_pattern: Unused stack fill word.
+            :param id: Unique identification for the given thread.
 
         Returns:
             The calculated stack watermark in bytes, indicating the minimum
@@ -109,22 +120,25 @@ class AbstractScraper:
         if stack_size == 0:
             return 0
 
-        watermark = stack_size
-        stack_words = self.read32(stack_start, stack_size // 4)
-        fill_hw = (unused_pattern << 8) | unused_pattern
-        fill_w = (fill_hw << 16) | fill_hw
+        cache_watermark = self.watermark_cache.get(id, 0)
+        watermark = stack_size - cache_watermark
+
+        stack_words = self.read32(
+            stack_start, (stack_size // 4) - (cache_watermark // 4)
+        )
+
         for word in stack_words:
-            if word == fill_w:
+            if word == unused_pattern:
                 watermark -= 4
             else:
-                word_bytes = word.to_bytes(4, "little")
-                for byte_index, byte_value in enumerate(word_bytes):
-                    if byte_value != unused_pattern:
-                        watermark -= 4 - byte_index
-                        break
+                while word:
+                    word >>= 8
+                    watermark -= 1
                 break
 
-        return watermark
+        self.watermark_cache[id] = watermark + cache_watermark
+
+        return self.watermark_cache[id]
 
 
 class PyOCDScraper(AbstractScraper):
@@ -498,7 +512,9 @@ class ZScraper:
                     )[0]
 
                     watermark = self._m_scraper.calculate_dynamic_watermark(
-                        thread_info.stack_start, thread_info.stack_size
+                        thread_info.stack_start,
+                        thread_info.stack_size,
+                        id=thread_info.address,
                     )
                 except Exception as e:
                     data_queue.put(
