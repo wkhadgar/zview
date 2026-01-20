@@ -156,9 +156,9 @@ class ZView:
     def _set_ui_schemes(self):
         thread_basic_info_scheme = {
             "Thread": 30,
-            "CPU %": 6,
-            "Stack Usage (Watermark)": 30,
-            "Watermark (Bytes)": 16,
+            "CPU %": 8,
+            "Stack Usage (Watermark)": 32,
+            "Watermark (Bytes)": 18,
         }
         heaps_info_scheme = {
             "Heap": 30,
@@ -279,13 +279,25 @@ class ZView:
 
         ui_cfg = self.ui[self.state]
         curr_x = 0
-        for h, w in zip(ui_cfg.col_headers, ui_cfg.col_widths):
+
+        if self.state == ZViewState.DEFAULT_VIEW:
+            order_symbol = " ▼" if self.invert_sorting else " ▲"
+            sorting_header = ui_cfg.col_headers[
+                self.sorting_options.index(self.sort_by)
+            ]
+        else:
+            sorting_header = ""
+            order_symbol = ""
+
+        for col_header, h_width in zip(ui_cfg.col_headers, ui_cfg.col_widths):
             if curr_x >= width:
                 break
 
-            txt = f"{h:^{w}}"[: width - curr_x]
-            self.stdscr.addstr(2, curr_x, txt)
-            curr_x += w + 1
+            if col_header == sorting_header:
+                col_header += order_symbol
+            txt = f"{col_header:^{h_width}}"[: width - curr_x]
+            self.stdscr.addstr(1, curr_x, txt)
+            curr_x += h_width + 1
 
     def _draw_thread_info(self, y, thread_info: ThreadInfo, selected: bool = False):
         col_pos = 0
@@ -406,7 +418,7 @@ class ZView:
         self.stdscr.addstr(height - 2, 0, scroll_indicator[:width])
         self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
 
-        table_start = 3
+        table_start = 2
 
         key_func = self.sort_keys.get(self._sort_by, self.sort_keys["name"])
 
@@ -434,7 +446,7 @@ class ZView:
         Draws all UI elements, including header, footer, status bar, and the thread data table.
         The UI is redrawn completely on each update cycle.
         """
-        current_row_y = 3
+        current_row_y = 2
         data_amount = sum(self.ui[self.state].col_widths)
         for thread in self.threads_data:
             if thread.name != self.detailing_thread:
