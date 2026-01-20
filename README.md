@@ -55,6 +55,38 @@ On a ZView compatible Zephyr version, run the target:
 west build -t zview
 ```
 
+This can also be achieved by adding this snippet to your Zephyr `CMakeLists.txt`:
+
+```CMakeLists
+find_program(ZVIEW zview)
+
+if(NOT ${ZVIEW} STREQUAL ZVIEW-NOTFOUND)
+  if(CONFIG_INIT_STACKS AND CONFIG_THREAD_MONITOR AND CONFIG_THREAD_STACK_INFO)
+    add_custom_target(
+      zview
+      ${ZVIEW}
+      --elf          ${ZEPHYR_BINARY_DIR}/${KERNEL_ELF_NAME}
+      --runners_yaml ${ZEPHYR_BINARY_DIR}/runners.yaml
+      $<$<BOOL:$ENV{ZVIEW_RUNNER}>:--runner=$ENV{ZVIEW_RUNNER}>
+      $<$<BOOL:${CONFIG_SYS_HEAP_RUNTIME_STATS}>:--has_heap_stats>
+      $<$<BOOL:${CONFIG_THREAD_RUNTIME_STATS}>:--has_thread_runtime_stats>
+      $<$<BOOL:${CONFIG_THREAD_NAME}>:--has_thread_names>
+      --thread_name_size ${CONFIG_THREAD_MAX_NAME_LEN}
+      DEPENDS ${logical_target_for_zephyr_elf}
+        $<TARGET_PROPERTY:zephyr_property_target,${report}_DEPENDENCIES>
+      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+      USES_TERMINAL
+      )
+  else()
+    message(WARNING "There are unmet dependencies for ZView, it will be unable to run.")
+  endif()
+endif()
+```
+
+> [!NOTE]
+> If it is needed to force one of the available runners with the `--runner` argument, it is possible to set an environment variable to do so, e.g.: `export ZVIEW_RUNNER=jlink`
+
+
 ### CLI Arguments
 
 | Argument | Description |
