@@ -66,8 +66,16 @@ class ZView:
         self.ui: dict[ZViewState, ZViewTUIScheme] = {}
 
         self.cursor = 0
+        self.top_line = 0
 
         self.sorting_options = ["name", "cpu", "watermark_p", "watermark_b"]
+        self.sort_keys = {
+            "name": lambda t: t.name,
+            "cpu": lambda t: t.runtime.cpu,
+            "watermark_p": lambda t: t.runtime.stack_watermark / t.stack_size,
+            "watermark_b": lambda t: t.runtime.stack_watermark,
+        }
+
         self._sort_by: str = self.sorting_options[0]
         self._invert_sorting: bool = False
         self.detailing_thread: str | None = None
@@ -238,46 +246,46 @@ class ZView:
         self.stdscr.attroff(curses.A_REVERSE)
         self.stdscr.attroff(bar_color_attr)
 
-    def _base_draw(self):
-        scr_size = self.stdscr.getmaxyx()
-
-        self.stdscr.clear()
+    def _base_draw(self, height, width):
+        self.stdscr.erase()
 
         header_text = "ZView - Zephyr RTOS Runtime Viewer"
+        footer_text = "Quit: q | Sort: s | Invert: i | Heaps: h "
+
         self.stdscr.attron(self.ATTR_HEADER_FOOTER)
-        self.stdscr.addstr(0, 0, header_text.center(scr_size[1]))
+        self.stdscr.move(0, 0)
+        self.stdscr.clrtoeol()
+        self.stdscr.addstr(0, 0, f"{header_text:^{width}}")
+
+        self.stdscr.move(height - 2, 0)
+        self.stdscr.clrtoeol()
+        self.stdscr.addstr(height - 2, 0, f"{footer_text:>{width}}")
         self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
 
-        footer_text = "Press 'q' to quit"
-        self.stdscr.attron(self.ATTR_HEADER_FOOTER)
-        self.stdscr.addstr(scr_size[0] - 2, 0, footer_text.rjust(scr_size[1]))
-        self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
+        status_row = height - 3
+        is_error = self.status_message.startswith("Error")
 
-        status_row = scr_size[0] - 3
-        if self.status_message.startswith("Error"):
+        if is_error:
             self.stdscr.attron(self.ATTR_ERROR)
-        self.stdscr.addstr(
-            status_row, 0, self.status_message.ljust(scr_size[1])[: scr_size[1]]
-        )
-        if self.status_message.startswith("Error"):
+
+        self.stdscr.addstr(status_row, 0, self.status_message[:width])
+
+        if is_error:
             self.stdscr.attroff(self.ATTR_ERROR)
 
-        if (scr_size[0] - 1) <= 0:
-            self.stdscr.addstr(
-                2, 0, "Window too small to display table. Resize terminal."
-            )
-            self.stdscr.refresh()
+        if height <= 5:  # Realistic minimum height check
+            self.stdscr.addstr(2, 0, "Terminal too small.")
             return
 
-        current_col_x = 0
-        for header, width in zip(
-            self.ui[self.state].col_headers, self.ui[self.state].col_widths
-        ):
-            display_header = header.center(width)
-            self.stdscr.addstr(
-                2, current_col_x, display_header[: scr_size[1] - current_col_x]
-            )
-            current_col_x += width + 1
+        ui_cfg = self.ui[self.state]
+        curr_x = 0
+        for h, w in zip(ui_cfg.col_headers, ui_cfg.col_widths):
+            if curr_x >= width:
+                break
+
+            txt = f"{h:^{w}}"[: width - curr_x]
+            self.stdscr.addstr(2, curr_x, txt)
+            curr_x += w + 1
 
     def _draw_thread_info(self, y, thread_info: ThreadInfo, selected: bool = False):
         col_pos = 0
@@ -382,59 +390,50 @@ class ZView:
         )
         self.stdscr.addstr(y, col_pos, watermark_bytes_display)
 
-    def _draw_default_view(self):
+    def _draw_default_view(self, height, width):
         """
         Draws all UI elements, including header, footer, status bar, and the thread data table.
         The UI is redrawn completely on each update cycle.
         """
-        self._base_draw()
+        max_table_rows = height - 6
+        total_threads = len(self.threads_data)
+        start_num = self.top_line + 1 if total_threads > 0 else 0
+        end_num = min(self.top_line + max_table_rows, total_threads)
 
-        height, _ = self.stdscr.getmaxyx()
-        table_start_row = 2
-        current_row_y = table_start_row + 1
-        table_height = height - 1
+        scroll_indicator = f" Threads: {start_num}-{end_num} of {total_threads} "
 
-        if self._sort_by == "cpu":
-            sorted_threads = sorted(
-                self.threads_data,
-                key=lambda t: t.runtime.cpu,
-                reverse=self._invert_sorting,
-            )
-        elif self._sort_by == "watermark_p":
-            sorted_threads = sorted(
-                self.threads_data,
-                key=lambda t: t.runtime.stack_watermark / t.stack_size,
-                reverse=self._invert_sorting,
-            )
-        elif self._sort_by == "watermark_b":
-            sorted_threads = sorted(
-                self.threads_data,
-                key=lambda t: t.runtime.stack_watermark,
-                reverse=self._invert_sorting,
-            )
-        else:
-            sorted_threads = sorted(
-                self.threads_data, key=lambda t: t.name, reverse=self._invert_sorting
-            )
+        self.stdscr.attron(self.ATTR_HEADER_FOOTER)
+        self.stdscr.addstr(height - 2, 0, scroll_indicator[:width])
+        self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
 
-        for idx, thread in enumerate(sorted_threads):
-            if current_row_y >= table_start_row + table_height:
+        table_start = 3
+
+        key_func = self.sort_keys.get(self._sort_by, self.sort_keys["name"])
+
+        sorted_threads = sorted(
+            self.threads_data, key=key_func, reverse=self._invert_sorting
+        )
+
+        for idx, thread in enumerate(
+            sorted_threads[self.top_line : self.top_line + max_table_rows]
+        ):
+            target_y = table_start + idx
+
+            if target_y >= height - 3:
                 break
 
-            self._draw_thread_info(current_row_y, thread, selected=idx == self.cursor)
-
-            current_row_y += 1
+            absolute_idx = self.top_line + idx
+            self._draw_thread_info(
+                target_y, thread, selected=(absolute_idx == self.cursor)
+            )
 
         self.stdscr.refresh()
 
-    def _draw_thread_detail(self):
+    def _draw_thread_detail_view(self):
         """
         Draws all UI elements, including header, footer, status bar, and the thread data table.
         The UI is redrawn completely on each update cycle.
         """
-
-        self._base_draw()
-
         current_row_y = 3
         data_amount = sum(self.ui[self.state].col_widths)
         for thread in self.threads_data:
@@ -468,10 +467,7 @@ class ZView:
 
         self.stdscr.refresh()
 
-    def _draw_heaps_view(self):
-        self._base_draw()
-
-        height, _ = self.stdscr.getmaxyx()
+    def _draw_heaps_view(self, height):
         table_start_row = 2
         current_row_y = table_start_row + 1
         table_height = height - 1
@@ -517,13 +513,23 @@ class ZView:
 
             match self.stdscr.getch():
                 case curses.KEY_DOWN:
-                    self.cursor += self.cursor < len(self.threads_data) - 1
+                    self.cursor = min(len(self.threads_data) - 1, self.cursor + 1)
                 case curses.KEY_UP:
-                    self.cursor -= self.cursor > 0
+                    self.cursor = max(0, self.cursor - 1)
                 case curses.KEY_ENTER | SpecialCode.NEWLINE | SpecialCode.RETURN:
                     match self.state:
                         case ZViewState.DEFAULT_VIEW:
-                            self.detailing_thread = self.threads_data[self.cursor].name
+                            key_func = self.sort_keys.get(
+                                self._sort_by, self.sort_keys["name"]
+                            )
+
+                            sorted_threads = sorted(
+                                self.threads_data,
+                                key=key_func,
+                                reverse=self._invert_sorting,
+                            )
+
+                            self.detailing_thread = sorted_threads[self.cursor].name
                             self.scraper.thread_pool = [
                                 self.scraper.all_threads[self.detailing_thread]
                             ]
@@ -554,32 +560,41 @@ class ZView:
                 case _:
                     pass
 
-            current_dims = self.stdscr.getmaxyx()
-            if (
-                current_dims[0] < self.min_dimensions[0]
-                or current_dims[1] < self.min_dimensions[1]
-            ):
-                self.stdscr.clear()
-                msg0 = "Terminal is too small."
-                msg1 = f"Please resize your terminal to at least {self.min_dimensions[1]}x{self.min_dimensions[0]}."
-                msg2 = f"Current dimensions {current_dims[1]}x{current_dims[0]}."
-                self.stdscr.addstr(
-                    (current_dims[0] // 2) - 1, (current_dims[1] - len(msg0)) // 2, msg0
-                )
-                self.stdscr.addstr(
-                    current_dims[0] // 2, (current_dims[1] - len(msg1)) // 2, msg1
-                )
-                self.stdscr.addstr(
-                    (current_dims[0] // 2) + 1, (current_dims[1] - len(msg2)) // 2, msg2
-                )
+            h, w = self.stdscr.getmaxyx()
+
+            if h < self.min_dimensions[0] or w < self.min_dimensions[1]:
+                self.stdscr.erase()
+
+                msgs = [
+                    "Terminal is too small.",
+                    f"Please resize your terminal to at least {self.min_dimensions[1]}x{self.min_dimensions[0]}",
+                    f"Current: {w}x{h}",
+                ]
+
+                mid_y = h // 2
+                start_y = mid_y - 1
+
+                for i, msg in enumerate(msgs):
+                    if 0 <= start_y + i < h:
+                        centered_line = f"{msg:^{w}}"[: w - 1]
+                        self.stdscr.addstr(start_y + i, 0, centered_line)
             else:
+                self._base_draw(h, w)
+
                 match self.state:
                     case ZViewState.DEFAULT_VIEW:
-                        self._draw_default_view()
+                        max_visible_rows = h - 6
+
+                        if self.cursor < self.top_line:
+                            self.top_line = self.cursor
+                        elif self.cursor >= self.top_line + max_visible_rows:
+                            self.top_line = self.cursor - max_visible_rows + 1
+
+                        self._draw_default_view(h, w)
                     case ZViewState.THREAD_DETAIL:
-                        self._draw_thread_detail()
+                        self._draw_thread_detail_view()
                     case ZViewState.HEAPS_DETAIL:
-                        self._draw_heaps_view()
+                        self._draw_heaps_view(h)
 
                 time.sleep(inspection_period)
 
