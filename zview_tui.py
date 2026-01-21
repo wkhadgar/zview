@@ -84,14 +84,30 @@ class ZView:
 
         if curses.has_colors():
             curses.start_color()
-            curses.init_pair(1, curses.COLOR_CYAN, curses.COLOR_BLACK)  # Active thread name
-            curses.init_pair(2, curses.COLOR_WHITE, curses.COLOR_BLACK)  # Inactive thread name
-            curses.init_pair(3, curses.COLOR_GREEN, curses.COLOR_BLACK)  # Progress bar: low usage
-            curses.init_pair(4, curses.COLOR_YELLOW, curses.COLOR_BLACK)  # Progress bar: medium usage
-            curses.init_pair(5, curses.COLOR_RED, curses.COLOR_BLACK)  # Progress bar: high usage
-            curses.init_pair(6, curses.COLOR_WHITE, curses.COLOR_BLUE)  # Header/Footer background
-            curses.init_pair(7, curses.COLOR_RED, curses.COLOR_BLACK)  # Error message text
-            curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Cursor selection
+            curses.init_pair(
+                1, curses.COLOR_CYAN, curses.COLOR_BLACK
+            )  # Active thread name
+            curses.init_pair(
+                2, curses.COLOR_WHITE, curses.COLOR_BLACK
+            )  # Inactive thread name
+            curses.init_pair(
+                3, curses.COLOR_GREEN, curses.COLOR_BLACK
+            )  # Progress bar: low usage
+            curses.init_pair(
+                4, curses.COLOR_YELLOW, curses.COLOR_BLACK
+            )  # Progress bar: medium usage
+            curses.init_pair(
+                5, curses.COLOR_RED, curses.COLOR_BLACK
+            )  # Progress bar: high usage
+            curses.init_pair(
+                6, curses.COLOR_WHITE, curses.COLOR_BLUE
+            )  # Header/Footer background
+            curses.init_pair(
+                7, curses.COLOR_RED, curses.COLOR_BLACK
+            )  # Error message text
+            curses.init_pair(
+                8, curses.COLOR_BLACK, curses.COLOR_WHITE
+            )  # Cursor selection
             curses.init_pair(9, curses.COLOR_MAGENTA, curses.COLOR_BLACK)  # Graphs
 
             self.ATTR_ACTIVE_THREAD = curses.color_pair(1)
@@ -105,18 +121,33 @@ class ZView:
             self.ATTR_GRAPH = curses.color_pair(9)
 
     def _set_ui_schemes(self):
-        thread_basic_info_scheme = {"Thread": 30, "CPU %": 6, "Stack Usage (Watermark)": 30, "Watermark (Bytes)": 16}
-        heaps_info_scheme = {"Heap": 30, "Free Bytes": 12, "Allocated Bytes": 16, "Watermark (Bytes)": 16}
+        thread_basic_info_scheme = {
+            "Thread": 30,
+            "CPU %": 6,
+            "Stack Usage (Watermark)": 30,
+            "Watermark (Bytes)": 16,
+        }
+        heaps_info_scheme = {
+            "Heap": 30,
+            "Free Bytes": 12,
+            "Allocated Bytes": 16,
+            "Watermark (Bytes)": 16,
+        }
 
-        thread_scheme = ZViewTUIScheme(list(thread_basic_info_scheme.keys()), list(thread_basic_info_scheme.values()))
-        heap_scheme = ZViewTUIScheme(list(heaps_info_scheme.keys()), list(heaps_info_scheme.values()))
+        thread_scheme = ZViewTUIScheme(
+            list(thread_basic_info_scheme.keys()),
+            list(thread_basic_info_scheme.values()),
+        )
+        heap_scheme = ZViewTUIScheme(
+            list(heaps_info_scheme.keys()), list(heaps_info_scheme.values())
+        )
 
         self.ui[ZViewState.DEFAULT_VIEW] = thread_scheme
         self.ui[ZViewState.THREAD_DETAIL] = thread_scheme
         self.ui[ZViewState.HEAPS_DETAIL] = heap_scheme
 
-    def _draw_graph(self, y, x, h, w, points, title="", maximum=100, length=100):
-        horizontal_limit = ("─" * (w - 2))
+    def _draw_graph(self, y, x, h, w, points, title="", maximum=100):
+        horizontal_limit = "─" * (w - 2)
         self.stdscr.addstr(y, x, "┌" + horizontal_limit + "┐")
         self.stdscr.addstr(y + h, x, "└" + horizontal_limit + "┘")
         self.stdscr.addstr(y, 1, title)
@@ -131,17 +162,34 @@ class ZView:
                     self.stdscr.addstr(y_pos, x_pos, "│")
                 else:
                     full_blocks = int((points[x_idx] / maximum) * (h - 2))
-                    last_block = int((((points[x_idx] / maximum) * (h - 2)) - full_blocks) * (len(blocks) - 1))
-                    self.stdscr.addstr(y_pos, x_pos,
-                                       " " if y_step < ((h - 1) - full_blocks) else blocks[-1])
-                    self.stdscr.addstr(y_pos, x_pos,
-                                       blocks[last_block] if y_step == ((h - 2) - full_blocks) else "")
+                    last_block = int(
+                        (((points[x_idx] / maximum) * (h - 2)) - full_blocks)
+                        * (len(blocks) - 1)
+                    )
+                    self.stdscr.addstr(
+                        y_pos,
+                        x_pos,
+                        " " if y_step < ((h - 1) - full_blocks) else blocks[-1],
+                    )
+                    self.stdscr.addstr(
+                        y_pos,
+                        x_pos,
+                        blocks[last_block] if y_step == ((h - 2) - full_blocks) else "",
+                    )
             x_idx -= 1 if x_idx else 0
 
         self.stdscr.addstr(y + 1, x + w - (len(f"{maximum}")), str(maximum))
         self.stdscr.addstr(y + h - 1, x + w - 1, "0")
 
-    def _draw_progress_bar(self, y, x, width: int, percentage: float, medium_threshold: float, high_threshold: float):
+    def _draw_progress_bar(
+        self,
+        y,
+        x,
+        width: int,
+        percentage: float,
+        medium_threshold: float,
+        high_threshold: float,
+    ):
         if percentage > high_threshold:
             bar_color_attr = self.ATTR_PROGRESS_BAR_HIGH
         elif percentage > medium_threshold:
@@ -157,7 +205,9 @@ class ZView:
 
         percent_display = f"{percentage:.1f}%"
         overlap = percent_display.center(len(bar_str))[:completed_chars].strip()
-        self.stdscr.addstr(y, x + (width // 2) - (len(percent_display) // 2), percent_display)
+        self.stdscr.addstr(
+            y, x + (width // 2) - (len(percent_display) // 2), percent_display
+        )
         self.stdscr.attron(curses.A_REVERSE)
         self.stdscr.addstr(y, x + (width // 2) - (len(percent_display) // 2), overlap)
         self.stdscr.attroff(curses.A_REVERSE)
@@ -181,19 +231,27 @@ class ZView:
         status_row = scr_size[0] - 3
         if self.status_message.startswith("Error"):
             self.stdscr.attron(self.ATTR_ERROR)
-        self.stdscr.addstr(status_row, 0, self.status_message.ljust(scr_size[1])[:scr_size[1]])
+        self.stdscr.addstr(
+            status_row, 0, self.status_message.ljust(scr_size[1])[: scr_size[1]]
+        )
         if self.status_message.startswith("Error"):
             self.stdscr.attroff(self.ATTR_ERROR)
 
         if (scr_size[0] - 1) <= 0:
-            self.stdscr.addstr(2, 0, "Window too small to display table. Resize terminal.")
+            self.stdscr.addstr(
+                2, 0, "Window too small to display table. Resize terminal."
+            )
             self.stdscr.refresh()
             return
 
         current_col_x = 0
-        for header, width in zip(self.ui[self.state].col_headers, self.ui[self.state].col_widths):
+        for header, width in zip(
+            self.ui[self.state].col_headers, self.ui[self.state].col_widths
+        ):
             display_header = header.center(width)
-            self.stdscr.addstr(2, current_col_x, display_header[:scr_size[1] - current_col_x])
+            self.stdscr.addstr(
+                2, current_col_x, display_header[: scr_size[1] - current_col_x]
+            )
             current_col_x += width + 1
 
     def _draw_thread_info(self, y, thread_info: ThreadInfo, selected: bool = False):
@@ -207,14 +265,25 @@ class ZView:
         stack_bytes_width = scheme.col_widths[3]
 
         # Thread name
-        thread_name_display = thread_info.name[:thread_name_width].ljust(thread_name_width)
+        thread_name_display = thread_info.name[:thread_name_width].ljust(
+            thread_name_width
+        )
         if len(thread_info.name) > thread_name_width:
             thread_name_display = thread_name_display[:-3] + "..."
         elif thread_info.name == "idle":
-            thread_name_display = thread_name_display[:4] + "*" + thread_name_display[4:-1]
+            thread_name_display = (
+                thread_name_display[:4] + "*" + thread_name_display[4:-1]
+            )
 
-        thread_name_attr = self.ATTR_CURSOR if selected else (
-            self.ATTR_ACTIVE_THREAD if thread_info.runtime.active else self.ATTR_INACTIVE_THREAD)
+        thread_name_attr = (
+            self.ATTR_CURSOR
+            if selected
+            else (
+                self.ATTR_ACTIVE_THREAD
+                if thread_info.runtime.active
+                else self.ATTR_INACTIVE_THREAD
+            )
+        )
         self.stdscr.attron(thread_name_attr)
         self.stdscr.addstr(y, col_pos, thread_name_display)
         self.stdscr.attroff(thread_name_attr)
@@ -227,13 +296,21 @@ class ZView:
 
         # Thread Watermark Progress Bar
         usage_ratio = (
-                thread_info.runtime.stack_watermark / thread_info.stack_size) if thread_info.stack_size > 0 else 0
-        self._draw_progress_bar(y, col_pos, stack_usage_width, usage_ratio * 100, 70, 90)
+            (thread_info.runtime.stack_watermark / thread_info.stack_size)
+            if thread_info.stack_size > 0
+            else 0
+        )
+        self._draw_progress_bar(
+            y, col_pos, stack_usage_width, usage_ratio * 100, 70, 90
+        )
         col_pos += stack_usage_width + 1
 
         # Thread Watermark Bytes
-        watermark_bytes_display = f"{thread_info.runtime.stack_watermark} / {thread_info.stack_size}".ljust(
-            stack_bytes_width)
+        watermark_bytes_display = (
+            f"{thread_info.runtime.stack_watermark} / {thread_info.stack_size}".ljust(
+                stack_bytes_width
+            )
+        )
         self.stdscr.addstr(y, col_pos, watermark_bytes_display)
 
     def _draw_heap_info(self, y, heap_info: HeapInfo, selected: bool = False):
@@ -264,13 +341,20 @@ class ZView:
 
         heap_size = heap_info.allocated_bytes + heap_info.free_bytes
         # Heap Usage Progress Bar
-        usage_ratio = (heap_info.allocated_bytes / heap_size) if heap_info.allocated_bytes > 0 else 0
-        self._draw_progress_bar(y, col_pos, allocated_bytes_width, usage_ratio * 100, 70, 90)
+        usage_ratio = (
+            (heap_info.allocated_bytes / heap_size)
+            if heap_info.allocated_bytes > 0
+            else 0
+        )
+        self._draw_progress_bar(
+            y, col_pos, allocated_bytes_width, usage_ratio * 100, 70, 90
+        )
         col_pos += allocated_bytes_width + 1
 
         # Heap Watermark Bytes
-        watermark_bytes_display = f"{heap_info.max_allocated_bytes} / {heap_size}".ljust(
-            watermark_width)
+        watermark_bytes_display = (
+            f"{heap_info.max_allocated_bytes} / {heap_size}".ljust(watermark_width)
+        )
         self.stdscr.addstr(y, col_pos, watermark_bytes_display)
 
     def _draw_default_view(self):
@@ -312,14 +396,25 @@ class ZView:
 
             if not self.detailing_thread_usages.get(thread.name):
                 self.detailing_thread_usages[thread.name] = []
-            self.detailing_thread_usages[thread.name].append(round(thread.runtime.cpu, 1))
+            self.detailing_thread_usages[thread.name].append(
+                round(thread.runtime.cpu, 1)
+            )
 
             if len(self.detailing_thread_usages[thread.name]) > data_amount:
-                self.detailing_thread_usages[thread.name] = self.detailing_thread_usages[thread.name][1:]
+                self.detailing_thread_usages[thread.name] = (
+                    self.detailing_thread_usages[thread.name][1:]
+                )
 
             current_row_y += 2
             self.stdscr.attron(self.ATTR_GRAPH)
-            self._draw_graph(current_row_y, 0, 12, data_amount, self.detailing_thread_usages[thread.name], title="CPU%")
+            self._draw_graph(
+                current_row_y,
+                0,
+                12,
+                data_amount,
+                self.detailing_thread_usages[thread.name],
+                title="CPU%",
+            )
             self.stdscr.attroff(self.ATTR_GRAPH)
 
         self.stdscr.refresh()
@@ -348,9 +443,11 @@ class ZView:
         This loop continuously checks for new data from the polling thread,
         updates the UI, and processes user input (e.g., 'q' to quit).
         """
-        self.status_message = f"Initializing..."
-        self.scraper.start_polling_thread(self.data_queue, self.stop_event, inspection_period)
-        self.scraper.thread_pool = self.scraper.all_threads.values()
+        self.status_message = "Initializing..."
+        self.scraper.start_polling_thread(
+            self.data_queue, self.stop_event, inspection_period
+        )
+        self.scraper.thread_pool = list(self.scraper.all_threads.values())
         sortings = ["name", "cpu", "watermark_p", "watermark_b"]
         current_sort = 0
         while self.running:
@@ -359,7 +456,7 @@ class ZView:
                 if "error" in data:
                     self.status_message = f"Error: {data['error']}"
                 else:
-                    self.status_message = f"Running..."
+                    self.status_message = "Running..."
                     threads_data = data.get("threads")
                     heaps_data = data.get("heaps")
 
@@ -379,11 +476,15 @@ class ZView:
                     match self.state:
                         case ZViewState.DEFAULT_VIEW:
                             self.detailing_thread = self.threads_data[self.cursor].name
-                            self.scraper.thread_pool = [self.scraper.all_threads[self.detailing_thread]]
+                            self.scraper.thread_pool = [
+                                self.scraper.all_threads[self.detailing_thread]
+                            ]
                             self.state = ZViewState.THREAD_DETAIL
                             self.cursor = 0
                         case ZViewState.THREAD_DETAIL:
-                            self.scraper.thread_pool = list(self.scraper.all_threads.values())
+                            self.scraper.thread_pool = list(
+                                self.scraper.all_threads.values()
+                            )
                             self.state = ZViewState.DEFAULT_VIEW
                         case _:
                             self.scraper.thread_pool = []
@@ -406,14 +507,23 @@ class ZView:
                     pass
 
             current_dims = self.stdscr.getmaxyx()
-            if current_dims[0] < self.min_dimensions[0] or current_dims[1] < self.min_dimensions[1]:
+            if (
+                current_dims[0] < self.min_dimensions[0]
+                or current_dims[1] < self.min_dimensions[1]
+            ):
                 self.stdscr.clear()
-                msg0 = f"Terminal is too small."
+                msg0 = "Terminal is too small."
                 msg1 = f"Please resize your terminal to at least {self.min_dimensions[1]}x{self.min_dimensions[0]}."
                 msg2 = f"Current dimensions {current_dims[1]}x{current_dims[0]}."
-                self.stdscr.addstr((current_dims[0] // 2) - 1, (current_dims[1] - len(msg0)) // 2, msg0)
-                self.stdscr.addstr(current_dims[0] // 2, (current_dims[1] - len(msg1)) // 2, msg1)
-                self.stdscr.addstr((current_dims[0] // 2) + 1, (current_dims[1] - len(msg2)) // 2, msg2)
+                self.stdscr.addstr(
+                    (current_dims[0] // 2) - 1, (current_dims[1] - len(msg0)) // 2, msg0
+                )
+                self.stdscr.addstr(
+                    current_dims[0] // 2, (current_dims[1] - len(msg1)) // 2, msg1
+                )
+                self.stdscr.addstr(
+                    (current_dims[0] // 2) + 1, (current_dims[1] - len(msg2)) // 2, msg2
+                )
             else:
                 match self.state:
                     case ZViewState.DEFAULT_VIEW:
@@ -445,15 +555,39 @@ def main(stdscr, inspection_period):
 
 
 if __name__ == "__main__":
-    arg_parser = argparse.ArgumentParser(description="ZView - A real-time thread viewer for Zephyr RTOS.")
-    arg_parser.add_argument("--mcu", required=False, default=None, help="Override target MCU (e.g., 'STM32F407VG').")
-    arg_parser.add_argument("-e", "--elf-file", required=True, help="Path to the application's .elf firmware file.")
-    arg_parser.add_argument("--runner", default="jlink", choices=["jlink", "pyocd"],
-                            help="Runner to start analysis with.")
-    arg_parser.add_argument("-p", "--period", default=0.025, required=False, type=float,
-                            help="Minimum period to update system information.")
+    arg_parser = argparse.ArgumentParser(
+        description="ZView - A real-time thread viewer for Zephyr RTOS."
+    )
+    arg_parser.add_argument(
+        "--mcu",
+        required=False,
+        default=None,
+        help="Override target MCU (e.g., 'STM32F407VG').",
+    )
+    arg_parser.add_argument(
+        "-e",
+        "--elf-file",
+        required=True,
+        help="Path to the application's .elf firmware file.",
+    )
+    arg_parser.add_argument(
+        "--runner",
+        default="jlink",
+        choices=["jlink", "pyocd"],
+        help="Runner to start analysis with.",
+    )
+    arg_parser.add_argument(
+        "-p",
+        "--period",
+        default=0.025,
+        required=False,
+        type=float,
+        help="Minimum period to update system information.",
+    )
     args = arg_parser.parse_args()
 
-    with (PyOCDScraper(args.mcu) if args.runner == "pyocd" else JLinkScraper(args.mcu)) as meta_scraper:
+    with (
+        PyOCDScraper(args.mcu) if args.runner == "pyocd" else JLinkScraper(args.mcu)
+    ) as meta_scraper:
         z_scraper = ZScraper(meta_scraper, args.elf_file)
         curses.wrapper(main, args.period)

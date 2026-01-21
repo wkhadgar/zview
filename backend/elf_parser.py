@@ -1,18 +1,24 @@
 # Copyright (c) 2025 Paulo Santos (@wkhadgar)
 #
 # SPDX-License-Identifier: Apache-2.0
-import argparse
+
 from typing import Literal
 
 from elftools.dwarf.die import DIE
 from elftools.elf.elffile import ELFFile
 from collections import defaultdict
 
+from elftools.elf.sections import SymbolTableSection
+
 
 class ZephyrSymbolParser:
     def __init__(self, elf_path: str):
-        self._symbol_cache: defaultdict[str, defaultdict[str, list[int]]] = defaultdict(defaultdict)
-        self._struct_member_offset_cache: defaultdict[str, defaultdict[str, int]] = defaultdict(defaultdict)
+        self._symbol_cache: defaultdict[str, defaultdict[str, list[int]]] = defaultdict(
+            defaultdict
+        )
+        self._struct_member_offset_cache: defaultdict[str, defaultdict[str, int]] = (
+            defaultdict(defaultdict)
+        )
 
         self.file = self._open_elf_file(elf_path)
         self.elf = ELFFile(self.file)
@@ -30,12 +36,17 @@ class ZephyrSymbolParser:
             raise RuntimeError("ELF file lacks DWARF debug information.")
         return self.elf.get_dwarf_info()
 
-    def get_symbol_info(self, symbol_name: str, info: Literal["address", "size"]) -> list[int]:
-        if symbol_name in self._symbol_cache and info in self._symbol_cache[symbol_name]:
+    def get_symbol_info(
+        self, symbol_name: str, info: Literal["address", "size"]
+    ) -> list[int]:
+        if (
+            symbol_name in self._symbol_cache
+            and info in self._symbol_cache[symbol_name]
+        ):
             return self._symbol_cache[symbol_name][info]
 
         symtab = self.elf.get_section_by_name(".symtab")
-        if symtab is None:
+        if symtab is None or not isinstance(symtab, SymbolTableSection):
             raise RuntimeError("'.symtab' section not found.")
 
         symbols = symtab.get_symbol_by_name(symbol_name)
@@ -63,8 +74,10 @@ class ZephyrSymbolParser:
         return value
 
     def get_struct_member_offset(self, struct_name: str, member_name: str) -> int:
-        if struct_name in self._struct_member_offset_cache and member_name in self._struct_member_offset_cache[
-            struct_name]:
+        if (
+            struct_name in self._struct_member_offset_cache
+            and member_name in self._struct_member_offset_cache[struct_name]
+        ):
             return self._struct_member_offset_cache[struct_name][member_name]
 
         struct_dies = self._find_struct_dies(struct_name)
@@ -75,7 +88,9 @@ class ZephyrSymbolParser:
         for struct_die in struct_dies:
             member_dies.append(self._find_member_die(struct_die, member_name))
         if len(member_dies) == 0:
-            raise RuntimeError(f"Member '{member_name}' not found in struct '{struct_name}'.")
+            raise RuntimeError(
+                f"Member '{member_name}' not found in struct '{struct_name}'."
+            )
 
         member_dies[:] = [die for die in member_dies if die is not None]
         member_die = member_dies[0]
@@ -102,8 +117,11 @@ class ZephyrSymbolParser:
                 if die.tag == "DW_TAG_structure_type":
                     if struct_name == "*" and die.attributes.get("DW_AT_name"):
                         dies.append(die)
-                    if (die.attributes.get("DW_AT_name")
-                            and die.attributes["DW_AT_name"].value.decode(errors="ignore") == struct_name):
+                    if (
+                        die.attributes.get("DW_AT_name")
+                        and die.attributes["DW_AT_name"].value.decode(errors="ignore")
+                        == struct_name
+                    ):
                         dies.append(die)
 
         return dies if len(dies) else None
@@ -120,7 +138,9 @@ class ZephyrSymbolParser:
                     die_type_offset = die_.attributes.get("DW_AT_type")
                     if die_type_offset is None:
                         continue
-                    if (die_type_offset.value + die_.cu.cu_offset) in [st_die.offset for st_die in struct_dies]:
+                    if (die_type_offset.value + die_.cu.cu_offset) in [
+                        st_die.offset for st_die in struct_dies
+                    ]:
                         die_name = die_.attributes.get("DW_AT_name").value
                         struct_variables.append(die_name.decode("utf-8"))
 
@@ -130,9 +150,10 @@ class ZephyrSymbolParser:
     @staticmethod
     def _find_member_die(struct_die: DIE, member_name: str) -> DIE | None:
         for child in struct_die.iter_children():
-            if (child.tag == "DW_TAG_member" and
-                    child.attributes.get("DW_AT_name")):
-                child_member = child.attributes["DW_AT_name"].value.decode(errors="ignore")
+            if child.tag == "DW_TAG_member" and child.attributes.get("DW_AT_name"):
+                child_member = child.attributes["DW_AT_name"].value.decode(
+                    errors="ignore"
+                )
                 if child_member == member_name:
                     return child
         return None
@@ -146,26 +167,3 @@ class ZephyrSymbolParser:
 
     def close(self):
         self.file.close()
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Find addresses of variables of a specific struct type in an ELF file.",
-        formatter_class=argparse.RawTextHelpFormatter
-    )
-    parser.add_argument('elf_file', help='Path to the ELF file (e.g., zephyr.elf)')
-    parser.add_argument(
-        'struct_name',
-        help='Name of the struct to find (e.g., "k_heap" or "struct k_heap", or "_" for all structs visible from symbol table)'
-    )
-
-    args = parser.parse_args()
-
-    zp = ZephyrSymbolParser(args.elf_file)
-
-    for v in sorted((zp.find_struct_variable_names(args.struct_name))):
-        try:
-            addresses = [hex(i) for i in zp.get_symbol_info(v, 'address')]
-            print(f"{v:<50}", f"{', '.join(addresses)}")
-        except RuntimeError:
-            continue
