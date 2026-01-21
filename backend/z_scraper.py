@@ -40,7 +40,7 @@ class ThreadInfo:
     stack_start: int
     stack_size: int
     name: str
-    runtime: ThreadRuntime
+    runtime: ThreadRuntime | None
 
 
 @dataclass
@@ -237,6 +237,10 @@ class ZScraper:
         self._thread_pool: list[ThreadInfo] | None = None
         self._stop_event: Event | None = None
 
+        self.has_heaps = True
+        self.has_usage = True
+        self.has_extra_info = True
+
         self._MAX_THREADS: int = max_threads
         self._MAX_THREAD_NAME_BYTES: int = thread_name_size
 
@@ -246,7 +250,6 @@ class ZScraper:
                 "threads": self._elf_parser.get_struct_member_offset(
                     "z_kernel", "threads"
                 ),
-                "usage": self._elf_parser.get_struct_member_offset("z_kernel", "usage"),
             },
             "k_thread": {
                 "base": self._elf_parser.get_struct_member_offset("k_thread", "base"),
@@ -267,8 +270,6 @@ class ZScraper:
         }
 
         self._offsets["thread_info"] = {
-            "usage": self._offsets["k_thread"]["base"]
-            + self._elf_parser.get_struct_member_offset("_thread_base", "usage"),
             "stack_start": self._offsets["k_thread"]["stack_info"]
             + self._elf_parser.get_struct_member_offset("_thread_stack_info", "start"),
             "stack_size": self._offsets["k_thread"]["stack_info"]
@@ -281,12 +282,43 @@ class ZScraper:
         self._kernel_base_address = self._elf_parser.get_symbol_info(
             "_kernel", info="address"
         )[0]
-        self._cpu_usage_address = (
-            self._kernel_base_address + self._offsets["kernel"]["usage"]
-        )
         self._threads_address = (
             self._kernel_base_address + self._offsets["kernel"]["threads"]
         )
+
+        try:
+            self._offsets["kernel"]["usage"] = (
+                self._elf_parser.get_struct_member_offset("z_kernel", "usage")
+            )
+            self._offsets["thread_info"].update(
+                {
+                    "usage_base": self._offsets["k_thread"]["base"]
+                    + self._elf_parser.get_struct_member_offset("_thread_base", "usage")
+                }
+            )
+            self._cpu_usage_address = (
+                self._kernel_base_address + self._offsets["kernel"]["usage"]
+            )
+        except LookupError:
+            self.has_usage = False
+
+        try:
+            self._offsets["thread_info"]["usage"] = self._offsets["thread_info"][
+                "usage_base"
+            ] + self._elf_parser.get_struct_member_offset("k_cycle_stats", "total")
+            self._offsets["thread_info"]["longest_window"] = self._offsets[
+                "thread_info"
+            ]["usage_base"] + self._elf_parser.get_struct_member_offset(
+                "k_cycle_stats", "longest"
+            )
+
+            self._offsets["thread_info"]["amount_windows"] = self._offsets[
+                "thread_info"
+            ]["usage_base"] + self._elf_parser.get_struct_member_offset(
+                "k_cycle_stats", "num_windows"
+            )
+        except LookupError:
+            self.has_extra_info = False
 
         try:
             self._offsets["heap_info"] = {
@@ -302,19 +334,18 @@ class ZScraper:
                     "z_heap", "max_allocated_bytes"
                 ),
             }
-        except IndexError:
+        except LookupError:
             self.has_heaps = False
             return
 
         all_heaps = self._elf_parser.find_struct_variable_names("k_heap")
 
-        if all_heaps is None:
+        if all_heaps is None or len(all_heaps) == 0:
             self.has_heaps = False
             return
 
         self._k_heap_addresses = {}
         for heap in all_heaps:
-            self.has_heaps = True
             self._k_heap_addresses[heap] = self._elf_parser.get_symbol_info(
                 heap, "address"
             )
@@ -323,6 +354,10 @@ class ZScraper:
         self._m_scraper.connect()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type:
+            with open("zview.log", "w") as log:
+                log.write(f"{exc_type}\n{exc_val}\n{exc_tb}\n")
+
         self._m_scraper.disconnect()
 
     @property
@@ -394,7 +429,7 @@ class ZScraper:
                     stack_struct_words[stack_start_word_idx],
                     stack_struct_words[stack_size_word_idx],
                     thread_name,
-                    ThreadRuntime(0, False, 0),
+                    None,
                 )
 
                 thread_ptr = stack_struct_words[next_ptr_word_idx]
@@ -461,29 +496,38 @@ class ZScraper:
             nonlocal last_cpu_cycles
             nonlocal last_thread_cycles
 
-            try:
-                current_cpu_cycles = self._m_scraper.read32(self._cpu_usage_address)[0]
-            except Exception as e:
-                data_queue.put({"error": f"Error reading global CPU cycles: {e}"})
-                return
+            if self.has_usage:
+                try:
+                    current_cpu_cycles = self._m_scraper.read32(
+                        self._cpu_usage_address
+                    )[0]
+                except Exception as e:
+                    data_queue.put({"error": f"Error reading global CPU cycles: {e}"})
+                    return
 
-            cpu_cycles_delta = current_cpu_cycles - last_cpu_cycles
-            last_cpu_cycles = current_cpu_cycles
-            if cpu_cycles_delta > 0:
-                last_cpu_delta = cpu_cycles_delta
-            elif (
-                cpu_cycles_delta <= 0
-            ):  # When current_cpu_cycles is 0 due to context resets
-                cpu_cycles_delta = last_cpu_delta
+                cpu_cycles_delta = current_cpu_cycles - last_cpu_cycles
+                last_cpu_cycles = current_cpu_cycles
+                if cpu_cycles_delta > 0:
+                    last_cpu_delta = cpu_cycles_delta
+                elif (
+                    cpu_cycles_delta <= 0
+                ):  # When current_cpu_cycles is 0 due to context resets
+                    cpu_cycles_delta = last_cpu_delta
+            else:
+                cpu_cycles_delta = -1
 
             if self.thread_pool is None:
                 return
 
             for thread_info in self.thread_pool:
                 try:
-                    thread_usage = self._m_scraper.read64(
-                        thread_info.address + self._offsets["thread_info"]["usage"]
-                    )[0]
+                    thread_usage = (
+                        self._m_scraper.read64(
+                            thread_info.address + self._offsets["thread_info"]["usage"]
+                        )[0]
+                        if self.has_usage
+                        else -1
+                    )
 
                     watermark = self._m_scraper.calculate_dynamic_watermark(
                         thread_info.stack_start,
@@ -501,20 +545,28 @@ class ZScraper:
                 )
                 last_thread_cycles[thread_info.name] = thread_usage
 
-                if thread_info.name == "idle":
+                if self.has_usage and thread_info.name == "idle":
                     cpu_cycles_delta += thread_usage_delta
                 cpu_percent = 0.0
                 if cpu_cycles_delta > 0:
                     cpu_percent = (thread_usage_delta / cpu_cycles_delta) * 100
                 elif thread_usage_delta > 0:
                     cpu_percent = (thread_usage_delta / last_cpu_delta) * 100
+                else:
+                    cpu_percent = -1
 
                 is_active = thread_usage_delta > 0
 
-                thread_info.runtime = ThreadRuntime(cpu_percent, is_active, watermark)
-                out = self.thread_pool
+                if thread_info.runtime:
+                    thread_info.runtime.cpu = cpu_percent
+                    thread_info.runtime.active = is_active
+                    thread_info.runtime.stack_watermark = watermark
+                else:
+                    thread_info.runtime = ThreadRuntime(
+                        cpu_percent, is_active, watermark
+                    )
 
-                data_queue.put({"threads": out})
+                data_queue.put({"threads": self.thread_pool})
 
         def get_heap_info():
             heap_info = []
@@ -552,7 +604,11 @@ class ZScraper:
             if not self._m_scraper.is_connected:
                 self._m_scraper.connect()
 
-            init_cpu_cycles = self._m_scraper.read64(self._cpu_usage_address)[0]
+            init_cpu_cycles = (
+                self._m_scraper.read64(self._cpu_usage_address)[0]
+                if self.has_usage
+                else 0
+            )
         except Exception as e:
             data_queue.put({"error": f"Polling thread initialization error: {e}"})
             return

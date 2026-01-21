@@ -12,7 +12,14 @@ import time
 from dataclasses import dataclass
 from typing import List
 
-from backend.z_scraper import ZScraper, ThreadInfo, PyOCDScraper, JLinkScraper, HeapInfo
+from backend.z_scraper import (
+    ThreadRuntime,
+    ZScraper,
+    ThreadInfo,
+    PyOCDScraper,
+    JLinkScraper,
+    HeapInfo,
+)
 from backend.runner_parser import RunnerParser
 
 
@@ -250,7 +257,14 @@ class ZView:
         self.stdscr.erase()
 
         header_text = "ZView - Zephyr RTOS Runtime Viewer"
-        footer_text = "Quit: q | Sort: s | Invert: i | Heaps: h "
+        footer_text = {
+            ZViewState.DEFAULT_VIEW: "Quit: q | Sort: s | Invert: i ",
+            ZViewState.THREAD_DETAIL: "Quit: q ",
+            ZViewState.HEAPS_DETAIL: "Quit: q | Threads: h ",
+        }
+
+        if self.scraper.has_heaps:
+            footer_text[ZViewState.DEFAULT_VIEW] += "| Heaps: h "
 
         self.stdscr.attron(self.ATTR_HEADER_FOOTER)
         self.stdscr.move(0, 0)
@@ -259,7 +273,7 @@ class ZView:
 
         self.stdscr.move(height - 2, 0)
         self.stdscr.clrtoeol()
-        self.stdscr.addstr(height - 2, 0, f"{footer_text:>{width}}")
+        self.stdscr.addstr(height - 2, 0, f"{footer_text[self.state]:>{width}}")
         self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
 
         status_row = height - 3
@@ -320,6 +334,9 @@ class ZView:
                 thread_name_display[:4] + "*" + thread_name_display[4:-1]
             )
 
+        if thread_info.runtime is None:
+            thread_info.runtime = ThreadRuntime(0, False, 0)
+
         thread_name_attr = (
             self.ATTR_CURSOR
             if selected
@@ -335,7 +352,12 @@ class ZView:
         col_pos += thread_name_width + 1
 
         # Thread CPUs
-        cpu_display = f"{round(thread_info.runtime.cpu, 1)}%".ljust(cpu_usage_width)
+        if thread_info.runtime.cpu >= 0:
+            cpu_display = f"{round(thread_info.runtime.cpu, 1)}%".center(
+                cpu_usage_width
+            )
+        else:
+            cpu_display = f"{'-':^{cpu_usage_width}}"
         self.stdscr.addstr(y, col_pos, cpu_display)
         col_pos += cpu_usage_width + 1
 
@@ -380,7 +402,7 @@ class ZView:
         col_pos += heap_name_width + 1
 
         # Free bytes
-        free_bytes_display = f"{heap_info.free_bytes}".ljust(free_bytes_width)
+        free_bytes_display = f"{heap_info.free_bytes:<{free_bytes_width}}"
         self.stdscr.addstr(y, col_pos, free_bytes_display)
         col_pos += free_bytes_width + 1
 
@@ -453,6 +475,9 @@ class ZView:
                 continue
 
             self._draw_thread_info(current_row_y, thread)
+
+            if thread.runtime is None:
+                break
 
             if not self.detailing_thread_usages.get(thread.name):
                 self.detailing_thread_usages[thread.name] = []
@@ -531,6 +556,7 @@ class ZView:
                 case curses.KEY_ENTER | SpecialCode.NEWLINE | SpecialCode.RETURN:
                     match self.state:
                         case ZViewState.DEFAULT_VIEW:
+                            self.state = ZViewState.THREAD_DETAIL
                             key_func = self.sort_keys.get(
                                 self._sort_by, self.sort_keys["name"]
                             )
@@ -545,27 +571,32 @@ class ZView:
                             self.scraper.thread_pool = [
                                 self.scraper.all_threads[self.detailing_thread]
                             ]
-                            self.state = ZViewState.THREAD_DETAIL
                             self.cursor = 0
                         case ZViewState.THREAD_DETAIL:
+                            self.state = ZViewState.DEFAULT_VIEW
                             self.scraper.thread_pool = list(
                                 self.scraper.all_threads.values()
                             )
-                            self.state = ZViewState.DEFAULT_VIEW
                         case _:
                             self.scraper.thread_pool = []
                             pass
                 case SpecialCode.SORT:
+                    if self.state is not ZViewState.DEFAULT_VIEW:
+                        pass
+
                     current_sort = (current_sort + 1) % len(self.sorting_options)
                     self.sort_by = self.sorting_options[current_sort]
                 case SpecialCode.INVERSE:
+                    if self.state is not ZViewState.DEFAULT_VIEW:
+                        pass
+
                     self.invert_sorting = not self.invert_sorting
                 case SpecialCode.HEAPS:
                     if not self.scraper.has_heaps:
                         pass
-                    elif self.state == ZViewState.HEAPS_DETAIL:
+                    elif self.state is ZViewState.HEAPS_DETAIL:
                         self.state = ZViewState.DEFAULT_VIEW
-                    else:
+                    elif self.state is ZViewState.DEFAULT_VIEW:
                         self.state = ZViewState.HEAPS_DETAIL
                 case SpecialCode.QUIT:
                     self.running = False
