@@ -29,11 +29,11 @@ class ZephyrSymbolParser:
         try:
             return open(path, "rb")
         except FileNotFoundError as e:
-            raise RuntimeError(f"ELF file not found at '{path}'") from e
+            raise FileNotFoundError(f"ELF file not found at '{path}'") from e
 
     def _get_dwarf_info(self):
         if not self.elf.has_dwarf_info():
-            raise RuntimeError("ELF file lacks DWARF debug information.")
+            raise ValueError("ELF file lacks DWARF debug information.")
         return self.elf.get_dwarf_info()
 
     def get_symbol_info(
@@ -47,27 +47,23 @@ class ZephyrSymbolParser:
 
         symtab = self.elf.get_section_by_name(".symtab")
         if symtab is None or not isinstance(symtab, SymbolTableSection):
-            raise RuntimeError("'.symtab' section not found.")
+            raise LookupError("'.symtab' section not found.")
 
         symbols = symtab.get_symbol_by_name(symbol_name)
         if symbols is None:
-            raise RuntimeError(f"Symbol '{symbol_name}' not found.")
+            raise LookupError(f"Symbol '{symbol_name}' not found.")
         elif len(symbols) == 1:
             match info:
                 case "address":
                     value = [symbols[0].entry["st_value"]]
                 case "size":
                     value = [symbols[0].entry["st_size"]]
-                case _:
-                    raise Exception(f"'{info}' is not a valid information.")
         else:
             match info:
                 case "address":
                     value = [symbol.entry["st_value"] for symbol in symbols]
                 case "size":
                     value = [symbol.entry["st_size"] for symbol in symbols]
-                case _:
-                    raise Exception(f"'{info}' is not a valid information.")
 
         self._symbol_cache[symbol_name][info] = value
 
@@ -82,13 +78,13 @@ class ZephyrSymbolParser:
 
         struct_dies = self._find_struct_dies(struct_name)
         if struct_dies is None:
-            raise RuntimeError(f"Struct '{struct_name}' not found.")
+            raise LookupError(f"Struct '{struct_name}' not found.")
 
         member_dies = []
         for struct_die in struct_dies:
             member_dies.append(self._find_member_die(struct_die, member_name))
-        if len(member_dies) == 0:
-            raise RuntimeError(
+        if len(member_dies) == 0 or not any(member_dies):
+            raise LookupError(
                 f"Member '{member_name}' not found in struct '{struct_name}'."
             )
 
@@ -103,10 +99,10 @@ class ZephyrSymbolParser:
     def get_struct_size(self, struct_name: str) -> int:
         struct_dies = self._find_struct_dies(struct_name)
         if struct_dies is None:
-            raise RuntimeError(f"Struct '{struct_name}' not found.")
+            raise LookupError(f"Struct '{struct_name}' not found.")
 
         if not struct_dies[0].attributes["DW_AT_byte_size"]:
-            raise RuntimeError(f"Struct '{struct_name}' has no size information.")
+            raise ValueError(f"Struct '{struct_name}' has no size information.")
 
         return getattr(struct_dies[0].attributes["DW_AT_byte_size"], "value")
 
@@ -129,7 +125,7 @@ class ZephyrSymbolParser:
     def find_struct_variable_names(self, struct_name: str) -> list[str] | None:
         struct_dies = self._find_struct_dies(struct_name)
         if struct_dies is None:
-            raise RuntimeError(f"Struct '{struct_name}' not found.")
+            raise LookupError(f"Struct '{struct_name}' not found.")
 
         struct_variables = []
         for CU_ in self.dwarf.iter_CUs():
@@ -162,7 +158,7 @@ class ZephyrSymbolParser:
     def _extract_member_offset(die: DIE) -> int:
         loc = die.attributes.get("DW_AT_data_member_location")
         if loc is None:
-            raise RuntimeError("Member offset not specified.")
+            raise ValueError("Member offset not specified.")
         return loc.value[1] if loc.form == "DW_FORM_exprloc" else loc.value
 
     def close(self):
