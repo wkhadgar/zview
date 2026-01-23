@@ -1,0 +1,67 @@
+name: Release to new version
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "pyproject.toml"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Checkout ZView
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Extract Version
+        id: check_ver
+        run: |
+          VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+
+          echo "Detected version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check if Tag Exists
+        id: tag_check
+        run: |
+          VERSION="${{ steps.check_ver.outputs.version }}"
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION already exists. Skipping release."
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Tag v$VERSION does not exist. Proceeding."
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create and Push Tag
+        if: steps.tag_check.outputs.exists == 'false'
+        run: |
+          VERSION="${{ steps.check_ver.outputs.version }}"
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git tag -a "v$VERSION" -m "Auto-release v$VERSION"
+          git push origin "v$VERSION"
+
+      - name: Build Package
+        if: steps.tag_check.outputs.exists == 'false'
+        run: |
+          pip install build
+          python -m build
+
+      - name: Publish to PyPI
+        if: steps.tag_check.outputs.exists == 'false'
+        uses: pypa/gh-action-pypi-publish@release/v1
