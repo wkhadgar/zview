@@ -2,16 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from collections import defaultdict
 from typing import Literal
 
 from elftools.dwarf.die import DIE
 from elftools.elf.elffile import ELFFile
-from collections import defaultdict
-
 from elftools.elf.sections import SymbolTableSection
 
 
-class ZephyrSymbolParser:
+class ElfInspector:
     def __init__(self, elf_path: str):
         self._symbol_cache: defaultdict[str, defaultdict[str, list[int]]] = defaultdict(
             defaultdict

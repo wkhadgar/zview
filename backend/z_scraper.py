@@ -6,8 +6,8 @@
 import queue
 import threading
 import time
-
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Event
 from typing import Sequence
 
@@ -15,8 +15,46 @@ from pylink import JLink, JLinkException, JLinkInterfaces
 from pyocd.core.helpers import ConnectHelper
 from pyocd.core.session import Session
 from pyocd.core.target import Target
+from yaml import safe_load
 
-from backend.elf_parser import ZephyrSymbolParser
+from backend.elf_inspector import ElfInspector
+
+
+class RunnerConfig:
+    def __init__(self, runners_yaml_path):
+        self.path = Path(runners_yaml_path)
+        if not self.path.exists():
+            raise FileNotFoundError(f"runners.yaml not found at {runners_yaml_path}")
+
+        with open(self.path, "r") as f:
+            self.data = safe_load(f)
+
+    def get_config(self, preferred_runner=None):
+        """
+        Returns a tuple of (runner_name, mcu_target)
+        """
+        runner = preferred_runner or self.data.get("flash-runner") or "jlink"
+
+        args = self.data.get("args", {}).get(runner, [])
+
+        mcu = None
+        if runner == "jlink":
+            mcu = self._find_arg(args, "--device")
+        elif runner == "pyocd":
+            mcu = self._find_arg(args, "--target")
+
+        return runner, mcu
+
+    def _find_arg(self, args_list, prefix):
+        """Helper to find an argument starting with a specific prefix"""
+        for arg in args_list:
+            if arg.startswith(prefix):
+                if "=" in arg:
+                    return arg.split("=")[1]
+                idx = args_list.index(arg)
+                if idx + 1 < len(args_list):
+                    return args_list[idx + 1]
+        return None
 
 
 @dataclass
@@ -231,7 +269,7 @@ class ZScraper:
         thread_name_size: int,
     ):
         self._all_threads_info: dict[str, ThreadInfo] = {}
-        self._elf_parser: ZephyrSymbolParser = ZephyrSymbolParser(elf_path)
+        self._elf_inspector: ElfInspector = ElfInspector(elf_path)
         self._m_scraper: AbstractScraper = meta_scraper
         self._polling_thread: threading.Thread | None = None
         self._thread_pool: list[ThreadInfo] | None = None
@@ -246,40 +284,52 @@ class ZScraper:
 
         self._offsets = {
             "kernel": {
-                "cpu": self._elf_parser.get_struct_member_offset("z_kernel", "cpus"),
-                "threads": self._elf_parser.get_struct_member_offset(
+                "cpu": self._elf_inspector.get_struct_member_offset("z_kernel", "cpus"),
+                "threads": self._elf_inspector.get_struct_member_offset(
                     "z_kernel", "threads"
                 ),
             },
             "k_thread": {
-                "base": self._elf_parser.get_struct_member_offset("k_thread", "base"),
-                "name": self._elf_parser.get_struct_member_offset("k_thread", "name"),
-                "stack_info": self._elf_parser.get_struct_member_offset(
+                "base": self._elf_inspector.get_struct_member_offset(
+                    "k_thread", "base"
+                ),
+                "name": self._elf_inspector.get_struct_member_offset(
+                    "k_thread", "name"
+                ),
+                "stack_info": self._elf_inspector.get_struct_member_offset(
                     "k_thread", "stack_info"
                 ),
-                "next_thread": self._elf_parser.get_struct_member_offset(
+                "next_thread": self._elf_inspector.get_struct_member_offset(
                     "k_thread", "next_thread"
                 ),
             },
             "k_heap": {
-                "heap": self._elf_parser.get_struct_member_offset("k_heap", "heap"),
+                "heap": self._elf_inspector.get_struct_member_offset("k_heap", "heap"),
             },
             "sys_heap": {
-                "heap": self._elf_parser.get_struct_member_offset("sys_heap", "heap"),
+                "heap": self._elf_inspector.get_struct_member_offset(
+                    "sys_heap", "heap"
+                ),
             },
         }
 
         self._offsets["thread_info"] = {
             "stack_start": self._offsets["k_thread"]["stack_info"]
-            + self._elf_parser.get_struct_member_offset("_thread_stack_info", "start"),
+            + self._elf_inspector.get_struct_member_offset(
+                "_thread_stack_info", "start"
+            ),
             "stack_size": self._offsets["k_thread"]["stack_info"]
-            + self._elf_parser.get_struct_member_offset("_thread_stack_info", "size"),
+            + self._elf_inspector.get_struct_member_offset(
+                "_thread_stack_info", "size"
+            ),
             "stack_delta": self._offsets["k_thread"]["stack_info"]
-            + self._elf_parser.get_struct_member_offset("_thread_stack_info", "delta"),
+            + self._elf_inspector.get_struct_member_offset(
+                "_thread_stack_info", "delta"
+            ),
         }
 
         # Known to be only one (at least, expected)
-        self._kernel_base_address = self._elf_parser.get_symbol_info(
+        self._kernel_base_address = self._elf_inspector.get_symbol_info(
             "_kernel", info="address"
         )[0]
         self._threads_address = (
@@ -288,12 +338,14 @@ class ZScraper:
 
         try:
             self._offsets["kernel"]["usage"] = (
-                self._elf_parser.get_struct_member_offset("z_kernel", "usage")
+                self._elf_inspector.get_struct_member_offset("z_kernel", "usage")
             )
             self._offsets["thread_info"].update(
                 {
                     "usage_base": self._offsets["k_thread"]["base"]
-                    + self._elf_parser.get_struct_member_offset("_thread_base", "usage")
+                    + self._elf_inspector.get_struct_member_offset(
+                        "_thread_base", "usage"
+                    )
                 }
             )
             self._cpu_usage_address = (
@@ -305,16 +357,16 @@ class ZScraper:
         try:
             self._offsets["thread_info"]["usage"] = self._offsets["thread_info"][
                 "usage_base"
-            ] + self._elf_parser.get_struct_member_offset("k_cycle_stats", "total")
+            ] + self._elf_inspector.get_struct_member_offset("k_cycle_stats", "total")
             self._offsets["thread_info"]["longest_window"] = self._offsets[
                 "thread_info"
-            ]["usage_base"] + self._elf_parser.get_struct_member_offset(
+            ]["usage_base"] + self._elf_inspector.get_struct_member_offset(
                 "k_cycle_stats", "longest"
             )
 
             self._offsets["thread_info"]["amount_windows"] = self._offsets[
                 "thread_info"
-            ]["usage_base"] + self._elf_parser.get_struct_member_offset(
+            ]["usage_base"] + self._elf_inspector.get_struct_member_offset(
                 "k_cycle_stats", "num_windows"
             )
         except LookupError:
@@ -324,13 +376,13 @@ class ZScraper:
             self._offsets["heap_info"] = {
                 "z_heap_base": self._offsets["k_heap"]["heap"]
                 + self._offsets["sys_heap"]["heap"],
-                "free_bytes": self._elf_parser.get_struct_member_offset(
+                "free_bytes": self._elf_inspector.get_struct_member_offset(
                     "z_heap", "free_bytes"
                 ),
-                "allocated_bytes": self._elf_parser.get_struct_member_offset(
+                "allocated_bytes": self._elf_inspector.get_struct_member_offset(
                     "z_heap", "allocated_bytes"
                 ),
-                "max_allocated_bytes": self._elf_parser.get_struct_member_offset(
+                "max_allocated_bytes": self._elf_inspector.get_struct_member_offset(
                     "z_heap", "max_allocated_bytes"
                 ),
             }
@@ -338,7 +390,7 @@ class ZScraper:
             self.has_heaps = False
             return
 
-        all_heaps = self._elf_parser.find_struct_variable_names("k_heap")
+        all_heaps = self._elf_inspector.find_struct_variable_names("k_heap")
 
         if all_heaps is None or len(all_heaps) == 0:
             self.has_heaps = False
@@ -346,7 +398,7 @@ class ZScraper:
 
         self._k_heap_addresses = {}
         for heap in all_heaps:
-            self._k_heap_addresses[heap] = self._elf_parser.get_symbol_info(
+            self._k_heap_addresses[heap] = self._elf_inspector.get_symbol_info(
                 heap, "address"
             )
 
@@ -376,8 +428,8 @@ class ZScraper:
         if not self._m_scraper.is_connected:
             self._m_scraper.connect()
 
-        var_addresses = self._elf_parser.get_symbol_info(var_name, "address")
-        var_sizes = self._elf_parser.get_symbol_info(var_name, "size")
+        var_addresses = self._elf_inspector.get_symbol_info(var_name, "address")
+        var_sizes = self._elf_inspector.get_symbol_info(var_name, "size")
 
         return [
             self._m_scraper.read8(var_address, var_size)
@@ -397,7 +449,7 @@ class ZScraper:
         except Exception as e:
             raise RuntimeError(f"Unable to read kernel thread list. {e}")
 
-        stack_struct_size = self._elf_parser.get_struct_size("k_thread")
+        stack_struct_size = self._elf_inspector.get_struct_size("k_thread")
         words_to_read = stack_struct_size // 4
         next_ptr_word_idx = self._offsets["k_thread"]["next_thread"] // 4
         name_word_idx = self._offsets["k_thread"]["name"] // 4
@@ -434,7 +486,7 @@ class ZScraper:
 
                 thread_ptr = stack_struct_words[next_ptr_word_idx]
             except Exception as e:
-                raise Exception(f"Error parsing thread struct at 0x{thread_ptr:X}: {e}")
+                raise Exception(f"Error reading thread struct at 0x{thread_ptr:X}: {e}")
 
     def start_polling_thread(
         self,
@@ -483,8 +535,9 @@ class ZScraper:
         """
         Worker function executed by the polling thread.
 
-        Connects to the MCU via J-Link, parses Zephyr kernel symbols from the ELF file,
-        and continuously reads and processes runtime data, pushing it to `data_queue`.
+        Connects to the MCU via J-Link, analyzes Zephyr kernel symbols from the ELF
+        file, and continuously reads and processes runtime data, pushing it to
+        `data_queue`.
 
         Args:
             data_queue: A queue for sending processed data to the main UI thread.
@@ -614,8 +667,8 @@ class ZScraper:
             return
 
         last_cpu_delta = 1000
-        last_cpu_cycles = init_cpu_cycles  # Stores last read total CPU cycles for each thread (to mitigate I/O read delays)
-        last_thread_cycles = {}  # Stores last read usage cycles for each thread
+        last_cpu_cycles = init_cpu_cycles
+        last_thread_cycles = {}
 
         while not stop_event.is_set():
             get_thread_info()

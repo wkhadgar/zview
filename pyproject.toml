@@ -29,3 +29,9 @@ py-modules = ["zview_tui"]
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["backend*"]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

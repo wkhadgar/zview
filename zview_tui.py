@@ -2,25 +2,24 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 import argparse
 import curses
 import enum
-import threading
 import queue
+import threading
 import time
 from dataclasses import dataclass
 from typing import List
 
 from backend.z_scraper import (
+    HeapInfo,
+    JLinkScraper,
+    PyOCDScraper,
+    RunnerConfig,
+    ThreadInfo,
     ThreadRuntime,
     ZScraper,
-    ThreadInfo,
-    PyOCDScraper,
-    JLinkScraper,
-    HeapInfo,
 )
-from backend.runner_parser import RunnerParser
 
 
 @dataclass
@@ -147,7 +146,8 @@ class ZView:
     def sort_by(self, sorting: str):
         if sorting not in self.sorting_options:
             raise NotImplementedError(
-                f"Sort by '{sorting}' is not available. Valid options are: {[f'{op}' for op in self.sorting_options]}"
+                f"Sort by '{sorting}' is not available. Valid options are: "
+                f"{[f'{op}' for op in self.sorting_options]}"
             )
 
         self._sort_by = sorting
@@ -426,8 +426,7 @@ class ZView:
 
     def _draw_default_view(self, height, width):
         """
-        Draws all UI elements, including header, footer, status bar, and the thread data table.
-        The UI is redrawn completely on each update cycle.
+        Draws the thread data table and its general informations.
         """
         max_table_rows = height - 6
         total_threads = len(self.threads_data)
@@ -465,8 +464,7 @@ class ZView:
 
     def _draw_thread_detail_view(self):
         """
-        Draws all UI elements, including header, footer, status bar, and the thread data table.
-        The UI is redrawn completely on each update cycle.
+        Draws a single thread details, and its recent CPU usage as a graph.
         """
         current_row_y = 2
         data_amount = sum(self.ui[self.state].col_widths)
@@ -610,7 +608,8 @@ class ZView:
 
                 msgs = [
                     "Terminal is too small.",
-                    f"Please resize your terminal to at least {self.min_dimensions[1]}x{self.min_dimensions[0]}",
+                    "Please resize your terminal to at least "
+                    f"{self.min_dimensions[1]}x{self.min_dimensions[0]}",
                     f"Current: {w}x{h}",
                 ]
 
@@ -729,10 +728,10 @@ def main():
     runner = args.runner
     target_mcu = None
     if args.runners_yaml:
-        runner_parser = RunnerParser(args.runners_yaml)
-        runner, target_mcu = runner_parser.get_config(preferred_runner=runner)
+        runner_config = RunnerConfig(args.runners_yaml)
+        runner, target_mcu = runner_config.get_config(preferred_runner=runner)
         if runner != "jlink":
-            runner, target_mcu = runner_parser.get_config(preferred_runner="pyocd")
+            runner, target_mcu = runner_config.get_config(preferred_runner="pyocd")
 
     with (
         PyOCDScraper(target_mcu) if runner != "jlink" else JLinkScraper(target_mcu)
