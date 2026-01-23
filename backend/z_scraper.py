@@ -611,7 +611,7 @@ class ZScraper:
                 is_active = thread_usage_delta > 0
 
                 if thread_info.runtime:
-                    thread_info.runtime.cpu = cpu_percent
+                    thread_info.runtime.cpu = min(cpu_percent, 100)
                     thread_info.runtime.active = is_active
                     thread_info.runtime.stack_watermark = watermark
                 else:
