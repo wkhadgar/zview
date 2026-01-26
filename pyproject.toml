@@ -1,6 +1,6 @@
 [project]
 name = "zview"
-version = "0.3.2"
+version = "0.3.3"
 authors = [{ name = "Paulo Santos", email = "pauloxrms@gmail.com" }]
 description = "ZView, a Zephyr RTOS runtime visualizer"
 dependencies = ["PyYAML", "pyelftools", "pyocd", "pylink-square"]
@@ -31,7 +31,22 @@ where = ["."]
 include = ["backend*"]
 
 [tool.ruff]
-line-length = 88
+line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]
+select = [
+  "B",   # flake8-bugbear
+  "E",   # pycodestyle
+  "F",   # pyflakes
+  "I",   # isort
+  "SIM", # flake8-simplify
+  "UP",  # pyupgrade
+  "W",   # pycodestyle warnings
+]
+ignore = [
+    "SIM108", # Allow if-else blocks instead of forcing ternary operator
+]
+
+[tool.ruff.format]
+quote-style = "preserve"
+line-ending = "lf"
