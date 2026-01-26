@@ -3,13 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+import contextlib
 import curses
 import enum
 import queue
 import threading
 import time
 from dataclasses import dataclass
-from typing import List
 
 from backend.z_scraper import (
     HeapInfo,
@@ -61,8 +61,8 @@ class ZView:
         self.stdscr = stdscr
         self.scraper = scraper
         self.running = True
-        self.threads_data: List[ThreadInfo] = []
-        self.heaps_data: List[HeapInfo] = []
+        self.threads_data: list[ThreadInfo] = []
+        self.heaps_data: list[HeapInfo] = []
         self.status_message: str = ""
         self.data_queue = queue.Queue()
         self.stop_event = threading.Event()
@@ -262,9 +262,7 @@ class ZView:
 
         percent_display = f"{percentage:.1f}%"
         overlap = percent_display.center(len(bar_str))[:completed_chars].strip()
-        self.stdscr.addstr(
-            y, x + (width // 2) - (len(percent_display) // 2), percent_display
-        )
+        self.stdscr.addstr(y, x + (width // 2) - (len(percent_display) // 2), percent_display)
         self.stdscr.attron(curses.A_REVERSE)
         self.stdscr.addstr(y, x + (width // 2) - (len(percent_display) // 2), overlap)
         self.stdscr.attroff(curses.A_REVERSE)
@@ -291,12 +289,10 @@ class ZView:
         footer_row = height - 1
         self.stdscr.move(footer_row, 0)
         self.stdscr.clrtoeol()
-        try:
-            self.stdscr.addstr(footer_row, 0, f"{footer_text[self.state]:>{width}}")
-        except curses.error:
+        with contextlib.suppress(curses.error):
             # This is needed since curses try to advance the cursor to the next
             # position, wich is outside the terminal, we safely ignore this.
-            pass
+            self.stdscr.addstr(footer_row, 0, f"{footer_text[self.state]:>{width}}")
         self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
 
         is_error = self.status_message.startswith("Error")
@@ -360,9 +356,7 @@ class ZView:
             self.ATTR_CURSOR
             if selected
             else (
-                self.ATTR_ACTIVE_THREAD
-                if thread_info.runtime.active
-                else self.ATTR_INACTIVE_THREAD
+                self.ATTR_ACTIVE_THREAD if thread_info.runtime.active else self.ATTR_INACTIVE_THREAD
             )
         )
         self.stdscr.attron(thread_name_attr)
@@ -374,9 +368,7 @@ class ZView:
 
         # Thread CPUs
         if thread_info.runtime.cpu >= 0:
-            cpu_display = f"{thread_info.runtime.cpu * cpu_load:.2f}%".center(
-                cpu_usage_width
-            )
+            cpu_display = f"{thread_info.runtime.cpu * cpu_load:.2f}%".center(cpu_usage_width)
         else:
             cpu_display = f"{'-':^{cpu_usage_width}}"
         self.stdscr.addstr(y, col_pos, cpu_display)
@@ -396,9 +388,7 @@ class ZView:
             if thread_info.stack_size > 0
             else 0
         )
-        self._draw_progress_bar(
-            y, col_pos, stack_usage_width, usage_ratio * 100, 70, 90
-        )
+        self._draw_progress_bar(y, col_pos, stack_usage_width, usage_ratio * 100, 70, 90)
         col_pos += stack_usage_width + 1
 
         # Thread Watermark Bytes
@@ -438,18 +428,14 @@ class ZView:
         heap_size = heap_info.allocated_bytes + heap_info.free_bytes
         # Heap Usage Progress Bar
         usage_ratio = (
-            (heap_info.allocated_bytes / heap_size)
-            if heap_info.allocated_bytes > 0
-            else 0
+            (heap_info.allocated_bytes / heap_size) if heap_info.allocated_bytes > 0 else 0
         )
-        self._draw_progress_bar(
-            y, col_pos, allocated_bytes_width, usage_ratio * 100, 70, 90
-        )
+        self._draw_progress_bar(y, col_pos, allocated_bytes_width, usage_ratio * 100, 70, 90)
         col_pos += allocated_bytes_width + 1
 
         # Heap Watermark Bytes
-        watermark_bytes_display = (
-            f"{heap_info.max_allocated_bytes} / {heap_size}".ljust(watermark_width)
+        watermark_bytes_display = f"{heap_info.max_allocated_bytes} / {heap_size}".ljust(
+            watermark_width
         )
         self.stdscr.addstr(y, col_pos, watermark_bytes_display)
 
@@ -474,9 +460,7 @@ class ZView:
         stack_watermark_sum = sum(
             t.runtime.stack_watermark if t.runtime else 0 for t in self.threads_data
         )
-        thread_cpu_sum = sum(
-            t.runtime.cpu if t.runtime else 0 for t in self.threads_data
-        )
+        thread_cpu_sum = sum(t.runtime.cpu if t.runtime else 0 for t in self.threads_data)
         is_any_thread_active = any(
             t.runtime.active if t.runtime else False for t in self.threads_data
         )
@@ -485,18 +469,14 @@ class ZView:
             0,
             stack_size_sum,
             "*Sum of all threads*",
-            ThreadRuntime(
-                min(thread_cpu_sum, 100), is_any_thread_active, stack_watermark_sum
-            ),
+            ThreadRuntime(min(thread_cpu_sum, 100), is_any_thread_active, stack_watermark_sum),
         )
 
         self._draw_thread_info(2, all_threads_info, False)
 
         key_func = self.sort_keys.get(self._sort_by, self.sort_keys["name"])
 
-        sorted_threads = sorted(
-            self.threads_data, key=key_func, reverse=self._invert_sorting
-        )
+        sorted_threads = sorted(self.threads_data, key=key_func, reverse=self._invert_sorting)
 
         for idx, thread in enumerate(
             sorted_threads[self.top_line : self.top_line + max_table_rows]
@@ -507,13 +487,11 @@ class ZView:
                 break
 
             absolute_idx = self.top_line + idx
-            self._draw_thread_info(
-                target_y, thread, selected=(absolute_idx == self.cursor)
-            )
+            self._draw_thread_info(target_y, thread, selected=(absolute_idx == self.cursor))
 
         self.stdscr.refresh()
 
-    def _draw_thread_detail_view(self, h, w):
+    def _draw_thread_detail_view(self, w):
         """
         Draws a single thread details, and its recent CPU usage as a graph.
         """
@@ -534,9 +512,7 @@ class ZView:
             self.detailing_thread_usages[thread.name]["cpu"].append(
                 int(thread.runtime.cpu * self._get_cpu_load())
             )
-            self.detailing_thread_usages[thread.name]["load"].append(
-                int(thread.runtime.cpu)
-            )
+            self.detailing_thread_usages[thread.name]["load"].append(int(thread.runtime.cpu))
 
             graph_height = self.min_dimensions[0] - 6
             graph_width = w // 2
@@ -588,9 +564,7 @@ class ZView:
         updates the UI, and processes user input (e.g., 'q' to quit).
         """
         self.status_message = "Initializing..."
-        self.scraper.start_polling_thread(
-            self.data_queue, self.stop_event, inspection_period
-        )
+        self.scraper.start_polling_thread(self.data_queue, self.stop_event, inspection_period)
         self.scraper.thread_pool = list(self.scraper.all_threads.values())
         current_sort = 0
         while self.running:
@@ -612,9 +586,7 @@ class ZView:
                     )
 
                     if len(threads_data):
-                        idle_thread = next(
-                            (t for t in sorted_threads if t.name == "idle"), None
-                        )
+                        idle_thread = next((t for t in sorted_threads if t.name == "idle"), None)
                         if idle_thread:
                             self.idle_thread = idle_thread
                             sorted_threads.remove(idle_thread)
@@ -641,9 +613,7 @@ class ZView:
                             self.cursor = 0
                         case ZViewState.THREAD_DETAIL:
                             self.state = ZViewState.DEFAULT_VIEW
-                            self.scraper.thread_pool = list(
-                                self.scraper.all_threads.values()
-                            )
+                            self.scraper.thread_pool = list(self.scraper.all_threads.values())
                         case _:
                             self.scraper.thread_pool = []
                             pass
@@ -702,7 +672,7 @@ class ZView:
 
                         self._draw_default_view(h, w)
                     case ZViewState.THREAD_DETAIL:
-                        self._draw_thread_detail_view(h, w)
+                        self._draw_thread_detail_view(w)
                     case ZViewState.HEAPS_DETAIL:
                         self._draw_heaps_view(h)
 
@@ -804,7 +774,5 @@ def main():
     with (
         PyOCDScraper(target_mcu) if runner != "jlink" else JLinkScraper(target_mcu)
     ) as meta_scraper:
-        z_scraper = ZScraper(
-            meta_scraper, args.elf_file, args.max_threads, args.thread_name_size
-        )
+        z_scraper = ZScraper(meta_scraper, args.elf_file, args.max_threads, args.thread_name_size)
         curses.wrapper(curses_main, z_scraper, args.period)

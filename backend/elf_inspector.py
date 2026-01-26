@@ -12,11 +12,9 @@ from elftools.elf.sections import SymbolTableSection
 
 class ElfInspector:
     def __init__(self, elf_path: str):
-        self._symbol_cache: defaultdict[str, defaultdict[str, list[int]]] = defaultdict(
+        self._symbol_cache: defaultdict[str, defaultdict[str, list[int]]] = defaultdict(defaultdict)
+        self._struct_member_offset_cache: defaultdict[str, defaultdict[str, int]] = defaultdict(
             defaultdict
-        )
-        self._struct_member_offset_cache: defaultdict[str, defaultdict[str, int]] = (
-            defaultdict(defaultdict)
         )
 
         self.file = self._open_elf_file(elf_path)
@@ -35,13 +33,8 @@ class ElfInspector:
             raise ValueError("ELF file lacks DWARF debug information.")
         return self.elf.get_dwarf_info()
 
-    def get_symbol_info(
-        self, symbol_name: str, info: Literal["address", "size"]
-    ) -> list[int]:
-        if (
-            symbol_name in self._symbol_cache
-            and info in self._symbol_cache[symbol_name]
-        ):
+    def get_symbol_info(self, symbol_name: str, info: Literal["address", "size"]) -> list[int]:
+        if symbol_name in self._symbol_cache and info in self._symbol_cache[symbol_name]:
             return self._symbol_cache[symbol_name][info]
 
         symtab = self.elf.get_section_by_name(".symtab")
@@ -83,9 +76,7 @@ class ElfInspector:
         for struct_die in struct_dies:
             member_dies.append(self._find_member_die(struct_die, member_name))
         if len(member_dies) == 0 or not any(member_dies):
-            raise LookupError(
-                f"Member '{member_name}' not found in struct '{struct_name}'."
-            )
+            raise LookupError(f"Member '{member_name}' not found in struct '{struct_name}'.")
 
         member_dies[:] = [die for die in member_dies if die is not None]
         member_die = member_dies[0]
@@ -103,7 +94,7 @@ class ElfInspector:
         if not struct_dies[0].attributes["DW_AT_byte_size"]:
             raise ValueError(f"Struct '{struct_name}' has no size information.")
 
-        return getattr(struct_dies[0].attributes["DW_AT_byte_size"], "value")
+        return struct_dies[0].attributes["DW_AT_byte_size"].value
 
     def _find_struct_dies(self, struct_name: str) -> list[DIE] | None:
         dies = []
@@ -146,9 +137,7 @@ class ElfInspector:
     def _find_member_die(struct_die: DIE, member_name: str) -> DIE | None:
         for child in struct_die.iter_children():
             if child.tag == "DW_TAG_member" and child.attributes.get("DW_AT_name"):
-                child_member = child.attributes["DW_AT_name"].value.decode(
-                    errors="ignore"
-                )
+                child_member = child.attributes["DW_AT_name"].value.decode(errors="ignore")
                 if child_member == member_name:
                     return child
         return None
