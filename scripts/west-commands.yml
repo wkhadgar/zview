@@ -1,0 +1,9 @@
+# Copyright (c) 2026 Paulo Santos
+# SPDX-License-Identifier: Apache-2.0
+
+west-commands:
+  - file: scripts/west_commands/zview_tui.py
+    commands:
+      - name: zview
+        class: ZViewCommand
+        help: Runtime Thread Viewer
