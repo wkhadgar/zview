@@ -1,16 +1,30 @@
 [project]
 name = "zview"
-version = "0.3.3"
+version = "0.4.0"
 authors = [{ name = "Paulo Santos", email = "pauloxrms@gmail.com" }]
 description = "ZView, a Zephyr RTOS runtime visualizer"
 dependencies = ["PyYAML", "pyelftools", "pyocd", "pylink-square"]
 classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
-  "Operating System :: OS Independent",
+  "Topic :: Software Development :: Embedded Systems",
 ]
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
+keywords = [
+  "Zephyr",
+  "RTOS",
+  "Zephyr RTOS",
+  "threads",
+  "stacks",
+  "heaps",
+  "analyser",
+  "ZView",
+  "tooling",
+  "module",
+]
 
 [project.urls]
 Homepage = "https://github.com/wkhadgar/zview"
