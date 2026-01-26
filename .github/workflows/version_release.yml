@@ -9,15 +9,16 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
-  release:
+  check-version:
     runs-on: ubuntu-latest
-    environment: pypi
-    permissions: write-all
-
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      exists: ${{ steps.tag_check.outputs.exists }}
     steps:
-      - name: Checkout ZView
+      - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -35,7 +36,7 @@ jobs:
           echo "Detected version: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Check if Tag Exists
+      - name: Check for Existing Tag
         id: tag_check
         run: |
           VERSION="${{ steps.check_ver.outputs.version }}"
@@ -47,23 +48,46 @@ jobs:
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create and Push Tag
-        if: steps.tag_check.outputs.exists == 'false'
-        env:
-          GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
+  release:
+    needs: check-version
+    if: needs.check-version.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions: write-all
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Create Tag
         run: |
-          VERSION="${{ steps.check_ver.outputs.version }}"
+          VERSION="${{ needs.check-version.outputs.version }}"
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git tag -a "v$VERSION" -m "Auto-release v$VERSION"
           git push origin "v$VERSION"
 
       - name: Build Package
-        if: steps.tag_check.outputs.exists == 'false'
         run: |
           pip install build
           python -m build
 
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.check-version.outputs.version }}
+          name: v${{ needs.check-version.outputs.version }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          files: dist/*
+
       - name: Publish to PyPI
-        if: steps.tag_check.outputs.exists == 'false'
         uses: pypa/gh-action-pypi-publish@release/v1
