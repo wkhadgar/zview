@@ -58,6 +58,19 @@ jobs:
           git tag -a "v$VERSION" -m "Auto-release v$VERSION"
           git push origin "v$VERSION"
 
+      - name: Create GitHub Release
+        if: steps.tag_check.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.check_ver.outputs.version }}
+          name: v${{ steps.check_ver.outputs.version }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+
       - name: Build Package
         if: steps.tag_check.outputs.exists == 'false'
         run: |
