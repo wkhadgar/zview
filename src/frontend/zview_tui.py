@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import argparse
 import contextlib
 import curses
 import enum
@@ -13,9 +12,6 @@ from dataclasses import dataclass
 
 from backend.z_scraper import (
     HeapInfo,
-    JLinkScraper,
-    PyOCDScraper,
-    RunnerConfig,
     ThreadInfo,
     ThreadRuntime,
     ZScraper,
@@ -491,17 +487,16 @@ class ZView:
 
         self.stdscr.refresh()
 
-    def _draw_thread_detail_view(self, w):
+    def _draw_thread_detail_view(self, h, w, y=2):
         """
         Draws a single thread details, and its recent CPU usage as a graph.
         """
-        current_row_y = 2
 
         for thread in self.threads_data:
             if thread.name != self.detailing_thread:
                 continue
 
-            self._draw_thread_info(current_row_y, thread)
+            self._draw_thread_info(y, thread)
 
             if thread.runtime is None:
                 break
@@ -514,15 +509,15 @@ class ZView:
             )
             self.detailing_thread_usages[thread.name]["load"].append(int(thread.runtime.cpu))
 
-            graph_height = self.min_dimensions[0] - 6
+            graph_height = max(self.min_dimensions[0] - 6, h - 7)
             graph_width = w // 2
             if len(self.detailing_thread_usages[thread.name]["load"]) > graph_width - 2:
                 self.detailing_thread_usages[thread.name]["load"].pop(0)
                 self.detailing_thread_usages[thread.name]["cpu"].pop(0)
 
-            current_row_y += 2
+            y += 2
             self._draw_graph(
-                current_row_y,
+                y,
                 0,
                 graph_height,
                 graph_width,
@@ -531,7 +526,7 @@ class ZView:
                 self.ATTR_GRAPH_B,
             )
             self._draw_graph(
-                current_row_y,
+                y,
                 graph_width,
                 graph_height,
                 graph_width,
@@ -556,6 +551,120 @@ class ZView:
 
         self.stdscr.refresh()
 
+    def draw_state(self, state: ZViewState, height: int, width: int):
+        self._base_draw(height, width)
+        match state:
+            case ZViewState.DEFAULT_VIEW:
+                max_visible_rows = height - 6
+
+                if self.cursor < self.top_line:
+                    self.top_line = self.cursor
+                elif self.cursor >= self.top_line + max_visible_rows:
+                    self.top_line = self.cursor - max_visible_rows + 1
+
+                self._draw_default_view(height, width)
+            case ZViewState.THREAD_DETAIL:
+                self._draw_thread_detail_view(height, width)
+            case ZViewState.HEAPS_DETAIL:
+                self._draw_heaps_view(height)
+
+    def draw_terminal_size_warning(self, height: int, width: int):
+        self.stdscr.erase()
+
+        msgs = [
+            "Terminal is too small.",
+            "Please resize your terminal to at least "
+            f"{self.min_dimensions[1]}x{self.min_dimensions[0]}",
+            f"Current: {width}x{height}",
+        ]
+
+        mid_y = height // 2
+        start_y = mid_y - 1
+
+        for i, msg in enumerate(msgs):
+            if 0 <= start_y + i < height:
+                centered_line = f"{msg:^{width}}"[: width - 1]
+                self.stdscr.addstr(start_y + i, 0, centered_line)
+
+    def draw_tui(self):
+        h, w = self.stdscr.getmaxyx()
+
+        if h < self.min_dimensions[0] or w < self.min_dimensions[1]:
+            self.draw_terminal_size_warning(h, w)
+        else:
+            self.draw_state(self.state, h, w)
+
+    def process_events(self):
+        match self.stdscr.getch():
+            case curses.KEY_DOWN:
+                self.cursor = min(len(self.threads_data) - 1, self.cursor + 1)
+            case curses.KEY_UP:
+                self.cursor = max(0, self.cursor - 1)
+            case curses.KEY_ENTER | SpecialCode.NEWLINE | SpecialCode.RETURN:
+                match self.state:
+                    case ZViewState.DEFAULT_VIEW:
+                        self.state = ZViewState.THREAD_DETAIL
+
+                        self.detailing_thread = self.threads_data[self.cursor].name
+                        self.scraper.thread_pool = [self.scraper.all_threads[self.detailing_thread]]
+                        self.cursor = 0
+                    case ZViewState.THREAD_DETAIL:
+                        self.state = ZViewState.DEFAULT_VIEW
+                        self.scraper.thread_pool = list(self.scraper.all_threads.values())
+                    case _:
+                        self.scraper.thread_pool = []
+                        pass
+            case SpecialCode.SORT:
+                if self.state is not ZViewState.DEFAULT_VIEW:
+                    pass
+
+                self.current_sort = (self.current_sort + 1) % len(self.sorting_options)
+                self.sort_by = self.sorting_options[self.current_sort]
+            case SpecialCode.INVERSE:
+                if self.state is not ZViewState.DEFAULT_VIEW:
+                    pass
+
+                self.invert_sorting = not self.invert_sorting
+            case SpecialCode.HEAPS:
+                if not self.scraper.has_heaps:
+                    pass
+                elif self.state is ZViewState.HEAPS_DETAIL:
+                    self.state = ZViewState.DEFAULT_VIEW
+                elif self.state is ZViewState.DEFAULT_VIEW:
+                    self.state = ZViewState.HEAPS_DETAIL
+            case SpecialCode.QUIT:
+                self.running = False
+            case _:
+                pass
+
+    def process_data(self, data: dict[str, list]):
+        if data.get("error", False):
+            self.status_message = f"Error: {data['error']}"
+        else:
+            self.status_message = "Running..."
+            threads_data: list[ThreadInfo] = data.get("threads", [])
+            heaps_data: list[HeapInfo] = data.get("heaps", [])
+
+            key_func = self.sort_keys.get(self._sort_by, self.sort_keys["name"])
+
+            sorted_threads = sorted(
+                threads_data,
+                key=key_func,
+                reverse=self._invert_sorting,
+            )
+
+            if len(threads_data):
+                idle_thread = next(
+                    (t for t in sorted_threads if t.address == self.scraper.idle_threads_address),
+                    None,
+                )
+                if idle_thread:
+                    self.idle_thread = idle_thread
+                    sorted_threads.remove(idle_thread)
+                self.threads_data = sorted_threads
+            if heaps_data is not None:
+                self.heaps_data = heaps_data
+
     def run(self, inspection_period):
         """
         The main application loop.
@@ -566,120 +675,21 @@ class ZView:
         self.status_message = "Initializing..."
         self.scraper.start_polling_thread(self.data_queue, self.stop_event, inspection_period)
         self.scraper.thread_pool = list(self.scraper.all_threads.values())
-        current_sort = 0
+        self.current_sort = 0
+
         while self.running:
-            try:
+            with contextlib.suppress(queue.Empty):
                 data = self.data_queue.get_nowait()
-                if "error" in data:
-                    self.status_message = f"Error: {data['error']}"
-                else:
-                    self.status_message = "Running..."
-                    threads_data: list = data.get("threads", [])
-                    heaps_data: list = data.get("heaps", [])
+                self.process_data(data)
 
-                    key_func = self.sort_keys.get(self._sort_by, self.sort_keys["name"])
+            self.process_events()
 
-                    sorted_threads = sorted(
-                        threads_data,
-                        key=key_func,
-                        reverse=self._invert_sorting,
-                    )
-
-                    if len(threads_data):
-                        idle_thread = next((t for t in sorted_threads if t.name == "idle"), None)
-                        if idle_thread:
-                            self.idle_thread = idle_thread
-                            sorted_threads.remove(idle_thread)
-                        self.threads_data = sorted_threads
-                    if heaps_data is not None:
-                        self.heaps_data = heaps_data
-            except queue.Empty:
-                pass
-
-            match self.stdscr.getch():
-                case curses.KEY_DOWN:
-                    self.cursor = min(len(self.threads_data) - 1, self.cursor + 1)
-                case curses.KEY_UP:
-                    self.cursor = max(0, self.cursor - 1)
-                case curses.KEY_ENTER | SpecialCode.NEWLINE | SpecialCode.RETURN:
-                    match self.state:
-                        case ZViewState.DEFAULT_VIEW:
-                            self.state = ZViewState.THREAD_DETAIL
-
-                            self.detailing_thread = self.threads_data[self.cursor].name
-                            self.scraper.thread_pool = [
-                                self.scraper.all_threads[self.detailing_thread]
-                            ]
-                            self.cursor = 0
-                        case ZViewState.THREAD_DETAIL:
-                            self.state = ZViewState.DEFAULT_VIEW
-                            self.scraper.thread_pool = list(self.scraper.all_threads.values())
-                        case _:
-                            self.scraper.thread_pool = []
-                            pass
-                case SpecialCode.SORT:
-                    if self.state is not ZViewState.DEFAULT_VIEW:
-                        pass
-
-                    current_sort = (current_sort + 1) % len(self.sorting_options)
-                    self.sort_by = self.sorting_options[current_sort]
-                case SpecialCode.INVERSE:
-                    if self.state is not ZViewState.DEFAULT_VIEW:
-                        pass
-
-                    self.invert_sorting = not self.invert_sorting
-                case SpecialCode.HEAPS:
-                    if not self.scraper.has_heaps:
-                        pass
-                    elif self.state is ZViewState.HEAPS_DETAIL:
-                        self.state = ZViewState.DEFAULT_VIEW
-                    elif self.state is ZViewState.DEFAULT_VIEW:
-                        self.state = ZViewState.HEAPS_DETAIL
-                case SpecialCode.QUIT:
-                    self.running = False
-                case _:
-                    pass
-
-            h, w = self.stdscr.getmaxyx()
-
-            if h < self.min_dimensions[0] or w < self.min_dimensions[1]:
-                self.stdscr.erase()
-
-                msgs = [
-                    "Terminal is too small.",
-                    "Please resize your terminal to at least "
-                    f"{self.min_dimensions[1]}x{self.min_dimensions[0]}",
-                    f"Current: {w}x{h}",
-                ]
-
-                mid_y = h // 2
-                start_y = mid_y - 1
-
-                for i, msg in enumerate(msgs):
-                    if 0 <= start_y + i < h:
-                        centered_line = f"{msg:^{w}}"[: w - 1]
-                        self.stdscr.addstr(start_y + i, 0, centered_line)
-            else:
-                self._base_draw(h, w)
-                match self.state:
-                    case ZViewState.DEFAULT_VIEW:
-                        max_visible_rows = h - 6
-
-                        if self.cursor < self.top_line:
-                            self.top_line = self.cursor
-                        elif self.cursor >= self.top_line + max_visible_rows:
-                            self.top_line = self.cursor - max_visible_rows + 1
-
-                        self._draw_default_view(h, w)
-                    case ZViewState.THREAD_DETAIL:
-                        self._draw_thread_detail_view(w)
-                    case ZViewState.HEAPS_DETAIL:
-                        self._draw_heaps_view(h)
+            self.draw_tui()
 
             time.sleep(0.01)
 
 
-def curses_main(stdscr, scraper: ZScraper, inspection_period):
+def tui_run(stdscr, scraper: ZScraper, inspection_period):
     """
     The entry point for the curses application.
 
@@ -687,92 +697,13 @@ def curses_main(stdscr, scraper: ZScraper, inspection_period):
     curses library initialization and cleanup.
 
     Args:
+        :param stdscr: Standard screen window object provided by `curses.wrapper`.
+        :param scraper: ZScraper instance for data gathering.
         :param inspection_period: Period for inspection, in seconds.
-        :param stdscr: The standard screen window object provided by `curses.wrapper`.
     """
     app = ZView(scraper, stdscr)
+
     try:
         app.run(inspection_period)
     finally:
         app.scraper.finish_polling_thread()
-
-
-def main():
-    arg_parser = argparse.ArgumentParser(
-        description="ZView - A real-time thread viewer for Zephyr RTOS."
-    )
-    arg_parser.add_argument(
-        "-e",
-        "--elf-file",
-        required=True,
-        help="Path to the application's .elf firmware file.",
-    )
-    arg_parser.add_argument(
-        "--runners_yaml",
-        default=None,
-        help="Path to the generated runners YAML",
-    )
-    arg_parser.add_argument(
-        "--runner",
-        choices=["jlink", "pyocd"],
-        help="Runner to start analysis with.",
-    )
-    arg_parser.add_argument(
-        "--period",
-        default=0.025,
-        required=False,
-        type=float,
-        help="Minimum period to update system information.",
-    )
-    arg_parser.add_argument(
-        "-n",
-        "--has_thread_names",
-        action="store_true",
-        help="Target was built with thread names enabled.",
-    )
-    arg_parser.add_argument(
-        "-r",
-        "--has_thread_runtime_stats",
-        action="store_true",
-        help="Target was built with thread runtime statistics enabled.",
-    )
-    arg_parser.add_argument(
-        "-m",
-        "--has_heap_stats",
-        action="store_true",
-        help="Target was built with heap statistics enabled.",
-    )
-    arg_parser.add_argument(
-        "--max_threads",
-        type=int,
-        default=32,
-        help="Maximum number of threads for the target.",
-    )
-    arg_parser.add_argument(
-        "--thread_name_size",
-        type=int,
-        default=32,
-        help="Maximum thread name size, if available.",
-    )
-    args = arg_parser.parse_args()
-
-    if not args.has_thread_names:
-        print("NO thread names will be shown (CONFIG_THREAD_NAME=n)")
-    if not args.has_thread_runtime_stats:
-        print("NO cpu stats will be shown (CONFIG_THREAD_RUNTIME_STATS=n)")
-    if not args.has_heap_stats:
-        print("NO heap stats will be shown (CONFIG_SYS_HEAP_RUNTIME_STATS=n)")
-
-    runner = args.runner
-    target_mcu = None
-    if args.runners_yaml:
-        runner_config = RunnerConfig(args.runners_yaml)
-        runner, target_mcu = runner_config.get_config(preferred_runner=runner)
-        if runner != "jlink":
-            runner, target_mcu = runner_config.get_config(preferred_runner="pyocd")
-
-    with (
-        PyOCDScraper(target_mcu) if runner != "jlink" else JLinkScraper(target_mcu)
-    ) as meta_scraper:
-        z_scraper = ZScraper(meta_scraper, args.elf_file, args.max_threads, args.thread_name_size)
-        curses.wrapper(curses_main, z_scraper, args.period)
