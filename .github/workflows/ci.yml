@@ -46,4 +46,4 @@ jobs:
 
       - name: Run Tests
         run: |
-          PYTHONPATH=. pytest tests/ -v
+          PYTHONPATH=src pytest tests/ -v

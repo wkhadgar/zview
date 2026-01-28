@@ -1,6 +1,7 @@
 name: Release to new version
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -15,7 +16,7 @@ jobs:
   check-version:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.get_version.outputs.version }}
+      version: ${{ steps.check_ver.outputs.version }}
       exists: ${{ steps.tag_check.outputs.exists }}
     steps:
       - name: Checkout Code
