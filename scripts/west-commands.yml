@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 west-commands:
-  - file: scripts/west_commands/zview_tui.py
+  - file: scripts/west_commands/zview_tui_cmd.py
     commands:
       - name: zview
         class: ZViewCommand

@@ -164,14 +164,14 @@ class ZView:
             "Thread": 30,
             "CPU %": 8,
             "Load %": 8,
-            "Stack Usage (Watermark)": 32,
+            "Stack Usage % (Watermark)": 32,
             "Watermark (Bytes)": 18,
         }
         heaps_info_scheme = {
             "Heap": 30,
-            "Free Bytes": 12,
-            "Allocated Bytes": 16,
-            "Watermark (Bytes)": 16,
+            "Free Bytes": 14,
+            "Allocated Bytes": 18,
+            "Watermark (Bytes)": 18,
         }
 
         thread_scheme = ZViewTUIScheme(thread_basic_info_scheme)
@@ -251,17 +251,28 @@ class ZView:
             bar_color_attr = self.ATTR_PROGRESS_BAR_LOW
         bar_width = width - 2
         completed_chars = int(bar_width * (percentage / 100))
-        remaining_chars = bar_width - completed_chars
-        bar_str = "│" + "█" * completed_chars + "-" * remaining_chars + "│"
+        bar_str = "█" * completed_chars
+        self.stdscr.addstr(y, x, "│" + "·" * bar_width + "│")
         self.stdscr.attron(bar_color_attr)
+        x += 1
         self.stdscr.addstr(y, x, bar_str)
 
         percent_display = f"{percentage:.1f}%"
-        overlap = percent_display.center(len(bar_str))[:completed_chars].strip()
-        self.stdscr.addstr(y, x + (width // 2) - (len(percent_display) // 2), percent_display)
-        self.stdscr.attron(curses.A_REVERSE)
-        self.stdscr.addstr(y, x + (width // 2) - (len(percent_display) // 2), overlap)
-        self.stdscr.attroff(curses.A_REVERSE)
+        percent_start_x = x + (width // 2) - (len(percent_display) // 2)
+        bar_end_x = x + completed_chars
+
+        split_point = max(0, min(len(percent_display), bar_end_x - percent_start_x))
+
+        text_over_bar = percent_display[:split_point]
+        if text_over_bar:
+            self.stdscr.attron(curses.A_REVERSE)
+            self.stdscr.addstr(y, percent_start_x, text_over_bar)
+            self.stdscr.attroff(curses.A_REVERSE)
+
+        text_outside_bar = percent_display[split_point:]
+        if text_outside_bar:
+            self.stdscr.addstr(y, percent_start_x + split_point, text_outside_bar)
+
         self.stdscr.attroff(bar_color_attr)
 
     def _base_draw(self, height, width):
@@ -333,11 +344,12 @@ class ZView:
 
         # Widths
         scheme = self.ui[self.state]
-        thread_name_width = scheme.col_widths["Thread"]
-        cpu_usage_width = scheme.col_widths["CPU %"]
-        load_usage_width = scheme.col_widths["Load %"]
-        stack_usage_width = scheme.col_widths["Stack Usage (Watermark)"]
-        stack_bytes_width = scheme.col_widths["Watermark (Bytes)"]
+        columns = list(scheme.col_widths.keys())
+        thread_name_width = scheme.col_widths[columns[0]]
+        cpu_usage_width = scheme.col_widths[columns[1]]
+        load_usage_width = scheme.col_widths[columns[2]]
+        stack_usage_width = scheme.col_widths[columns[3]]
+        stack_bytes_width = scheme.col_widths[columns[4]]
 
         # Thread name
         if len(thread_info.name) > thread_name_width:
@@ -400,10 +412,11 @@ class ZView:
 
         # Widths
         scheme = self.ui[self.state]
-        heap_name_width = scheme.col_widths["Heap"]
-        free_bytes_width = scheme.col_widths["Free Bytes"]
-        allocated_bytes_width = scheme.col_widths["Allocated Bytes"]
-        watermark_width = scheme.col_widths["Watermark (Bytes)"]
+        columns = list(scheme.col_widths.keys())
+        heap_name_width = scheme.col_widths[columns[0]]
+        free_bytes_width = scheme.col_widths[columns[1]]
+        allocated_bytes_width = scheme.col_widths[columns[2]]
+        watermark_width = scheme.col_widths[columns[3]]
 
         # Heap name
         heap_name_display = heap_info.name[:heap_name_width].ljust(heap_name_width)
@@ -439,10 +452,11 @@ class ZView:
         """
         Draws the thread data table and its general informations.
         """
-        max_table_rows = height - 5
+        max_table_rows = height - 6
         total_threads = len(self.threads_data)
         start_num = self.top_line + 1 if total_threads > 0 else 0
         end_num = min(self.top_line + max_table_rows, total_threads)
+        thread_column_width = list(self.ui[self.state].col_widths.values())[0]
 
         scroll_indicator = f" Threads: {start_num}-{end_num} of {total_threads} "
 
@@ -450,13 +464,12 @@ class ZView:
         self.stdscr.addstr(height - 1, 0, scroll_indicator[:width])
         self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
 
-        table_start = 3
+        table_start = 4
 
         stack_size_sum = sum(t.stack_size for t in self.threads_data)
         stack_watermark_sum = sum(
             t.runtime.stack_watermark if t.runtime else 0 for t in self.threads_data
         )
-        thread_cpu_sum = sum(t.runtime.cpu if t.runtime else 0 for t in self.threads_data)
         is_any_thread_active = any(
             t.runtime.active if t.runtime else False for t in self.threads_data
         )
@@ -464,11 +477,12 @@ class ZView:
             0,
             0,
             stack_size_sum,
-            "*Sum of all threads*",
-            ThreadRuntime(min(thread_cpu_sum, 100), is_any_thread_active, stack_watermark_sum),
+            "All Threads".center(thread_column_width),
+            ThreadRuntime(100, is_any_thread_active, stack_watermark_sum),
         )
 
         self._draw_thread_info(2, all_threads_info, False)
+        self.stdscr.hline(3, 0, curses.ACS_S3, width)
 
         key_func = self.sort_keys.get(self._sort_by, self.sort_keys["name"])
 
@@ -635,7 +649,9 @@ class ZView:
             case SpecialCode.QUIT:
                 self.running = False
             case _:
-                pass
+                return False
+
+        return True
 
     def process_data(self, data: dict[str, list]):
         if data.get("error", False):
@@ -673,8 +689,14 @@ class ZView:
         updates the UI, and processes user input (e.g., 'q' to quit).
         """
         self.status_message = "Initializing..."
+
+        try:
+            self.scraper.update_available_threads()
+        except RuntimeError as e:
+            self.status_message = f"Unable to update available threads [{e}]"
+
+        self.scraper.reset_thread_pool()
         self.scraper.start_polling_thread(self.data_queue, self.stop_event, inspection_period)
-        self.scraper.thread_pool = list(self.scraper.all_threads.values())
         self.current_sort = 0
 
         while self.running:
