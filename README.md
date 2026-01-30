@@ -104,8 +104,13 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
 ![TUI navigation 2](./docs/assets/default_view_2.png)
 
 
-![TUI tread tracking](./docs/assets/thread_track_1.png)
+![TUI tread tracking](./docs/assets/thread_detail_1.png)
 
+
+![TUI heap navigation](./docs/assets/heaps_view_1.png)
+
+
+![TUI heap_navigation](./docs/assets/heaps_view_2.png)
 ---
 
 ## Roadmap
