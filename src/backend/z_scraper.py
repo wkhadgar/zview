@@ -102,9 +102,9 @@ class AbstractScraper:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type:
-            with open("zview.log", "w") as log:
-                log.write(f"{exc_type}\n{exc_val}\n{exc_tb}")
+        del exc_type
+        del exc_val
+        del exc_tb
 
         self.disconnect()
 
@@ -382,9 +382,9 @@ class ZScraper:
         self._m_scraper.connect()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type:
-            with open("zview.log", "w") as log:
-                log.write(f"{exc_type}\n{exc_val}\n{exc_tb}\n")
+        del exc_type
+        del exc_val
+        del exc_tb
 
         self._m_scraper.disconnect()
 
@@ -588,7 +588,7 @@ class ZScraper:
                 else:
                     thread_info.runtime = ThreadRuntime(cpu_percent, is_active, watermark)
 
-                data_queue.put({"threads": self.thread_pool})
+            data_queue.put({"threads": self.thread_pool})
 
             if self.has_heaps:
                 heap_info = []
@@ -619,6 +619,6 @@ class ZScraper:
                             )
                         )
 
-                        data_queue.put({"heaps": heap_info})
+                data_queue.put({"heaps": heap_info})
 
             time.sleep(inspection_period)

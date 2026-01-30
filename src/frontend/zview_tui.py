@@ -26,7 +26,7 @@ class ZViewTUIScheme:
 class ZViewState(enum.Enum):
     DEFAULT_VIEW = 1
     THREAD_DETAIL = 2
-    HEAPS_DETAIL = 3
+    HEAPS_VIEW = 3
 
 
 class SpecialCode:
@@ -66,26 +66,31 @@ class ZView:
         self.state: ZViewState = ZViewState.DEFAULT_VIEW
         self.ui: dict[ZViewState, ZViewTUIScheme] = {}
 
-        self.cursor = 0
-        self.top_line = 0
+        self.cursor: dict[ZViewState, int] = {ZViewState.DEFAULT_VIEW: 0, ZViewState.HEAPS_VIEW: 0}
+        self.top_line: int = 0
 
-        self.sorting_options = [
-            "name",
-            "cpu",
-            "active_load",
-            "watermark_p",
-            "watermark_b",
-        ]
-        self.sort_keys = {
-            "name": lambda t: t.name,
-            "cpu": lambda t: t.runtime.cpu,
-            "active_load": lambda t: t.runtime.cpu,
-            "watermark_p": lambda t: t.runtime.stack_watermark / t.stack_size,
-            "watermark_b": lambda t: t.runtime.stack_watermark,
+        self.sort_keys: dict[ZViewState, list] = {
+            ZViewState.DEFAULT_VIEW: [
+                lambda t: t.name,
+                lambda t: t.runtime.cpu,
+                lambda t: t.runtime.cpu,
+                lambda t: t.runtime.stack_watermark / t.stack_size,
+                lambda t: t.runtime.stack_watermark,
+            ],
+            ZViewState.HEAPS_VIEW: [
+                lambda h: h.name,
+                lambda h: h.free_bytes,
+                lambda h: h.allocated_bytes,
+                lambda h: h.allocated_bytes / (h.allocated_bytes + h.free_bytes),
+                lambda h: h.max_allocated_bytes,
+            ],
         }
 
-        self._sort_by: str = self.sorting_options[0]
-        self._invert_sorting: bool = False
+        self.current_sort: dict[ZViewState, int] = {
+            ZViewState.DEFAULT_VIEW: 0,
+            ZViewState.HEAPS_VIEW: 0,
+        }
+        self.invert_sorting: bool = False
         self.detailing_thread: str | None = None
         self.detailing_thread_usages = {}
         self.idle_thread: ThreadInfo | None = None
@@ -137,27 +142,17 @@ class ZView:
             self.ATTR_GRAPH_A = curses.color_pair(9)
             self.ATTR_GRAPH_B = curses.color_pair(10)
 
-    @property
-    def sort_by(self):
-        return self._sort_by
+    def _get_cpu_load(self):
+        if self.idle_thread is None or self.idle_thread.runtime is None:
+            return 1
 
-    @sort_by.setter
-    def sort_by(self, sorting: str):
-        if sorting not in self.sorting_options:
-            raise NotImplementedError(
-                f"Sort by '{sorting}' is not available. Valid options are: "
-                f"{[f'{op}' for op in self.sorting_options]}"
-            )
+        cpu_load = 100 - self.idle_thread.runtime.cpu
 
-        self._sort_by = sorting
+        return cpu_load / 100
 
-    @property
-    def invert_sorting(self):
-        return self._invert_sorting
-
-    @invert_sorting.setter
-    def invert_sorting(self, invert: bool):
-        self._invert_sorting = invert
+    def purge_queue(self):
+        with self.data_queue.mutex:
+            self.data_queue.queue.clear()
 
     def _set_ui_schemes(self):
         thread_basic_info_scheme = {
@@ -165,13 +160,14 @@ class ZView:
             "CPU %": 8,
             "Load %": 8,
             "Stack Usage % (Watermark)": 32,
-            "Watermark (Bytes)": 18,
+            "Watermark Bytes": 18,
         }
         heaps_info_scheme = {
             "Heap": 30,
-            "Free Bytes": 14,
-            "Allocated Bytes": 18,
-            "Watermark (Bytes)": 18,
+            "Free B": 8,
+            "Used B": 8,
+            "Heap Usage %": 32,
+            "Watermark Bytes": 18,
         }
 
         thread_scheme = ZViewTUIScheme(thread_basic_info_scheme)
@@ -179,13 +175,7 @@ class ZView:
 
         self.ui[ZViewState.DEFAULT_VIEW] = thread_scheme
         self.ui[ZViewState.THREAD_DETAIL] = thread_scheme
-        self.ui[ZViewState.HEAPS_DETAIL] = heap_scheme
-
-    def _get_cpu_load(self):
-        if self.idle_thread is None or self.idle_thread.runtime is None:
-            return 1
-
-        return min(100 - self.idle_thread.runtime.cpu, 100) / 100
+        self.ui[ZViewState.HEAPS_VIEW] = heap_scheme
 
     def _draw_graph(
         self,
@@ -282,7 +272,7 @@ class ZView:
         footer_text = {
             ZViewState.DEFAULT_VIEW: "Quit: q | Sort: s | Invert: i ",
             ZViewState.THREAD_DETAIL: "Quit: q ",
-            ZViewState.HEAPS_DETAIL: "Quit: q | Threads: h ",
+            ZViewState.HEAPS_VIEW: "Quit: q | Threads: h ",
         }
 
         if self.scraper.has_heaps:
@@ -321,9 +311,9 @@ class ZView:
         curr_x = 0
         col_headers = list(ui_cfg.col_widths.keys())
 
-        if self.state == ZViewState.DEFAULT_VIEW:
+        if self.state in (ZViewState.DEFAULT_VIEW, ZViewState.HEAPS_VIEW):
             order_symbol = " ▼" if self.invert_sorting else " ▲"
-            sorting_header = col_headers[self.sorting_options.index(self.sort_by)]
+            sorting_header = col_headers[self.current_sort[self.state]]
         else:
             sorting_header = ""
             order_symbol = ""
@@ -416,7 +406,8 @@ class ZView:
         heap_name_width = scheme.col_widths[columns[0]]
         free_bytes_width = scheme.col_widths[columns[1]]
         allocated_bytes_width = scheme.col_widths[columns[2]]
-        watermark_width = scheme.col_widths[columns[3]]
+        heap_usage_width = scheme.col_widths[columns[3]]
+        watermark_width = scheme.col_widths[columns[4]]
 
         # Heap name
         heap_name_display = heap_info.name[:heap_name_width].ljust(heap_name_width)
@@ -430,17 +421,22 @@ class ZView:
         col_pos += heap_name_width + 1
 
         # Free bytes
-        free_bytes_display = f"{heap_info.free_bytes:<{free_bytes_width}}"
+        free_bytes_display = f"{heap_info.free_bytes:^{free_bytes_width}}"
         self.stdscr.addstr(y, col_pos, free_bytes_display)
         col_pos += free_bytes_width + 1
 
-        heap_size = heap_info.allocated_bytes + heap_info.free_bytes
+        # Allocated bytes
+        allocated_bytes_display = f"{heap_info.allocated_bytes:^{allocated_bytes_width}}"
+        self.stdscr.addstr(y, col_pos, allocated_bytes_display)
+        col_pos += allocated_bytes_width + 1
+
         # Heap Usage Progress Bar
+        heap_size = heap_info.allocated_bytes + heap_info.free_bytes
         usage_ratio = (
             (heap_info.allocated_bytes / heap_size) if heap_info.allocated_bytes > 0 else 0
         )
-        self._draw_progress_bar(y, col_pos, allocated_bytes_width, usage_ratio * 100, 70, 90)
-        col_pos += allocated_bytes_width + 1
+        self._draw_progress_bar(y, col_pos, heap_usage_width, usage_ratio * 100, 70, 90)
+        col_pos += heap_usage_width + 1
 
         # Heap Watermark Bytes
         watermark_bytes_display = f"{heap_info.max_allocated_bytes} / {heap_size}".ljust(
@@ -484,9 +480,11 @@ class ZView:
         self._draw_thread_info(2, all_threads_info, False)
         self.stdscr.hline(3, 0, curses.ACS_S3, width)
 
-        key_func = self.sort_keys.get(self._sort_by, self.sort_keys["name"])
+        key_func = self.sort_keys[ZViewState.DEFAULT_VIEW][
+            self.current_sort[ZViewState.DEFAULT_VIEW]
+        ]
 
-        sorted_threads = sorted(self.threads_data, key=key_func, reverse=self._invert_sorting)
+        sorted_threads = sorted(self.threads_data, key=key_func, reverse=self.invert_sorting)
 
         for idx, thread in enumerate(
             sorted_threads[self.top_line : self.top_line + max_table_rows]
@@ -497,7 +495,9 @@ class ZView:
                 break
 
             absolute_idx = self.top_line + idx
-            self._draw_thread_info(target_y, thread, selected=(absolute_idx == self.cursor))
+            self._draw_thread_info(
+                target_y, thread, selected=(absolute_idx == self.cursor[ZViewState.DEFAULT_VIEW])
+            )
 
         self.stdscr.refresh()
 
@@ -551,17 +551,49 @@ class ZView:
 
         self.stdscr.refresh()
 
-    def _draw_heaps_view(self, height):
-        table_start_row = 2
-        current_row_y = table_start_row + 1
-        table_height = height - 1
-        for idx, heap in enumerate(self.heaps_data):
-            if current_row_y >= table_start_row + table_height:
+    def _draw_heaps_view(self, height, width):
+        max_table_rows = height - 6
+        total_heaps = len(self.heaps_data)
+        start_num = self.top_line + 1 if total_heaps > 0 else 0
+        end_num = min(self.top_line + max_table_rows, total_heaps)
+        heaps_column_width = list(self.ui[self.state].col_widths.values())[0]
+
+        scroll_indicator = f" Heaps: {start_num}-{end_num} of {total_heaps} "
+
+        self.stdscr.attron(self.ATTR_HEADER_FOOTER)
+        self.stdscr.addstr(height - 1, 0, scroll_indicator[:width])
+        self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
+
+        table_start = 4
+
+        free_bytes_sum = sum(h.free_bytes for h in self.heaps_data)
+        allocated_bytes_sum = sum(h.allocated_bytes for h in self.heaps_data)
+        max_allocated_bytes_sum = sum(h.max_allocated_bytes for h in self.heaps_data)
+        all_heaps_info = HeapInfo(
+            "All Heaps".center(heaps_column_width),
+            0,
+            free_bytes_sum,
+            allocated_bytes_sum,
+            max_allocated_bytes_sum,
+        )
+
+        self._draw_heap_info(2, all_heaps_info, False)
+        self.stdscr.hline(3, 0, curses.ACS_S3, width)
+
+        key_func = self.sort_keys[ZViewState.HEAPS_VIEW][self.current_sort[ZViewState.HEAPS_VIEW]]
+
+        sorted_heaps = sorted(self.heaps_data, key=key_func, reverse=self.invert_sorting)
+
+        for idx, heap in enumerate(sorted_heaps[self.top_line : self.top_line + max_table_rows]):
+            target_y = table_start + idx
+
+            if target_y >= height - 2:
                 break
 
-            self._draw_heap_info(current_row_y, heap, selected=idx == self.cursor)
-
-            current_row_y += 1
+            absolute_idx = self.top_line + idx
+            self._draw_heap_info(
+                target_y, heap, selected=(absolute_idx == self.cursor[ZViewState.HEAPS_VIEW])
+            )
 
         self.stdscr.refresh()
 
@@ -569,18 +601,11 @@ class ZView:
         self._base_draw(height, width)
         match state:
             case ZViewState.DEFAULT_VIEW:
-                max_visible_rows = height - 6
-
-                if self.cursor < self.top_line:
-                    self.top_line = self.cursor
-                elif self.cursor >= self.top_line + max_visible_rows:
-                    self.top_line = self.cursor - max_visible_rows + 1
-
                 self._draw_default_view(height, width)
             case ZViewState.THREAD_DETAIL:
                 self._draw_thread_detail_view(height, width)
-            case ZViewState.HEAPS_DETAIL:
-                self._draw_heaps_view(height)
+            case ZViewState.HEAPS_VIEW:
+                self._draw_heaps_view(height, width)
 
     def draw_terminal_size_warning(self, height: int, width: int):
         self.stdscr.erase()
@@ -600,58 +625,76 @@ class ZView:
                 centered_line = f"{msg:^{width}}"[: width - 1]
                 self.stdscr.addstr(start_y + i, 0, centered_line)
 
-    def draw_tui(self):
-        h, w = self.stdscr.getmaxyx()
-
-        if h < self.min_dimensions[0] or w < self.min_dimensions[1]:
-            self.draw_terminal_size_warning(h, w)
+    def draw_tui(self, height, width):
+        if height < self.min_dimensions[0] or width < self.min_dimensions[1]:
+            self.draw_terminal_size_warning(height, width)
         else:
-            self.draw_state(self.state, h, w)
+            self.draw_state(self.state, height, width)
 
-    def process_events(self):
-        match self.stdscr.getch():
-            case curses.KEY_DOWN:
-                self.cursor = min(len(self.threads_data) - 1, self.cursor + 1)
-            case curses.KEY_UP:
-                self.cursor = max(0, self.cursor - 1)
+    def process_events(self, height):
+        key = self.stdscr.getch()
+        if self.state in (ZViewState.DEFAULT_VIEW, ZViewState.HEAPS_VIEW):
+            max_table_size = len(
+                self.threads_data if self.state is ZViewState.DEFAULT_VIEW else self.heaps_data
+            )
+            match key:
+                case curses.KEY_DOWN:
+                    self.cursor[self.state] = min(max_table_size - 1, self.cursor[self.state] + 1)
+                    if self.cursor[self.state] >= self.top_line + (height - 6):
+                        self.top_line = self.cursor - (height - 7)
+                case curses.KEY_UP:
+                    self.cursor[self.state] = max(0, self.cursor[self.state] - 1)
+                    if self.cursor[self.state] < self.top_line:
+                        self.top_line = self.cursor[self.state]
+
+        match key:
             case curses.KEY_ENTER | SpecialCode.NEWLINE | SpecialCode.RETURN:
                 match self.state:
                     case ZViewState.DEFAULT_VIEW:
                         self.state = ZViewState.THREAD_DETAIL
 
-                        self.detailing_thread = self.threads_data[self.cursor].name
+                        self.detailing_thread = self.threads_data[
+                            self.cursor[ZViewState.DEFAULT_VIEW]
+                        ].name
                         self.scraper.thread_pool = [self.scraper.all_threads[self.detailing_thread]]
-                        self.cursor = 0
+                        self.purge_queue()
                     case ZViewState.THREAD_DETAIL:
                         self.state = ZViewState.DEFAULT_VIEW
+
                         self.scraper.thread_pool = list(self.scraper.all_threads.values())
+                        self.purge_queue()
                     case _:
-                        self.scraper.thread_pool = []
                         pass
             case SpecialCode.SORT:
-                if self.state is not ZViewState.DEFAULT_VIEW:
+                if self.state not in (ZViewState.DEFAULT_VIEW, ZViewState.HEAPS_VIEW):
                     pass
 
-                self.current_sort = (self.current_sort + 1) % len(self.sorting_options)
-                self.sort_by = self.sorting_options[self.current_sort]
+                self.current_sort[self.state] = (self.current_sort[self.state] + 1) % len(
+                    self.sort_keys[self.state]
+                )
             case SpecialCode.INVERSE:
-                if self.state is not ZViewState.DEFAULT_VIEW:
+                if self.state not in (ZViewState.DEFAULT_VIEW, ZViewState.HEAPS_VIEW):
                     pass
 
                 self.invert_sorting = not self.invert_sorting
             case SpecialCode.HEAPS:
                 if not self.scraper.has_heaps:
-                    pass
-                elif self.state is ZViewState.HEAPS_DETAIL:
+                    return
+
+                if self.state is ZViewState.HEAPS_VIEW:
+                    self.scraper.reset_thread_pool()
                     self.state = ZViewState.DEFAULT_VIEW
                 elif self.state is ZViewState.DEFAULT_VIEW:
-                    self.state = ZViewState.HEAPS_DETAIL
+                    self.scraper.thread_pool = []
+                    self.state = ZViewState.HEAPS_VIEW
+
+                self.purge_queue()
             case SpecialCode.QUIT:
                 self.running = False
             case _:
-                return False
+                return
 
-        return True
+        return
 
     def process_data(self, data: dict[str, list]):
         if data.get("error", False):
@@ -661,24 +704,16 @@ class ZView:
             threads_data: list[ThreadInfo] = data.get("threads", [])
             heaps_data: list[HeapInfo] = data.get("heaps", [])
 
-            key_func = self.sort_keys.get(self._sort_by, self.sort_keys["name"])
-
-            sorted_threads = sorted(
-                threads_data,
-                key=key_func,
-                reverse=self._invert_sorting,
-            )
-
             if len(threads_data):
                 idle_thread = next(
-                    (t for t in sorted_threads if t.address == self.scraper.idle_threads_address),
+                    (t for t in threads_data if t.address == self.scraper.idle_threads_address),
                     None,
                 )
                 if idle_thread:
                     self.idle_thread = idle_thread
-                    sorted_threads.remove(idle_thread)
-                self.threads_data = sorted_threads
-            if heaps_data is not None:
+                    threads_data.remove(idle_thread)
+                self.threads_data = threads_data
+            if len(heaps_data):
                 self.heaps_data = heaps_data
 
     def run(self, inspection_period):
@@ -697,16 +732,17 @@ class ZView:
 
         self.scraper.reset_thread_pool()
         self.scraper.start_polling_thread(self.data_queue, self.stop_event, inspection_period)
-        self.current_sort = 0
 
         while self.running:
             with contextlib.suppress(queue.Empty):
                 data = self.data_queue.get_nowait()
                 self.process_data(data)
 
-            self.process_events()
+            h, w = self.stdscr.getmaxyx()
 
-            self.draw_tui()
+            self.draw_tui(h, w)
+
+            self.process_events(h)
 
             time.sleep(0.01)
 
