@@ -102,9 +102,9 @@ class AbstractScraper:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type:
-            with open("zview.log", "w") as log:
-                log.write(f"{exc_type}\n{exc_val}\n{exc_tb}")
+        del exc_type
+        del exc_val
+        del exc_tb
 
         self.disconnect()
 
@@ -332,7 +332,7 @@ class ZScraper:
             )
             self._cpu_usage_address = self._kernel_base_address + self._offsets["kernel"]["usage"]
             self.init_cpu_cycles = self._m_scraper.read64(self._cpu_usage_address)[0]
-            self.last_cpu_delta = 1
+            self.last_cpu_delta = self.init_cpu_cycles
             self.last_cpu_cycles = self.init_cpu_cycles
             self.last_thread_cycles = {}
         except LookupError:
@@ -382,9 +382,9 @@ class ZScraper:
         self._m_scraper.connect()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type:
-            with open("zview.log", "w") as log:
-                log.write(f"{exc_type}\n{exc_val}\n{exc_tb}\n")
+        del exc_type
+        del exc_val
+        del exc_tb
 
         self._m_scraper.disconnect()
 
@@ -430,6 +430,7 @@ class ZScraper:
         name_word_idx = self._offsets["k_thread"]["name"] // 4 if self.has_names else 0
         stack_size_word_idx = self._offsets["thread_info"]["stack_size"] // 4
 
+        self.all_threads.clear()
         for _ in range(self._MAX_THREADS):
             if thread_ptr == 0:
                 break
@@ -446,7 +447,7 @@ class ZScraper:
             else:
                 thread_name = f"thread @ 0x{thread_ptr:X}"
 
-            self._all_threads_info[thread_name] = ThreadInfo(
+            self.all_threads[thread_name] = ThreadInfo(
                 thread_ptr,
                 thread_struct_words[stack_start_word_idx],
                 thread_struct_words[stack_size_word_idx],
@@ -455,6 +456,9 @@ class ZScraper:
             )
 
             thread_ptr = thread_struct_words[next_ptr_word_idx]
+
+    def reset_thread_pool(self):
+        self.thread_pool = list(self.all_threads.values())
 
     def start_polling_thread(
         self,
@@ -467,12 +471,6 @@ class ZScraper:
         """
         if self._polling_thread is not None:
             data_queue.put({"error": "Already started..."})
-            return
-
-        try:
-            self.update_available_threads()
-        except RuntimeError as e:
-            data_queue.put({"error": f"{e}"})
             return
 
         self._polling_thread = threading.Thread(
@@ -492,7 +490,9 @@ class ZScraper:
         if self._polling_thread.is_alive():
             self._polling_thread.join(timeout=1.0)
             if self._polling_thread.is_alive():
-                print("Warning: Polling thread did not terminate gracefully.")
+                print("Polling thread did not terminate gracefully.")
+
+        self._polling_thread = None
 
     def _poll_thread_worker(
         self,
@@ -537,6 +537,7 @@ class ZScraper:
                 cpu_cycles_delta = -1
 
             if self.thread_pool is None:
+                data_queue.put({"error": "No threads available."})
                 return
 
             for thread_info in self.thread_pool:
@@ -587,7 +588,7 @@ class ZScraper:
                 else:
                     thread_info.runtime = ThreadRuntime(cpu_percent, is_active, watermark)
 
-                data_queue.put({"threads": self.thread_pool})
+            data_queue.put({"threads": self.thread_pool})
 
             if self.has_heaps:
                 heap_info = []
@@ -618,6 +619,6 @@ class ZScraper:
                             )
                         )
 
-                        data_queue.put({"heaps": heap_info})
+                data_queue.put({"heaps": heap_info})
 
             time.sleep(inspection_period)
