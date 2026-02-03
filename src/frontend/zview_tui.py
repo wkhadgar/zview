@@ -62,6 +62,7 @@ class ZView:
         self.status_message: str = ""
         self.data_queue = queue.Queue()
         self.stop_event = threading.Event()
+        self.update_count = 0
 
         self.state: ZViewState = ZViewState.DEFAULT_VIEW
         self.ui: dict[ZViewState, ZViewTUIScheme] = {}
@@ -700,7 +701,8 @@ class ZView:
         if data.get("error", False):
             self.status_message = f"Error: {data['error']}"
         else:
-            self.status_message = "Running..."
+            self.status_message = f"Running{'.' * (self.update_count % 4)}"
+            self.update_count += 1
             threads_data: list[ThreadInfo] = data.get("threads", [])
             heaps_data: list[HeapInfo] = data.get("heaps", [])
 

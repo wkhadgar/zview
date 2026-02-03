@@ -30,7 +30,7 @@ Install ZView in your Python virtual environment:
 
 ```shell
 # From the root of the zview repository
-pip install -e .
+pip install .
 ```
 
 Or directly through pip:
