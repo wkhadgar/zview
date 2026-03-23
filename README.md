@@ -64,9 +64,10 @@ This can be achieved by adding this snippet to your west manifest:
 manifest:
   projects:
     - name: zview
-      path: modules/tools/zview
-      revision: main
       url: https://github.com/wkhadgar/zview
+      revision: main
+      path: modules/tools/zview
+      west-commands: scripts/west-commands.yml
 ```
 
 
