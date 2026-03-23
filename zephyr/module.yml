@@ -1,1 +1,6 @@
 name: zview
+
+package-managers:
+  pip:
+    requirement-files:
+      - scripts/requirements.txt

@@ -17,7 +17,8 @@ class ZViewCommand(WestCommand):
         super().__init__(
             'zview',
             'Zephyr RTOS system-wide runtime visualizer via SWD probe',
-            'Detailed description of what ZView does.',
+            'Take a broader look on your Zephyr application with a non-heavy, small footprint, '
+            'Kconfig-only thread stats analyser.',
         )
 
         self.available_runners = ["jlink", "pyocd"]

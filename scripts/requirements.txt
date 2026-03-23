@@ -1,0 +1,4 @@
+PyYAML
+pyelftools
+pyocd
+pylink-square
