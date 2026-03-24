@@ -2,6 +2,7 @@ import argparse
 import curses
 
 from backend.z_scraper import (
+    GDBScraper,
     JLinkScraper,
     PyOCDScraper,
     ZScraper,
@@ -10,7 +11,7 @@ from frontend.zview_tui import tui_run
 
 
 def main():
-    available_runners = ["jlink", "pyocd"]
+    available_runners = ["gdb", "jlink", "pyocd"]
 
     arg_parser = argparse.ArgumentParser(
         description="ZView - A real-time thread viewer for Zephyr RTOS."
@@ -43,9 +44,15 @@ def main():
 
     args = arg_parser.parse_args()
 
-    scrapper_cls = PyOCDScraper if args.runner != "jlink" else JLinkScraper
+    scraper_map = {
+        "gdb": GDBScraper,
+        "jlink": JLinkScraper,
+        "pyocd": PyOCDScraper,
+    }
 
-    with scrapper_cls(args.runner_target) as meta_scraper:
+    scraper_cls = scraper_map.get(args.runner, PyOCDScraper)
+
+    with scraper_cls(args.runner_target) as meta_scraper:
         z_scraper = ZScraper(meta_scraper, args.elf_file)
         if not z_scraper.has_names:
             print("NO thread names available (CONFIG_THREAD_NAME=n)")

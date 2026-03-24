@@ -8,7 +8,7 @@ from west.commands import WestCommand
 _zview_base = Path(__file__).parent.parent.parent
 sys.path.append(str(_zview_base / "src"))
 
-from backend.z_scraper import JLinkScraper, PyOCDScraper, RunnerConfig, ZScraper
+from backend.z_scraper import GDBScraper, JLinkScraper, PyOCDScraper, RunnerConfig, ZScraper
 from frontend.zview_tui import tui_run
 
 
@@ -21,7 +21,7 @@ class ZViewCommand(WestCommand):
             'Kconfig-only thread stats analyser.',
         )
 
-        self.available_runners = ["jlink", "pyocd"]
+        self.available_runners = ["gdb", "jlink", "pyocd"]
 
     def do_add_parser(self, parser_adder):
         parser = parser_adder.add_parser(self.name, help=self.help, description=self.description)
@@ -90,9 +90,16 @@ class ZViewCommand(WestCommand):
                     f"the following: {', '.join(self.available_runners)}"
                 )
                 log.wrn("Trying to continue with PyOCD as runner...")
+                runner, target_mcu = runner_config.get_config(preferred_runner="pyocd")
 
         try:
-            scraper_cls = PyOCDScraper if runner != "jlink" else JLinkScraper
+            scraper_map = {
+                "gdb": GDBScraper,
+                "jlink": JLinkScraper,
+                "pyocd": PyOCDScraper,
+            }
+
+            scraper_cls = scraper_map.get(runner, PyOCDScraper)
 
             with scraper_cls(target_mcu) as meta_scraper:
                 z_scraper = ZScraper(meta_scraper, elf_path)

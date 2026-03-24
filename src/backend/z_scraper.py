@@ -3,7 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import contextlib
 import queue
+import socket
+import struct
 import threading
 import time
 from collections.abc import Sequence
@@ -120,6 +123,12 @@ class AbstractScraper:
         self._is_connected = False
         print("Disconnect was called")
 
+    def begin_batch(self):
+        pass
+
+    def end_batch(self):
+        pass
+
     def read8(self, at: int, amount: int = 1) -> Sequence[int]:
         print(f"Read {amount} bytes from {hex(at)}")
         return []
@@ -138,11 +147,11 @@ class AbstractScraper:
         stack_size: int,
         unused_pattern: int = 0xAA_AA_AA_AA,
         *,
-        id,
+        thread_id,
     ) -> int:
         """
-        Reads a stack memory and scans for the 0xAA fill pattern
-        to determine the current stack watermark (lowest point of stack usage).
+        Reads a stack memory and scans for the unused_pattern fill pattern
+        to determine the current stack watermark (highest point of stack usage).
 
         Args:
             :param stack_start: The starting address of the thread's stack.
@@ -151,13 +160,13 @@ class AbstractScraper:
             :param id: Unique identification for the given thread.
 
         Returns:
-            The calculated stack watermark in bytes, indicating the minimum
-            amount of stack space that has not been used.
+            The calculated stack watermark in bytes, indicating the maximum
+            amount of stack space that has been used.
         """
         if stack_size == 0:
             return 0
 
-        cache_watermark = self.watermark_cache.get(id, 0)
+        cache_watermark = self.watermark_cache.get(thread_id, 0)
         watermark = stack_size - cache_watermark
 
         stack_words = self.read32(stack_start, (stack_size // 4) - (cache_watermark // 4))
@@ -166,14 +175,227 @@ class AbstractScraper:
             if word == unused_pattern:
                 watermark -= 4
             else:
-                while word:
-                    word >>= 8
-                    watermark -= 1
                 break
 
-        self.watermark_cache[id] = watermark + cache_watermark
+        self.watermark_cache[thread_id] = watermark + cache_watermark
 
-        return self.watermark_cache[id]
+        return self.watermark_cache[thread_id]
+
+
+class GDBScraper(AbstractScraper):
+    def __init__(self, host: str = 'localhost:1234', timeout: float = 3.0):
+        super().__init__("GDB Server")
+        try:
+            host, port = host.strip().split(":")
+        except ValueError:
+            raise ValueError(
+                "GDB target must be in the format 'host:port'. e.g.: 'localhost:1234'"
+            ) from None
+
+        self.host: str = host
+        self.port: int = int(port)
+        self.timeout: float = timeout
+        self.sock: socket.SocketType | None = None
+
+    def begin_batch(self):
+        self._halt()
+
+    def end_batch(self):
+        self._resume()
+
+    def connect(self):
+        """
+        Connect to a GDB RSP stub and perform the initial handshake.
+
+        Switches to no-ack mode for faster transfers. Target is left running;
+        halt/resume is managed per read in _read_mem_raw.
+        """
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.settimeout(self.timeout)
+            self.sock.connect((self.host, self.port))
+        except (ConnectionRefusedError, ConnectionResetError) as e:
+            raise ConnectionError(
+                f"Could not connect to {self.host}:{self.port}. Is QEMU running with -s?"
+            ) from e
+
+        self._drain()
+
+        self.sock.sendall(b'+')
+        self._send_packet(b'QStartNoAckMode')
+
+        self._is_connected = True
+        print(f"Connected to GDB server at {self.host}:{self.port}")
+
+    def disconnect(self):
+        if self.sock is None:
+            return
+        with contextlib.suppress(Exception):
+            self._send_packet(b'D')
+
+        self.sock.close()
+        self.sock = None
+        self._is_connected = False
+
+    def _drain(self):
+        """Discard buffered bytes before the RSP handshake (e.g. QEMU connection banners)."""
+        if self.sock is None:
+            return
+        self.sock.settimeout(0.2)
+        with contextlib.suppress(socket.timeout, BlockingIOError):
+            while self.sock.recv(4096):
+                pass
+
+        self.sock.settimeout(self.timeout)
+
+    def _halt(self):
+        """
+        Interrupt the target via the out-of-band SIGINT byte (0x03).
+
+        Sent raw outside RSP packet framing per the GDB remote serial protocol
+        spec. Consumes the resulting stop-reply (T05/S05); tolerates stubs that
+        omit it.
+        """
+        if self.sock is None:
+            return
+
+        self.sock.sendall(b'\x03')
+        with contextlib.suppress(socket.timeout):
+            self._read_response()
+
+    def _resume(self):
+        """Resume target execution via the RSP 'c' command."""
+        if self.sock is None:
+            return
+        self._send_packet(b'c')
+
+    def _send_packet(self, data: bytes):
+        """Transmit one RSP packet: ``$<data>#<checksum>``."""
+        if self.sock is None:
+            raise ConnectionError("No GDB server connected.")
+        checksum = sum(data) % 256
+        self.sock.sendall(b'$' + data + f'#{checksum:02x}'.encode())
+
+    def _read_response(self) -> bytes:
+        """
+        Receive one RSP response packet and return its payload.
+
+        Strips leading ``+`` ack bytes and the ``$…#cc`` framing. Raises
+        ``socket.timeout`` on receive deadline — callers that treat a missing
+        reply as non-fatal should catch it explicitly.
+        """
+        if self.sock is None:
+            raise ConnectionError("No GDB server connected.")
+
+        buffer = b''
+        while True:
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("GDB server closed the connection.")
+            buffer += chunk
+
+            while buffer.startswith(b'+'):
+                buffer = buffer[1:]
+
+            if b'$' not in buffer:
+                continue
+
+            start = buffer.index(b'$')
+            if b'#' not in buffer[start:]:
+                continue
+            end = buffer.index(b'#', start)
+            if len(buffer) < end + 3:
+                continue
+
+            return buffer[start + 1 : end]
+
+    def _read_mem_raw(self, addr: int, length: int) -> bytes:
+        """
+        Execute ``m<addr>,<length>`` and return the decoded byte string.
+
+        Returns a zero-padded buffer of exactly ``length`` bytes on any error
+        or short reply, so callers never receive an undersized result.
+        """
+        if self.sock is None:
+            raise ConnectionError("No GDB server connected.")
+
+        self._send_packet(f'm{addr:x},{length:x}'.encode())
+
+        try:
+            resp = self._read_response()
+        except TimeoutError:
+            print(f"Timeout reading {length}B at {hex(addr)}.")
+            return b'\x00' * length
+
+        if resp.startswith(b'E'):
+            print(f"GDB error at {hex(addr)}: {resp.decode()}")
+            return b'\x00' * length
+
+        try:
+            raw = bytes.fromhex(resp.decode('ascii'))
+        except ValueError:
+            print(f"Malformed hex response at {hex(addr)}: {resp!r}")
+            return b'\x00' * length
+
+        if len(raw) < length:
+            raw += b'\x00' * (length - len(raw))
+
+        return raw[:length]
+
+    def read_bytes(self, at: int, amount: int = 1) -> bytes:
+        return self._read_mem_raw(at, amount)
+
+    def read8(self, at: int, amount: int = 1) -> Sequence[int]:
+        return list(self._read_mem_raw(at, amount))
+
+    def read16(self, at: int, amount: int = 1) -> Sequence[int]:
+        return struct.unpack(f'<{amount}H', self._read_mem_raw(at, amount * 2))
+
+    def read32(self, at: int, amount: int = 1) -> Sequence[int]:
+        return struct.unpack(f'<{amount}I', self._read_mem_raw(at, amount * 4))
+
+    def read64(self, at: int, amount: int = 1) -> Sequence[int]:
+        return struct.unpack(f'<{amount}Q', self._read_mem_raw(at, amount * 8))
+
+
+class JLinkScraper(AbstractScraper):
+    def __init__(self, target_mcu: str | None):
+        super().__init__(target_mcu)
+        self.probe = JLink()
+
+    def connect(self):
+        if self._is_connected:
+            return
+
+        try:
+            self.probe.open()
+        except JLinkException as e:
+            raise Exception("\nUnable to connect to JLink") from e
+
+        self.probe.set_tif(JLinkInterfaces.SWD)
+
+        try:
+            self.probe.connect(self._target_mcu)
+        except JLinkException as e:
+            self.probe.close()
+            raise Exception(f"\nUnable to connect with [{self._target_mcu}]") from e
+        self._is_connected = True
+
+    def disconnect(self):
+        if not self._is_connected:
+            return
+
+        self.probe.close()
+        self._is_connected = False
+
+    def read8(self, at: int, amount: int = 1) -> Sequence[int]:
+        return self.probe.memory_read8(at, amount)
+
+    def read32(self, at: int, amount: int = 1) -> Sequence[int]:
+        return self.probe.memory_read32(at, amount)
+
+    def read64(self, at: int, amount: int = 1) -> Sequence[int]:
+        return self.probe.memory_read64(at, amount)
 
 
 class PyOCDScraper(AbstractScraper):
@@ -185,6 +407,9 @@ class PyOCDScraper(AbstractScraper):
         self.target: Target | None = None
 
     def connect(self):
+        if self._is_connected:
+            return
+
         if self.session is None:
             raise Exception("Unable to create a PyOCD session.")
 
@@ -197,7 +422,7 @@ class PyOCDScraper(AbstractScraper):
         self._is_connected = True
 
     def disconnect(self):
-        if self.session is None:
+        if self.session is None or not self._is_connected:
             return
 
         self.session.close()
@@ -222,40 +447,6 @@ class PyOCDScraper(AbstractScraper):
             dwords.append((words[i + 1] << 32) | words[i])
 
         return dwords
-
-
-class JLinkScraper(AbstractScraper):
-    def __init__(self, target_mcu: str | None):
-        super().__init__(target_mcu)
-        self.probe = JLink()
-
-    def connect(self):
-        try:
-            self.probe.open()
-        except JLinkException as e:
-            raise Exception("\nUnable to connect to JLink") from e
-
-        self.probe.set_tif(JLinkInterfaces.SWD)
-
-        try:
-            self.probe.connect(self._target_mcu)
-        except JLinkException as e:
-            self.probe.close()
-            raise Exception(f"\nUnable to connect with [{self._target_mcu}]") from e
-        self._is_connected = True
-
-    def disconnect(self):
-        self.probe.close()
-        self._is_connected = False
-
-    def read8(self, at: int, amount: int = 1) -> Sequence[int]:
-        return self.probe.memory_read8(at, amount)
-
-    def read32(self, at: int, amount: int = 1) -> Sequence[int]:
-        return self.probe.memory_read32(at, amount)
-
-    def read64(self, at: int, amount: int = 1) -> Sequence[int]:
-        return self.probe.memory_read64(at, amount)
 
 
 class ZScraper:
@@ -331,7 +522,9 @@ class ZScraper:
                 }
             )
             self._cpu_usage_address = self._kernel_base_address + self._offsets["kernel"]["usage"]
+            self._m_scraper.begin_batch()
             self.init_cpu_cycles = self._m_scraper.read64(self._cpu_usage_address)[0]
+            self._m_scraper.end_batch()
             self.last_cpu_delta = self.init_cpu_cycles
             self.last_cpu_cycles = self.init_cpu_cycles
             self.last_thread_cycles = {}
@@ -379,14 +572,10 @@ class ZScraper:
             self._k_heap_addresses[heap] = self._elf_inspector.get_symbol_info(heap, "address")
 
     def __enter__(self):
-        self._m_scraper.connect()
+        self._m_scraper.__enter__()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        del exc_type
-        del exc_val
-        del exc_tb
-
-        self._m_scraper.disconnect()
+        self._m_scraper.__exit__(exc_type, exc_val, exc_tb)
 
     @property
     def all_threads(self):
@@ -417,10 +606,12 @@ class ZScraper:
             if not self._m_scraper.is_connected:
                 self._m_scraper.connect()
 
+            self._m_scraper.begin_batch()
             thread_ptr = (
                 self._m_scraper.read32(self._threads_address)[0] if self._threads_address else 0
             )
         except Exception as e:
+            self._m_scraper.end_batch()
             raise RuntimeError("Unable to read kernel thread list.") from e
 
         stack_struct_size = self._elf_inspector.get_struct_size("k_thread")
@@ -456,6 +647,8 @@ class ZScraper:
             )
 
             thread_ptr = thread_struct_words[next_ptr_word_idx]
+
+        self._m_scraper.end_batch()
 
     def reset_thread_pool(self):
         self.thread_pool = list(self.all_threads.values())
@@ -520,6 +713,8 @@ class ZScraper:
             return
 
         while not stop_event.is_set():
+            self._m_scraper.begin_batch()
+
             if self.has_usage:
                 try:
                     current_cpu_cycles = self._m_scraper.read32(self._cpu_usage_address)[0]
@@ -575,7 +770,7 @@ class ZScraper:
                     watermark = self._m_scraper.calculate_dynamic_watermark(
                         thread_info.stack_start,
                         thread_info.stack_size,
-                        id=thread_info.address,
+                        thread_id=thread_info.address,
                     )
                 except Exception as e:
                     data_queue.put({"error": f"Error polling thread {thread_info}: {e}"})
@@ -621,4 +816,5 @@ class ZScraper:
 
                 data_queue.put({"heaps": heap_info})
 
+            self._m_scraper.end_batch()
             time.sleep(inspection_period)
