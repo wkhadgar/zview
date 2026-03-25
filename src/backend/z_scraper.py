@@ -403,15 +403,16 @@ class JLinkScraper(AbstractScraper):
 class PyOCDScraper(AbstractScraper):
     def __init__(self, target_mcu: str | None):
         super().__init__(target_mcu)
-        self.session: Session | None = ConnectHelper.session_with_chosen_probe(
-            target_override=self._target_mcu, connect_mode="attach"
-        )
+        self.session: Session | None = None
         self.target: Target | None = None
 
     def connect(self):
         if self._is_connected:
             return
 
+        self.session = ConnectHelper.session_with_chosen_probe(
+            target_override=self._target_mcu, connect_mode="attach"
+        )
         if self.session is None:
             raise Exception("Unable to create a PyOCD session.")
 
