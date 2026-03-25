@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
+from typing import Literal
 
 from pylink import JLink, JLinkException, JLinkInterfaces
 from pyocd.core.helpers import ConnectHelper
@@ -98,6 +99,7 @@ class AbstractScraper:
         self._target_mcu: str | None = target_mcu
         self._is_connected: bool = False
         self.watermark_cache = {}
+        self.endianess: Literal["<", ">"] = "<"  # default to little endian
 
     def __enter__(self):
         self.connect()
@@ -349,13 +351,13 @@ class GDBScraper(AbstractScraper):
         return list(self._read_mem_raw(at, amount))
 
     def read16(self, at: int, amount: int = 1) -> Sequence[int]:
-        return struct.unpack(f'<{amount}H', self._read_mem_raw(at, amount * 2))
+        return struct.unpack(f'{self.endianess}{amount}H', self._read_mem_raw(at, amount * 2))
 
     def read32(self, at: int, amount: int = 1) -> Sequence[int]:
-        return struct.unpack(f'<{amount}I', self._read_mem_raw(at, amount * 4))
+        return struct.unpack(f'{self.endianess}{amount}I', self._read_mem_raw(at, amount * 4))
 
     def read64(self, at: int, amount: int = 1) -> Sequence[int]:
-        return struct.unpack(f'<{amount}Q', self._read_mem_raw(at, amount * 8))
+        return struct.unpack(f'{self.endianess}{amount}Q', self._read_mem_raw(at, amount * 8))
 
 
 class JLinkScraper(AbstractScraper):
@@ -401,15 +403,16 @@ class JLinkScraper(AbstractScraper):
 class PyOCDScraper(AbstractScraper):
     def __init__(self, target_mcu: str | None):
         super().__init__(target_mcu)
-        self.session: Session | None = ConnectHelper.session_with_chosen_probe(
-            target_override=self._target_mcu, connect_mode="attach"
-        )
+        self.session: Session | None = None
         self.target: Target | None = None
 
     def connect(self):
         if self._is_connected:
             return
 
+        self.session = ConnectHelper.session_with_chosen_probe(
+            target_override=self._target_mcu, connect_mode="attach"
+        )
         if self.session is None:
             raise Exception("Unable to create a PyOCD session.")
 
@@ -444,7 +447,10 @@ class PyOCDScraper(AbstractScraper):
         words = self.read32(at, amount * 2)
         dwords = []
         for i in range(0, len(words), 2):
-            dwords.append((words[i + 1] << 32) | words[i])
+            if self.endianess == "<":
+                dwords.append((words[i + 1] << 32) | words[i])
+            else:
+                dwords.append((words[i] << 32) | words[i + 1])
 
         return dwords
 
@@ -458,7 +464,11 @@ class ZScraper:
     ):
         self._all_threads_info: dict[str, ThreadInfo] = {}
         self._elf_inspector: ElfInspector = ElfInspector(elf_path)
+        self._endianess: Literal["little", "big"] = (
+            "little" if self._elf_inspector.elf.little_endian else "big"
+        )
         self._m_scraper: AbstractScraper = meta_scraper
+        self._m_scraper.endianess = "<" if self._endianess == "little" else ">"
         self._polling_thread: threading.Thread | None = None
         self._thread_pool: list[ThreadInfo] | None = None
         self._stop_event: Event | None = None
@@ -633,7 +643,7 @@ class ZScraper:
 
             if self.has_names:
                 words = thread_struct_words[name_word_idx:]
-                full_bytes = b''.join(w.to_bytes(4, 'little') for w in words)
+                full_bytes = b''.join(w.to_bytes(4, self._endianess) for w in words)
                 thread_name = full_bytes.split(b'\0', 1)[0].decode(errors="ignore")
             else:
                 thread_name = f"thread @ 0x{thread_ptr:X}"
