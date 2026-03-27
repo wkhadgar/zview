@@ -1,6 +1,6 @@
 [project]
 name = "zview"
-version = "0.5.4"
+version = "0.5.5"
 authors = [{ name = "Paulo Santos", email = "pauloxrms@gmail.com" }]
 description = "ZView, a Zephyr RTOS runtime visualizer"
 dependencies = ["PyYAML", "pyelftools", "pyocd", "pylink-square"]
