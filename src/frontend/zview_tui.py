@@ -27,6 +27,7 @@ class ZViewState(enum.Enum):
     DEFAULT_VIEW = 1
     THREAD_DETAIL = 2
     HEAPS_VIEW = 3
+    HEAPS_DETAIL = 4
 
 
 class SpecialCode:
@@ -177,6 +178,7 @@ class ZView:
         self.ui[ZViewState.DEFAULT_VIEW] = thread_scheme
         self.ui[ZViewState.THREAD_DETAIL] = thread_scheme
         self.ui[ZViewState.HEAPS_VIEW] = heap_scheme
+        self.ui[ZViewState.HEAPS_DETAIL] = heap_scheme
 
     def _draw_graph(
         self,
@@ -266,14 +268,77 @@ class ZView:
 
         self.stdscr.attroff(bar_color_attr)
 
+    def get_sparsity_map(self, chunks: list[dict], width: int, height: int) -> list[str]:
+        """
+        Compresses a linear map of physical heap chunks into a 2D terminal grid.
+
+        Args:
+            chunks: List of dicts, e.g., [{"used": True, "size": 32}, {"used": False, "size": 128}]
+            width: The exact integer number of columns available for rendering.
+            height: The exact integer number of rows available for rendering.
+
+        Returns:
+            A list of strings, where each string is exactly `width` characters long.
+        """
+        total_chars = width * height
+        if not chunks or total_chars <= 0:
+            return []
+
+        total_bytes = sum(chunk["size"] for chunk in chunks)
+        if total_bytes == 0:
+            return []
+
+        bytes_per_char = total_bytes / total_chars
+
+        output = []
+        chunk_idx = 0
+
+        chunk_rem = float(chunks[0]["size"])
+        chunk_is_used = chunks[0]["used"]
+
+        for _ in range(total_chars):
+            bucket_used = 0.0
+            bucket_rem = bytes_per_char
+
+            while bucket_rem > 0 and chunk_idx < len(chunks):
+                take = min(chunk_rem, bucket_rem)
+
+                if chunk_is_used:
+                    bucket_used += take
+
+                chunk_rem -= take
+                bucket_rem -= take
+
+                if chunk_rem <= 0:
+                    chunk_idx += 1
+                    if chunk_idx < len(chunks):
+                        chunk_rem = float(chunks[chunk_idx]["size"])
+                        chunk_is_used = chunks[chunk_idx]["used"]
+
+            ratio = bucket_used / bytes_per_char
+
+            if ratio <= 0.05:
+                output.append(" ")
+            elif ratio <= 0.05:
+                output.append("░")
+            elif ratio <= 0.45:
+                output.append("▒")
+            elif ratio <= 0.85:
+                output.append("▓")
+            else:
+                output.append("█")
+
+        return ["".join(output[i : i + width]) for i in range(0, len(output), width)]
+
     def _base_draw(self, height, width):
         self.stdscr.erase()
 
         header_text = "ZView - Zephyr RTOS Runtime Viewer"
         footer_text = {
-            ZViewState.DEFAULT_VIEW: "Quit: q | Sort: s | Invert: i ",
-            ZViewState.THREAD_DETAIL: "Quit: q ",
-            ZViewState.HEAPS_VIEW: "Quit: q | Threads: h ",
+            ZViewState.DEFAULT_VIEW: "Quit: q | Sort: s | Invert: i | Details: <Enter> ",
+            ZViewState.THREAD_DETAIL: "Quit: q | All threads: <Enter> ",
+            ZViewState.HEAPS_VIEW: "Quit: q | Threads: h | Details: <Enter> ",
+            ZViewState.HEAPS_DETAIL: "Quit: q | All heaps: <Enter> ",
         }
 
         if self.scraper.has_heaps:
@@ -576,6 +641,7 @@ class ZView:
             free_bytes_sum,
             allocated_bytes_sum,
             max_allocated_bytes_sum,
+            None,
         )
 
         self._draw_heap_info(2, all_heaps_info, False)
@@ -598,6 +664,36 @@ class ZView:
 
         self.stdscr.refresh()
 
+    def _draw_heaps_detail_view(self, height: int, width: int):
+        for heap in self.heaps_data:
+            if heap.address != self.scraper.extra_info_heap_address or not heap.chunks:
+                continue
+
+            self._draw_heap_info(2, heap, selected=False)
+
+            start_y = 4
+            start_x = 2
+
+            map_height = height - start_y - 4
+            map_width = width - start_x - 3
+
+            if map_height <= 0 or map_width <= 0:
+                break
+
+            sparsity_matrix = self.get_sparsity_map(heap.chunks, map_width, map_height)
+
+            horizontal_limit = "─" * (map_width)
+            self.stdscr.addstr(start_y - 1, start_x - 1, "┌" + horizontal_limit + "┐")
+            self.stdscr.addstr(start_y + map_height + 1, start_x - 1, "└" + horizontal_limit + "┘")
+            self.stdscr.addstr(start_y - 1, start_x + 1, f"Fragmentation Map ({heap.name})")
+            for i, row_str in enumerate(sparsity_matrix):
+                with contextlib.suppress(curses.error):
+                    self.stdscr.addstr(start_y + i, start_x, row_str)
+
+            break
+
+        self.stdscr.refresh()
+
     def draw_state(self, state: ZViewState, height: int, width: int):
         self._base_draw(height, width)
         match state:
@@ -607,6 +703,8 @@ class ZView:
                 self._draw_thread_detail_view(height, width)
             case ZViewState.HEAPS_VIEW:
                 self._draw_heaps_view(height, width)
+            case ZViewState.HEAPS_DETAIL:
+                self._draw_heaps_detail_view(height, width)
 
     def draw_terminal_size_warning(self, height: int, width: int):
         self.stdscr.erase()
@@ -663,6 +761,18 @@ class ZView:
                         self.state = ZViewState.DEFAULT_VIEW
 
                         self.scraper.thread_pool = list(self.scraper.all_threads.values())
+                        self.purge_queue()
+                    case ZViewState.HEAPS_VIEW:
+                        self.state = ZViewState.HEAPS_DETAIL
+
+                        self.scraper.extra_info_heap_address = self.heaps_data[
+                            self.cursor[ZViewState.HEAPS_VIEW]
+                        ].address
+                        self.purge_queue()
+                    case ZViewState.HEAPS_DETAIL:
+                        self.state = ZViewState.HEAPS_VIEW
+
+                        self.scraper.extra_info_heap_address = None
                         self.purge_queue()
                     case _:
                         pass
