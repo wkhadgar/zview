@@ -479,7 +479,7 @@ class ZScraper:
         self._all_threads_info: dict[str, ThreadInfo] = {}
         self._elf_inspector: ElfInspector = ElfInspector(elf_path)
         self._endianess: Literal["little", "big"] = (
-            "little" if self._elf_inspector.elf.little_endian else "big"
+            "little" if self._elf_inspector._little_endian else "big"
         )
         self._m_scraper: AbstractScraper = meta_scraper
         self._m_scraper.endianess = "<" if self._endianess == "little" else ">"
