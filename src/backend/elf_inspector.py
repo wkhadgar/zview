@@ -2,152 +2,145 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from collections import defaultdict
 from typing import Literal
 
-from elftools.dwarf.die import DIE
 from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import SymbolTableSection
 
 
 class ElfInspector:
     def __init__(self, elf_path: str):
-        self._symbol_cache: defaultdict[str, defaultdict[str, list[int]]] = defaultdict(defaultdict)
-        self._struct_member_offset_cache: defaultdict[str, defaultdict[str, int]] = defaultdict(
-            defaultdict
-        )
+        self._path = elf_path
 
-        self.file = self._open_elf_file(elf_path)
-        self.elf = ELFFile(self.file)
-        self.dwarf = self._get_dwarf_info()
+        self._symbols_address: dict[str, list[int]] = {}
+        self._symbols_size: dict[str, list[int]] = {}
+        self._struct_sizes: dict[str, int] = {}
+        self._struct_members: dict[str, dict[str, int]] = {}
+        self._struct_variables: dict[str, list[str]] = {}
 
-    @staticmethod
-    def _open_elf_file(path: str):
+        self._elfclass = 0
+        self._little_endian = True
+
+        print("Loading ELF. This may take a while...", end="", flush=True)
+        self._perform_single_pass_scan()
+        print(" OK.")
+
+    @property
+    def elf(self):
+        """Mock object to satisfy ZScraper's dependency on self.elf.little_endian."""
+
+        class MockElf:
+            little_endian = self._little_endian
+            elfclass = self._elfclass
+
+        return MockElf()
+
+    def _perform_single_pass_scan(self):
+        """
+        Executes a strictly O(N) sweep of the ELF and DWARF tree.
+        Extracts all necessary data into local dictionaries.
+        """
         try:
-            return open(path, "rb")
-        except FileNotFoundError as e:
-            raise FileNotFoundError(f"ELF file not found at '{path}'") from e
+            with open(self._path, "rb") as file:
+                elf = ELFFile(file)
+                self._little_endian = elf.little_endian
+                self._elfclass = elf.elfclass
 
-    def _get_dwarf_info(self):
-        if not self.elf.has_dwarf_info():
-            raise ValueError("ELF file lacks DWARF debug information.")
-        return self.elf.get_dwarf_info()
+                symtab = elf.get_section_by_name(".symtab")
+                if symtab and isinstance(symtab, SymbolTableSection):
+                    for sym in symtab.iter_symbols():
+                        name = sym.name
+                        if not name:
+                            continue
+                        self._symbols_address.setdefault(name, []).append(sym.entry["st_value"])
+                        self._symbols_size.setdefault(name, []).append(sym.entry["st_size"])
+
+                if not elf.has_dwarf_info():
+                    raise ValueError("ELF file lacks DWARF debug information.")
+
+                dwarf = elf.get_dwarf_info()
+                offset_to_struct = {}
+                pending_vars = []
+
+                for CU in dwarf.iter_CUs():
+                    cu_offset = CU.cu_offset
+                    for die in CU.iter_DIEs():
+                        if die.tag == "DW_TAG_structure_type":
+                            name_attr = die.attributes.get("DW_AT_name")
+                            if not name_attr:
+                                continue
+
+                            struct_name = name_attr.value.decode(errors="ignore")
+                            offset_to_struct[die.offset] = struct_name
+
+                            # Skip DWARF forward declarations that lack members
+                            if die.attributes.get("DW_AT_declaration"):
+                                continue
+
+                            size_attr = die.attributes.get("DW_AT_byte_size")
+                            if size_attr:
+                                self._struct_sizes[struct_name] = size_attr.value
+
+                            # Initialize the dictionary safely without overwriting existing members
+                            self._struct_members.setdefault(struct_name, {})
+
+                            for child in die.iter_children():
+                                if child.tag == "DW_TAG_member":
+                                    m_name_attr = child.attributes.get("DW_AT_name")
+                                    loc_attr = child.attributes.get("DW_AT_data_member_location")
+                                    if m_name_attr and loc_attr:
+                                        m_name = m_name_attr.value.decode(errors="ignore")
+                                        loc = (
+                                            loc_attr.value[1]
+                                            if loc_attr.form == "DW_FORM_exprloc"
+                                            else loc_attr.value
+                                        )
+                                        self._struct_members[struct_name][m_name] = loc
+
+                        elif die.tag == "DW_TAG_variable":
+                            name_attr = die.attributes.get("DW_AT_name")
+                            type_attr = die.attributes.get("DW_AT_type")
+                            if name_attr and type_attr:
+                                var_name = name_attr.value.decode(errors="ignore")
+                                # DWARF type references are relative to the CU start
+                                type_offset = type_attr.value + cu_offset
+                                pending_vars.append((var_name, type_offset))
+
+                for var_name, type_offset in pending_vars:
+                    if type_offset in offset_to_struct:
+                        struct_name = offset_to_struct[type_offset]
+                        self._struct_variables.setdefault(struct_name, []).append(var_name)
+        except FileNotFoundError as e:
+            raise FileNotFoundError(f"ELF file not found at '{self._path}'") from e
 
     def get_symbol_info(self, symbol_name: str, info: Literal["address", "size"]) -> list[int]:
-        if symbol_name in self._symbol_cache and info in self._symbol_cache[symbol_name]:
-            return self._symbol_cache[symbol_name][info]
-
-        symtab = self.elf.get_section_by_name(".symtab")
-        if symtab is None or not isinstance(symtab, SymbolTableSection):
-            raise LookupError("'.symtab' section not found.")
-
-        symbols = symtab.get_symbol_by_name(symbol_name)
-        if symbols is None:
-            raise LookupError(f"Symbol '{symbol_name}' not found.")
-        elif len(symbols) == 1:
-            match info:
-                case "address":
-                    value = [symbols[0].entry["st_value"]]
-                case "size":
-                    value = [symbols[0].entry["st_size"]]
+        if info == "address":
+            if symbol_name not in self._symbols_address:
+                raise LookupError(f"Symbol '{symbol_name}' address not found.")
+            return self._symbols_address[symbol_name]
+        elif info == "size":
+            if symbol_name not in self._symbols_size:
+                raise LookupError(f"Symbol '{symbol_name}' size not found.")
+            return self._symbols_size[symbol_name]
         else:
-            match info:
-                case "address":
-                    value = [symbol.entry["st_value"] for symbol in symbols]
-                case "size":
-                    value = [symbol.entry["st_size"] for symbol in symbols]
-
-        self._symbol_cache[symbol_name][info] = value
-
-        return value
+            raise ValueError(f"Invalid info type: {info}")
 
     def get_struct_member_offset(self, struct_name: str, member_name: str) -> int:
-        if (
-            struct_name in self._struct_member_offset_cache
-            and member_name in self._struct_member_offset_cache[struct_name]
-        ):
-            return self._struct_member_offset_cache[struct_name][member_name]
-
-        struct_dies = self._find_struct_dies(struct_name)
-        if struct_dies is None:
+        if struct_name not in self._struct_members:
             raise LookupError(f"Struct '{struct_name}' not found.")
-
-        member_dies = []
-        for struct_die in struct_dies:
-            member_dies.append(self._find_member_die(struct_die, member_name))
-        if len(member_dies) == 0 or not any(member_dies):
+        if member_name not in self._struct_members[struct_name]:
             raise LookupError(f"Member '{member_name}' not found in struct '{struct_name}'.")
-
-        member_dies[:] = [die for die in member_dies if die is not None]
-        member_die = member_dies[0]
-
-        offset = self._extract_member_offset(member_die)
-        self._struct_member_offset_cache[struct_name][member_name] = offset
-
-        return offset
+        return self._struct_members[struct_name][member_name]
 
     def get_struct_size(self, struct_name: str) -> int:
-        struct_dies = self._find_struct_dies(struct_name)
-        if struct_dies is None:
-            raise LookupError(f"Struct '{struct_name}' not found.")
-
-        if not struct_dies[0].attributes["DW_AT_byte_size"]:
-            raise ValueError(f"Struct '{struct_name}' has no size information.")
-
-        return struct_dies[0].attributes["DW_AT_byte_size"].value
-
-    def _find_struct_dies(self, struct_name: str) -> list[DIE] | None:
-        dies = []
-        for CU in self.dwarf.iter_CUs():
-            for die in CU.iter_DIEs():
-                if die.tag == "DW_TAG_structure_type":
-                    if struct_name == "*" and die.attributes.get("DW_AT_name"):
-                        dies.append(die)
-                    if (
-                        die.attributes.get("DW_AT_name")
-                        and die.attributes["DW_AT_name"].value.decode(errors="ignore")
-                        == struct_name
-                    ):
-                        dies.append(die)
-
-        return dies if len(dies) else None
+        if struct_name not in self._struct_sizes:
+            raise LookupError(f"Size info for struct '{struct_name}' not found.")
+        return self._struct_sizes[struct_name]
 
     def find_struct_variable_names(self, struct_name: str) -> list[str] | None:
-        struct_dies = self._find_struct_dies(struct_name)
-        if struct_dies is None:
-            raise LookupError(f"Struct '{struct_name}' not found.")
-
-        struct_variables = []
-        for CU_ in self.dwarf.iter_CUs():
-            for die_ in CU_.iter_DIEs():
-                if die_.tag == "DW_TAG_variable":
-                    die_type_offset = die_.attributes.get("DW_AT_type")
-                    if die_type_offset is None:
-                        continue
-                    if (die_type_offset.value + die_.cu.cu_offset) in [
-                        st_die.offset for st_die in struct_dies
-                    ]:
-                        die_name = die_.attributes.get("DW_AT_name").value
-                        struct_variables.append(die_name.decode("utf-8"))
-
-        found_variables = list(set(struct_variables))
-        return found_variables if len(found_variables) else None
-
-    @staticmethod
-    def _find_member_die(struct_die: DIE, member_name: str) -> DIE | None:
-        for child in struct_die.iter_children():
-            if child.tag == "DW_TAG_member" and child.attributes.get("DW_AT_name"):
-                child_member = child.attributes["DW_AT_name"].value.decode(errors="ignore")
-                if child_member == member_name:
-                    return child
-        return None
-
-    @staticmethod
-    def _extract_member_offset(die: DIE) -> int:
-        loc = die.attributes.get("DW_AT_data_member_location")
-        if loc is None:
-            raise ValueError("Member offset not specified.")
-        return loc.value[1] if loc.form == "DW_FORM_exprloc" else loc.value
+        if struct_name not in self._struct_variables:
+            return None
+        return list(set(self._struct_variables[struct_name]))
 
     def close(self):
-        self.file.close()
+        pass
