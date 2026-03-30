@@ -1,8 +1,10 @@
 # ZView, a Zephyr RTOS runtime visualizer
 
-Zephyr RTOS system-wide runtime visualizer via SWD probe!
+Real-time system observability for Zephyr RTOS, delivered over SWD.
 
-Take a broader look on your Zephyr application with a non-heavy, small footprint, Kconfig-only thread stats analyser.
+**Stop guessing your stack margins and heap health.** ZView provides a zero-footprint, high-fidelity visualization of your Zephyr application’s runtime, delivered over SWD with zero instrumentation.
+
+*No UART, no RTT, and no manual code changes. Just Kconfig and your probe.*
 
 > **Looking for the standalone pip installation?** See [README_pip.md](README_pip.md).
 
@@ -21,7 +23,7 @@ CONFIG_THREAD_STACK_INFO=y      # Required for thread metadata
 # Optional Features
 CONFIG_THREAD_NAME=y            # Enables thread name display
 CONFIG_THREAD_RUNTIME_STATS=y   # Enables CPU usage tracking
-CONFIG_SYS_HEAP_RUNTIME_STATS=y # Enables heap runtime stats
+CONFIG_SYS_HEAP_RUNTIME_STATS=y # Enables heap runtime stats and fragmentation map
 ```
 
 
@@ -109,9 +111,9 @@ west zview -e build/zephyr/zephyr.elf -r gdb -t localhost:1234
 
 ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default view:
 
-* **ENTER**: Track CPU usage for a specific thread (hit ENTER again to return).
+* **ENTER**: Get details for a specific thread/heap (hit ENTER again to return).
 * **S / I**: Sort the data and invert the sorting order.
-* **H**: Access the **Heap Runtime** visualization.
+* **H**: Access the **Heap Runtime** visualization (hit H again to return).
 
 [![TUI navigation](https://github.com/wkhadgar/zview/raw/main/docs/assets/default_view_1.png)](https://github.com/wkhadgar/zview/blob/main/docs/assets/default_view_1.png)
 
@@ -122,6 +124,8 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
 [![TUI heap navigation](https://github.com/wkhadgar/zview/raw/main/docs/assets/heaps_view_1.png)](https://github.com/wkhadgar/zview/blob/main/docs/assets/heaps_view_1.png)
 
 [![TUI heap navigation 2](https://github.com/wkhadgar/zview/raw/main/docs/assets/heaps_view_2.png)](https://github.com/wkhadgar/zview/blob/main/docs/assets/heaps_view_2.png)
+
+[![TUI heap fragmentation map](https://github.com/wkhadgar/zview/raw/main/docs/assets/heaps_detail_1.png)](https://github.com/wkhadgar/zview/blob/main/docs/assets/heaps_detail_1.png)
 
 ---
 
@@ -163,7 +167,7 @@ west zview -r gdb -t localhost:1234
 <summary><strong>How it works</strong></summary>
 <br>
 
-ZView achieves a minimal footprint by avoiding on-target processing or UART/Shell output. It utilizes the debug probe's ability to read memory via the APB bus without halting the CPU. By parsing the ELF file, ZView identifies kernel object locations and performs analysis of stack watermarks and CPU usage.
+ZView achieves a minimal footprint by avoiding on-target processing or UART/Shell output. It utilizes the debug probe's ability to read memory via the APB bus without halting the CPU. By parsing the ELF file, ZView identifies kernel object locations, performs analysis of stack watermarks, thread CPU usages, and executes a deterministic walk of physical heap chunks to map memory fragmentation.
 
 > **Note:** The `idle` thread is implicit and only expresses itself on the used CPU %, when available.
 
@@ -174,7 +178,6 @@ ZView achieves a minimal footprint by avoiding on-target processing or UART/Shel
 
 Based on community feedback, the following features are in development:
 
-* Heap fragmentation visualization.
 * Detailed thread metrics (e.g., context switch counts).
 
 Feel free to open an [issue](https://github.com/wkhadgar/zview/issues) if you feel like this has some potential!
