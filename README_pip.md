@@ -1,8 +1,10 @@
 # ZView, a Zephyr RTOS runtime visualizer
 
-Zephyr RTOS system-wide runtime visualizer via SWD probe!
+Real-time system observability for Zephyr RTOS, delivered over SWD.
 
-Take a broader look on your Zephyr application with a non-heavy, small footprint, Kconfig-only thread stats analyser.
+**Stop guessing your stack margins and heap health.** ZView provides a zero-footprint, high-fidelity visualization of your Zephyr application’s runtime, delivered over SWD with zero instrumentation.
+
+*No UART, no RTT, and no manual code changes. Just Kconfig and your probe.*
 
 > **This page covers the standalone pip installation.** If you are using ZView inside a west workspace (the most common setup), see the [main documentation](https://github.com/wkhadgar/zview/blob/main/README.md) instead.
 
@@ -20,7 +22,7 @@ CONFIG_THREAD_STACK_INFO=y      # Required for thread metadata
 # Optional Features
 CONFIG_THREAD_NAME=y            # Enables thread name display
 CONFIG_THREAD_RUNTIME_STATS=y   # Enables CPU usage tracking
-CONFIG_SYS_HEAP_RUNTIME_STATS=y # Enables heap runtime stats
+CONFIG_SYS_HEAP_RUNTIME_STATS=y # Enables heap runtime stats and fragmentation map
 ```
 
 

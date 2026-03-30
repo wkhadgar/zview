@@ -92,6 +92,7 @@ class HeapInfo:
     free_bytes: int
     allocated_bytes: int
     max_allocated_bytes: int
+    chunks: list[dict] | None
 
 
 class AbstractScraper:
@@ -130,6 +131,10 @@ class AbstractScraper:
 
     def end_batch(self):
         pass
+
+    def read_bytes(self, at: int, amount: int) -> bytes:
+        print(f"Read {amount} raw bytes from {hex(at)}")
+        return b""
 
     def read8(self, at: int, amount: int = 1) -> Sequence[int]:
         print(f"Read {amount} bytes from {hex(at)}")
@@ -390,6 +395,9 @@ class JLinkScraper(AbstractScraper):
         self.probe.close()
         self._is_connected = False
 
+    def read_bytes(self, at: int, amount: int) -> bytes:
+        return bytes(self.probe.memory_read8(at, amount))
+
     def read8(self, at: int, amount: int = 1) -> Sequence[int]:
         return self.probe.memory_read8(at, amount)
 
@@ -430,6 +438,12 @@ class PyOCDScraper(AbstractScraper):
 
         self.session.close()
         self._is_connected = False
+
+    def read_bytes(self, at: int, amount: int) -> bytes:
+        if self.target is None:
+            raise Exception("No target available.")
+
+        return bytes(self.target.read_memory_block8(at, amount))
 
     def read8(self, at: int, amount: int = 1) -> Sequence[int]:
         if self.target is None:
@@ -566,7 +580,9 @@ class ZScraper:
                 "max_allocated_bytes": self._elf_inspector.get_struct_member_offset(
                     "z_heap", "max_allocated_bytes"
                 ),
+                "end_chunk": self._elf_inspector.get_struct_member_offset("z_heap", "end_chunk"),
             }
+
         except LookupError:
             self.has_heaps = False
             return
@@ -578,6 +594,7 @@ class ZScraper:
             return
 
         self._k_heap_addresses = {}
+        self.extra_info_heap_address: int | None = None
         for heap in all_heaps:
             self._k_heap_addresses[heap] = self._elf_inspector.get_symbol_info(heap, "address")
 
@@ -659,6 +676,67 @@ class ZScraper:
             thread_ptr = thread_struct_words[next_ptr_word_idx]
 
         self._m_scraper.end_batch()
+
+    def get_heap_sparsity(self, z_heap_addr: int) -> list[dict]:
+        """
+        Extracts the physical sequence of heap chunks via a single bulk memory read.
+        """
+        if z_heap_addr == 0:
+            return []
+
+        end_chunk = self._m_scraper.read32(z_heap_addr + self._offsets["heap_info"]["end_chunk"])[0]
+        if end_chunk == 0:
+            return []
+
+        total_bytes = end_chunk * 8
+        if total_bytes > (1024 * 1024 * 32):
+            raise ValueError(f"Heap size exceeds sanity limit: {total_bytes} bytes.")
+
+        raw_buffer = self._m_scraper.read_bytes(z_heap_addr, total_bytes)
+
+        # Evaluate the chunk0 signature structurally
+        val16_raw = int.from_bytes(raw_buffer[2:4], byteorder=self._endianess)
+        val32_raw = int.from_bytes(raw_buffer[4:8], byteorder=self._endianess)
+
+        is_used_16 = bool(val16_raw & 1)
+        is_used_32 = bool(val32_raw & 1)
+
+        val16 = val16_raw >> 1
+        val32 = val32_raw >> 1
+
+        if val32 == 0 and val16 > 0 and is_used_16:
+            is_big_heap = False
+            c = val16  # Start chunk ID is directly provided by the physical struct
+        elif val16 == 0 and val32 > 0 and is_used_32:
+            is_big_heap = True
+            c = val32
+        else:
+            raise ValueError(
+                f"Corrupted chunk0 header. "
+                f"16-bit field: size {val16}, used {is_used_16} | "
+                f"32-bit field: size {val32}, used {is_used_32}"
+            )
+
+        chunks = []
+
+        while c < end_chunk:
+            offset = c * 8
+
+            if is_big_heap:
+                val = int.from_bytes(raw_buffer[offset + 4 : offset + 8], byteorder=self._endianess)
+            else:
+                val = int.from_bytes(raw_buffer[offset + 2 : offset + 4], byteorder=self._endianess)
+
+            is_used = bool(val & 1)
+            c_size = val >> 1
+
+            if c_size == 0:
+                raise RuntimeError(f"Infinite loop prevented: Chunk at ID {c} has size 0.")
+
+            chunks.append({"used": is_used, "size": c_size * 8})
+            c += c_size
+
+        return chunks
 
     def reset_thread_pool(self):
         self.thread_pool = list(self.all_threads.values())
@@ -814,6 +892,16 @@ class ZScraper:
                             data_queue.put({"error": f"Error reading heap info: {e}"})
                             return
 
+                        chunks = None
+                        if self.extra_info_heap_address == heap_address:
+                            try:
+                                chunks = self.get_heap_sparsity(heap_address)
+                            except Exception as e:
+                                data_queue.put(
+                                    {"error": f"Error reading sparsity for {heap_name}: {e}"}
+                                )
+                                # Do not return here; allow the basic metrics to continue polling
+
                         heap_info.append(
                             HeapInfo(
                                 heap_name,
@@ -821,6 +909,7 @@ class ZScraper:
                                 free_bytes,
                                 allocated_bytes,
                                 max_allocated_bytes,
+                                chunks,
                             )
                         )
 
