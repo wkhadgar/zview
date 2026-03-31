@@ -461,16 +461,12 @@ class PyOCDScraper(AbstractScraper):
 
         return self.target.read_memory_block32(at, amount)
 
-    def read64(self, at, amount: int = 1) -> Sequence[int]:
-        words = self.read32(at, amount * 2)
-        dwords = []
-        for i in range(0, len(words), 2):
-            if self.endianess == "<":
-                dwords.append((words[i + 1] << 32) | words[i])
-            else:
-                dwords.append((words[i] << 32) | words[i + 1])
+    def read64(self, at: int, amount: int = 1) -> Sequence[int]:
+        if self.target is None:
+            raise Exception("No target available.")
 
-        return dwords
+        raw_bytes = bytes(self.target.read_memory_block8(at, amount * 8))
+        return struct.unpack(f'{self.endianess}{amount}Q', raw_bytes)
 
 
 class ZScraper:
@@ -681,7 +677,7 @@ class ZScraper:
 
         self._m_scraper.end_batch()
 
-    def get_heap_sparsity(self, z_heap_addr: int) -> list[dict]:
+    def get_heap_fragmentation(self, z_heap_addr: int) -> list[dict]:
         """
         Extracts the physical sequence of heap chunks via a single bulk memory read.
         """
@@ -697,10 +693,11 @@ class ZScraper:
             raise ValueError(f"Heap size exceeds sanity limit: {total_bytes} bytes.")
 
         raw_buffer = self._m_scraper.read_bytes(z_heap_addr, total_bytes)
+        mv = memoryview(raw_buffer)
 
         # Evaluate the chunk0 signature structurally
-        val16_raw = int.from_bytes(raw_buffer[2:4], byteorder=self._endianess)
-        val32_raw = int.from_bytes(raw_buffer[4:8], byteorder=self._endianess)
+        val16_raw = struct.unpack_from(f"{self._m_scraper.endianess}H", mv, 2)[0]
+        val32_raw = struct.unpack_from(f"{self._m_scraper.endianess}I", mv, 4)[0]
 
         is_used_16 = bool(val16_raw & 1)
         is_used_32 = bool(val32_raw & 1)
@@ -709,11 +706,13 @@ class ZScraper:
         val32 = val32_raw >> 1
 
         if val32 == 0 and val16 > 0 and is_used_16:
-            is_big_heap = False
-            c = val16  # Start chunk ID is directly provided by the physical struct
+            c = val16  # Start chunk ID
+            fmt = f"{self._m_scraper.endianess}H"
+            offset_in_chunk = 2
         elif val16 == 0 and val32 > 0 and is_used_32:
-            is_big_heap = True
             c = val32
+            fmt = f"{self._m_scraper.endianess}I"
+            offset_in_chunk = 4
         else:
             raise ValueError(
                 f"Corrupted chunk0 header. "
@@ -724,12 +723,8 @@ class ZScraper:
         chunks = []
 
         while c < end_chunk:
-            offset = c * 8
-
-            if is_big_heap:
-                val = int.from_bytes(raw_buffer[offset + 4 : offset + 8], byteorder=self._endianess)
-            else:
-                val = int.from_bytes(raw_buffer[offset + 2 : offset + 4], byteorder=self._endianess)
+            offset = (c * 8) + offset_in_chunk
+            val = struct.unpack_from(fmt, mv, offset)[0]
 
             is_used = bool(val & 1)
             c_size = val >> 1

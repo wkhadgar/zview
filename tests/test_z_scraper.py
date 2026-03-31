@@ -33,19 +33,35 @@ def test_gdb_scraper_endianness():
 
 
 def test_pyocd_scraper_read64_endianness():
-    """Validates the manual 64-bit word assembly in PyOCDScraper."""
+    """Validates the struct unpacking of 64-bit words in PyOCDScraper."""
     scraper = PyOCDScraper(None)
-    scraper.read32 = MagicMock()
+    scraper.target = MagicMock()
 
-    # Little endian (words read as [low_word, high_word])
     scraper.endianess = "<"
-    scraper.read32.return_value = [0xBBBBBBBB, 0xAAAAAAAA]
-    assert scraper.read64(0x0, 1) == [0xAAAAAAAABBBBBBBB]
+    scraper.target.read_memory_block8.return_value = [
+        0xBB,
+        0xBB,
+        0xBB,
+        0xBB,
+        0xAA,
+        0xAA,
+        0xAA,
+        0xAA,
+    ]
+    assert scraper.read64(0x0, 1) == (0xAAAAAAAABBBBBBBB,)
 
-    # Big endian (words read as [high_word, low_word])
     scraper.endianess = ">"
-    scraper.read32.return_value = [0xAAAAAAAA, 0xBBBBBBBB]
-    assert scraper.read64(0x0, 1) == [0xAAAAAAAABBBBBBBB]
+    scraper.target.read_memory_block8.return_value = [
+        0xAA,
+        0xAA,
+        0xAA,
+        0xAA,
+        0xBB,
+        0xBB,
+        0xBB,
+        0xBB,
+    ]
+    assert scraper.read64(0x0, 1) == (0xAAAAAAAABBBBBBBB,)
 
 
 def test_determine_chunk_width_signatures():
