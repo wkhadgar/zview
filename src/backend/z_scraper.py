@@ -808,6 +808,7 @@ class ZScraper:
 
         while not stop_event.is_set():
             in_batch = False
+            heap_info = []
             try:
                 self._m_scraper.begin_batch()
                 in_batch = True
@@ -882,10 +883,7 @@ class ZScraper:
                     else:
                         thread_info.runtime = ThreadRuntime(cpu_percent, is_active, watermark)
 
-                data_queue.put({"threads": self.thread_pool}, block=False)
-
                 if self.has_heaps:
-                    heap_info = []
                     for heap_name, heap_addresses in self._k_heap_addresses.items():
                         for heap_address in heap_addresses:
                             try:
@@ -901,9 +899,11 @@ class ZScraper:
                                     + self._offsets["heap_info"]["max_allocated_bytes"]
                                 )[0]
                             except Exception as e:
-                                raise RuntimeError(
-                                    f"Error reading heap info for {heap_name}: {e}"
-                                ) from e
+                                data_queue.put(
+                                    {"error": f"Error reading heap info for {heap_name}: {e}"},
+                                    block=False,
+                                )
+                                continue
 
                             chunks = None
                             if self.extra_info_heap_address == heap_address_val:
@@ -914,8 +914,6 @@ class ZScraper:
                                         {"error": f"Error reading sparsity for {heap_name}: {e}"},
                                         block=False,
                                     )
-                                    # Do not raise here, allow the basic metrics to render even if
-                                    # fragmentation map fails
 
                             heap_info.append(
                                 HeapInfo(
@@ -927,8 +925,10 @@ class ZScraper:
                                     chunks,
                                 )
                             )
-
-                    data_queue.put({"heaps": heap_info}, block=False)
+                if self.has_heaps:
+                    data_queue.put({"threads": self.thread_pool, "heaps": heap_info}, block=False)
+                else:
+                    data_queue.put({"threads": self.thread_pool}, block=False)
 
                 # Frame successful. Reset error counter.
                 consecutive_errors = 0

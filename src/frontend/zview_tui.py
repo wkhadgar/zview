@@ -812,6 +812,8 @@ class ZView:
                 self.purge_queue()
                 self.state = ZViewState.DEFAULT_VIEW
 
+                self.stop_event.clear()
+
                 # Re-initialize the connection cleanly
                 try:
                     self.scraper.update_available_threads()
@@ -820,7 +822,7 @@ class ZView:
                         self.data_queue, self.stop_event, inspection_period
                     )
                 except Exception as e:
-                    self.process_data({"fatal_error": [f"Reconnection failed: {e}"]})
+                    self.process_data({"fatal_error": f"Reconnection failed: {e}"})
             return  # Block all other input during fatal error
 
         if self.state in (ZViewState.DEFAULT_VIEW, ZViewState.HEAPS_VIEW):
@@ -898,10 +900,10 @@ class ZView:
 
         return
 
-    def process_data(self, data: dict[str, list]):
+    def process_data(self, data):
         if data.get("fatal_error"):
             self.state = ZViewState.FATAL_ERROR
-            self.status_message = f"TARGET LOST\n\n{data['fatal_error'][0]}"
+            self.status_message = f"TARGET LOST\n\n{data['fatal_error']}"
             return
 
         if data.get("error"):
