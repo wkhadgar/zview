@@ -330,6 +330,43 @@ class ZView:
 
         return ["".join(output[i : i + width]) for i in range(0, len(output), width)]
 
+    def _get_fragmentation_metrics(self, chunks: list[dict]) -> dict:
+        if not chunks:
+            return {}
+
+        total_chunks = len(chunks)
+        allocated_chunks = sum(1 for c in chunks if c["used"])
+        free_bytes = sum(c["size"] for c in chunks if not c["used"])
+        largest_free = max((c["size"] for c in chunks if not c["used"]), default=0)
+        ratio = (1 - largest_free / free_bytes) * 100 if free_bytes > 0 else 0.0
+
+        return {
+            "Largest free": (largest_free, "bytes"),
+            "Frag ratio": (ratio, "percent"),
+            "Chunks": (f"{allocated_chunks}/{total_chunks}", "raw"),
+        }
+
+    def _draw_details_bar(self, y: int, width: int, metrics: dict):
+        if not metrics:
+            return
+
+        def fmt(value, hint):
+            if hint == "bytes":
+                if value >= 1024:
+                    return f"{value / 1024:.1f} KB"
+                return f"{value} B"
+            if hint == "percent":
+                return f"{value:.1f}%"
+            return str(value)
+
+        parts = [f"{k}: {fmt(v, h)}" for k, (v, h) in metrics.items()]
+        bar = " · ".join(parts)
+
+        with contextlib.suppress(curses.error):
+            self.stdscr.attron(self.ATTR_GRAPH_B)
+            self.stdscr.addstr(y, 1, bar)
+            self.stdscr.attroff(self.ATTR_GRAPH_B)
+
     def _base_draw(self, height, width):
         self.stdscr.erase()
 
@@ -674,7 +711,7 @@ class ZView:
             start_y = 5
             start_x = 1
 
-            map_height = height - start_y - 3
+            map_height = height - start_y - 4
             map_width = width - start_x - 1
 
             if map_height <= 0 or map_width <= 0:
@@ -686,11 +723,14 @@ class ZView:
             self.stdscr.attron(self.ATTR_GRAPH_B)
             self.stdscr.addstr(start_y - 1, start_x - 1, "┌" + horizontal_limit + "┐")
             self.stdscr.addstr(start_y + map_height, start_x - 1, "└" + horizontal_limit + "┘")
-            self.stdscr.addstr(start_y - 1, start_x + 1, f"Fragmentation Map ({heap.name})")
+            self.stdscr.addstr(start_y - 1, start_x, f"Fragmentation Map ({heap.name})")
             for i, row_str in enumerate(sparsity_matrix):
                 with contextlib.suppress(curses.error):
                     self.stdscr.addstr(start_y + i, start_x - 1, "│" + row_str + "│")
             self.stdscr.attroff(self.ATTR_GRAPH_B)
+
+            metrics = self._get_fragmentation_metrics(heap.chunks)
+            self._draw_details_bar(height - 4, width, metrics)
 
             break
 
