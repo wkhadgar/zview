@@ -796,128 +796,164 @@ class ZScraper:
             data_queue: A queue for sending processed data to the main UI thread.
             stop_event: An event to signal the polling thread to terminate.
         """
+        consecutive_errors = 0
+        MAX_TOLERATED_ERRORS = 3
+
         try:
             if not self._m_scraper.is_connected:
                 self._m_scraper.connect()
-
         except Exception as e:
-            data_queue.put({"error": f"Polling thread initialization error: {e}"})
+            data_queue.put({"fatal_error": f"Failed to connect to target: {e}"})
             return
 
         while not stop_event.is_set():
-            self._m_scraper.begin_batch()
+            in_batch = False
+            try:
+                self._m_scraper.begin_batch()
+                in_batch = True
 
-            if self.has_usage:
-                try:
-                    current_cpu_cycles = self._m_scraper.read32(self._cpu_usage_address)[0]
-                except Exception as e:
-                    data_queue.put({"error": f"Error reading global CPU cycles: {e}"})
-                    return
-
-                cpu_cycles_delta = current_cpu_cycles - self.last_cpu_cycles
-                self.last_cpu_cycles = current_cpu_cycles
-                if cpu_cycles_delta > 0:
-                    self.last_cpu_delta = cpu_cycles_delta
-                elif cpu_cycles_delta <= 0:  # When current_cpu_cycles is 0 due to context resets
-                    cpu_cycles_delta = self.last_cpu_delta
-            else:
-                cpu_cycles_delta = -1
-
-            if self.thread_pool is None:
-                data_queue.put({"error": "No threads available."})
-                return
-
-            for thread_info in self.thread_pool:
                 if self.has_usage:
                     try:
-                        thread_usage = self._m_scraper.read64(
-                            thread_info.address + self._offsets["thread_info"]["usage"]
-                        )[0]
+                        current_cpu_cycles = self._m_scraper.read32(self._cpu_usage_address)[0]
                     except Exception as e:
-                        data_queue.put({"error": f"Error polling thread {thread_info}: {e}"})
-                        continue
+                        raise RuntimeError(f"Error reading global CPU cycles: {e}") from e
 
-                    thread_usage_delta = thread_usage - self.last_thread_cycles.get(
-                        thread_info.address, 0
-                    )
-                    self.last_thread_cycles[thread_info.address] = thread_usage
-
-                    if thread_info.address == self.idle_threads_address:
-                        cpu_cycles_delta += thread_usage_delta
-
-                    cpu_percent = 0.0
+                    cpu_cycles_delta = current_cpu_cycles - self.last_cpu_cycles
+                    self.last_cpu_cycles = current_cpu_cycles
                     if cpu_cycles_delta > 0:
-                        cpu_percent = (thread_usage_delta / cpu_cycles_delta) * 100
-                    elif thread_usage_delta > 0:
-                        cpu_percent = (thread_usage_delta / self.last_cpu_delta) * 100
-                    else:
-                        cpu_percent = -1
-
-                    is_active = thread_usage_delta > 0
+                        self.last_cpu_delta = cpu_cycles_delta
+                    elif (
+                        cpu_cycles_delta <= 0
+                    ):  # When current_cpu_cycles is 0 due to context resets
+                        cpu_cycles_delta = self.last_cpu_delta
                 else:
-                    cpu_percent = -1
-                    is_active = False
+                    cpu_cycles_delta = -1
 
-                try:
-                    watermark = self._m_scraper.calculate_dynamic_watermark(
-                        thread_info.stack_start,
-                        thread_info.stack_size,
-                        thread_id=thread_info.address,
-                    )
-                except Exception as e:
-                    data_queue.put({"error": f"Error polling thread {thread_info}: {e}"})
-                    continue
+                if self.thread_pool is None:
+                    raise RuntimeError("Thread pool is uninitialized.")
 
-                if thread_info.runtime:
-                    thread_info.runtime.cpu = min(cpu_percent, 100)
-                    thread_info.runtime.active = is_active
-                    thread_info.runtime.stack_watermark = watermark
-                else:
-                    thread_info.runtime = ThreadRuntime(cpu_percent, is_active, watermark)
-
-            data_queue.put({"threads": self.thread_pool})
-
-            if self.has_heaps:
-                heap_info = []
-                for heap_name, heap_addresses in self._k_heap_addresses.items():
-                    for heap_address in heap_addresses:
-                        heap_address = self._m_scraper.read32(heap_address)[0]
+                for thread_info in self.thread_pool:
+                    if self.has_usage:
                         try:
-                            free_bytes = self._m_scraper.read32(
-                                heap_address + self._offsets["heap_info"]["free_bytes"]
-                            )[0]
-                            allocated_bytes = self._m_scraper.read32(
-                                heap_address + self._offsets["heap_info"]["allocated_bytes"]
-                            )[0]
-                            max_allocated_bytes = self._m_scraper.read32(
-                                heap_address + self._offsets["heap_info"]["max_allocated_bytes"]
+                            thread_usage = self._m_scraper.read64(
+                                thread_info.address + self._offsets["thread_info"]["usage"]
                             )[0]
                         except Exception as e:
-                            data_queue.put({"error": f"Error reading heap info: {e}"})
-                            return
+                            raise RuntimeError(
+                                f"Error polling thread usage {thread_info.name}: {e}"
+                            ) from e
 
-                        chunks = None
-                        if self.extra_info_heap_address == heap_address:
-                            try:
-                                chunks = self.get_heap_sparsity(heap_address)
-                            except Exception as e:
-                                data_queue.put(
-                                    {"error": f"Error reading sparsity for {heap_name}: {e}"}
-                                )
-                                # Do not return here; allow the basic metrics to continue polling
-
-                        heap_info.append(
-                            HeapInfo(
-                                heap_name,
-                                heap_address,
-                                free_bytes,
-                                allocated_bytes,
-                                max_allocated_bytes,
-                                chunks,
-                            )
+                        thread_usage_delta = thread_usage - self.last_thread_cycles.get(
+                            thread_info.address, 0
                         )
+                        self.last_thread_cycles[thread_info.address] = thread_usage
 
-                data_queue.put({"heaps": heap_info})
+                        if thread_info.address == self.idle_threads_address:
+                            cpu_cycles_delta += thread_usage_delta
 
-            self._m_scraper.end_batch()
+                        cpu_percent = 0.0
+                        if cpu_cycles_delta > 0:
+                            cpu_percent = (thread_usage_delta / cpu_cycles_delta) * 100
+                        elif thread_usage_delta > 0:
+                            cpu_percent = (thread_usage_delta / self.last_cpu_delta) * 100
+                        else:
+                            cpu_percent = -1
+
+                        is_active = thread_usage_delta > 0
+                    else:
+                        cpu_percent = -1
+                        is_active = False
+
+                    try:
+                        watermark = self._m_scraper.calculate_dynamic_watermark(
+                            thread_info.stack_start,
+                            thread_info.stack_size,
+                            thread_id=thread_info.address,
+                        )
+                    except Exception as e:
+                        raise RuntimeError(
+                            f"Error polling stack watermark for {thread_info.name}: {e}"
+                        ) from e
+
+                    if thread_info.runtime:
+                        thread_info.runtime.cpu = min(cpu_percent, 100)
+                        thread_info.runtime.active = is_active
+                        thread_info.runtime.stack_watermark = watermark
+                    else:
+                        thread_info.runtime = ThreadRuntime(cpu_percent, is_active, watermark)
+
+                data_queue.put({"threads": self.thread_pool}, block=False)
+
+                if self.has_heaps:
+                    heap_info = []
+                    for heap_name, heap_addresses in self._k_heap_addresses.items():
+                        for heap_address in heap_addresses:
+                            try:
+                                heap_address_val = self._m_scraper.read32(heap_address)[0]
+                                free_bytes = self._m_scraper.read32(
+                                    heap_address_val + self._offsets["heap_info"]["free_bytes"]
+                                )[0]
+                                allocated_bytes = self._m_scraper.read32(
+                                    heap_address_val + self._offsets["heap_info"]["allocated_bytes"]
+                                )[0]
+                                max_allocated_bytes = self._m_scraper.read32(
+                                    heap_address_val
+                                    + self._offsets["heap_info"]["max_allocated_bytes"]
+                                )[0]
+                            except Exception as e:
+                                raise RuntimeError(
+                                    f"Error reading heap info for {heap_name}: {e}"
+                                ) from e
+
+                            chunks = None
+                            if self.extra_info_heap_address == heap_address_val:
+                                try:
+                                    chunks = self.get_heap_sparsity(heap_address_val)
+                                except Exception as e:
+                                    data_queue.put(
+                                        {"error": f"Error reading sparsity for {heap_name}: {e}"},
+                                        block=False,
+                                    )
+                                    # Do not raise here, allow the basic metrics to render even if
+                                    # fragmentation map fails
+
+                            heap_info.append(
+                                HeapInfo(
+                                    heap_name,
+                                    heap_address_val,
+                                    free_bytes,
+                                    allocated_bytes,
+                                    max_allocated_bytes,
+                                    chunks,
+                                )
+                            )
+
+                    data_queue.put({"heaps": heap_info}, block=False)
+
+                # Frame successful. Reset error counter.
+                consecutive_errors = 0
+
+            except queue.Full:
+                pass
+            except Exception as e:
+                consecutive_errors += 1
+                if consecutive_errors >= MAX_TOLERATED_ERRORS:
+                    data_queue.put(
+                        {"fatal_error": f"Target lost after {MAX_TOLERATED_ERRORS} retries: {e}"}
+                    )
+                    break  # Terminate loop cleanly
+                else:
+                    data_queue.put(
+                        {
+                            "error": f"Transient read fault "
+                            f"({consecutive_errors}/{MAX_TOLERATED_ERRORS}): {e}"
+                        },
+                        block=False,
+                    )
+
+            finally:
+                if in_batch:
+                    with contextlib.suppress(Exception):
+                        self._m_scraper.end_batch()
+
             time.sleep(inspection_period)
