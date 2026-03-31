@@ -237,8 +237,12 @@ class GDBScraper(AbstractScraper):
     def disconnect(self):
         if self.sock is None:
             return
+
         with contextlib.suppress(Exception):
+            self._halt()
             self._send_packet(b'D')
+            self.sock.settimeout(1.0)
+            self._read_response()
 
         self.sock.close()
         self.sock = None
