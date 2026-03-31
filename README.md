@@ -150,7 +150,7 @@ qemu-system-arm \
   -kernel build/zephyr/zephyr.elf \
   -nographic \
   -serial mon:stdio \
-  -s -S
+  -s
 ```
 
 Then attach ZView:

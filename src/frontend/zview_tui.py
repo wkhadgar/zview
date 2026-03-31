@@ -24,10 +24,11 @@ class ZViewTUIScheme:
 
 
 class ZViewState(enum.Enum):
-    DEFAULT_VIEW = 1
-    THREAD_DETAIL = 2
-    HEAPS_VIEW = 3
-    HEAPS_DETAIL = 4
+    FATAL_ERROR = 1
+    DEFAULT_VIEW = 2
+    THREAD_DETAIL = 3
+    HEAPS_VIEW = 4
+    HEAPS_DETAIL = 5
 
 
 class SpecialCode:
@@ -37,6 +38,7 @@ class SpecialCode:
     SORT = ord("s")
     INVERSE = ord("i")
     HEAPS = ord("h")
+    RECONNECT = ord("r")
 
 
 class ZView:
@@ -56,7 +58,7 @@ class ZView:
         """
         self.min_dimensions = (14, 86)
         self.stdscr = stdscr
-        self.scraper = scraper
+        self.scraper: ZScraper = scraper
         self.running = True
         self.threads_data: list[ThreadInfo] = []
         self.heaps_data: list[HeapInfo] = []
@@ -86,11 +88,13 @@ class ZView:
                 lambda h: h.allocated_bytes / (h.allocated_bytes + h.free_bytes),
                 lambda h: h.max_allocated_bytes,
             ],
+            ZViewState.FATAL_ERROR: [],
         }
 
         self.current_sort: dict[ZViewState, int] = {
             ZViewState.DEFAULT_VIEW: 0,
             ZViewState.HEAPS_VIEW: 0,
+            ZViewState.FATAL_ERROR: 0,
         }
         self.invert_sorting: bool = False
         self.detailing_thread: str | None = None
@@ -179,6 +183,7 @@ class ZView:
         self.ui[ZViewState.THREAD_DETAIL] = thread_scheme
         self.ui[ZViewState.HEAPS_VIEW] = heap_scheme
         self.ui[ZViewState.HEAPS_DETAIL] = heap_scheme
+        self.ui[ZViewState.FATAL_ERROR] = ZViewTUIScheme({})
 
     def _draw_graph(
         self,
@@ -547,6 +552,24 @@ class ZView:
         )
         self.stdscr.addstr(y, col_pos, watermark_bytes_display)
 
+    def _draw_fatal_error_view(self, height: int, width: int):
+        self.stdscr.erase()
+        self.stdscr.attron(self.ATTR_HEADER_FOOTER)
+        self.stdscr.addstr(0, 0, f"{'ZView - Zephyr RTOS Runtime Viewer':^{width - 1}}")
+        self.stdscr.addstr(height - 1, 0, f"{' Quit: q | Reconnect: r ':>{width - 1}}")
+        self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
+
+        self.stdscr.attron(self.ATTR_ERROR)
+        msg_lines = self.status_message.split('\n')
+
+        start_y = (height // 2) - (len(msg_lines) // 2)
+        for i, line in enumerate(msg_lines):
+            if 0 <= start_y + i < height - 2:
+                clean_line = line[: width - 2]
+                self.stdscr.addstr(start_y + i, (width // 2) - (len(clean_line) // 2), clean_line)
+        self.stdscr.attroff(self.ATTR_ERROR)
+        self.stdscr.refresh()
+
     def _draw_default_view(self, height, width):
         """
         Draws the thread data table and its general informations.
@@ -737,6 +760,10 @@ class ZView:
         self.stdscr.refresh()
 
     def draw_state(self, state: ZViewState, height: int, width: int):
+        if state == ZViewState.FATAL_ERROR:
+            self._draw_fatal_error_view(height, width)
+            return
+
         self._base_draw(height, width)
         match state:
             case ZViewState.DEFAULT_VIEW:
@@ -772,8 +799,30 @@ class ZView:
         else:
             self.draw_state(self.state, height, width)
 
-    def process_events(self, height):
+    def process_events(self, height, inspection_period):
         key = self.stdscr.getch()
+
+        if self.state == ZViewState.FATAL_ERROR:
+            if key == SpecialCode.QUIT:
+                self.running = False
+            elif key == SpecialCode.RECONNECT:
+                self.status_message = "Attempting to reconnect..."
+                self.scraper.finish_polling_thread()
+                self.scraper._m_scraper.disconnect()
+                self.purge_queue()
+                self.state = ZViewState.DEFAULT_VIEW
+
+                # Re-initialize the connection cleanly
+                try:
+                    self.scraper.update_available_threads()
+                    self.scraper.reset_thread_pool()
+                    self.scraper.start_polling_thread(
+                        self.data_queue, self.stop_event, inspection_period
+                    )
+                except Exception as e:
+                    self.process_data({"fatal_error": [f"Reconnection failed: {e}"]})
+            return  # Block all other input during fatal error
+
         if self.state in (ZViewState.DEFAULT_VIEW, ZViewState.HEAPS_VIEW):
             max_table_size = len(
                 self.threads_data if self.state is ZViewState.DEFAULT_VIEW else self.heaps_data
@@ -850,7 +899,12 @@ class ZView:
         return
 
     def process_data(self, data: dict[str, list]):
-        if data.get("error", False):
+        if data.get("fatal_error"):
+            self.state = ZViewState.FATAL_ERROR
+            self.status_message = f"TARGET LOST\n\n{data['fatal_error'][0]}"
+            return
+
+        if data.get("error"):
             self.status_message = f"Error: {data['error']}"
         else:
             self.status_message = f"Running{'.' * (self.update_count % 4)}"
@@ -896,7 +950,7 @@ class ZView:
 
             self.draw_tui(h, w)
 
-            self.process_events(h)
+            self.process_events(h, inspection_period)
 
             time.sleep(0.01)
 
