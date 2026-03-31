@@ -61,18 +61,20 @@ class RunnerConfig:
         return None
 
 
-@dataclass
+@dataclass(frozen=True)
 class ThreadRuntime:
     """
     Data class to hold runtime information about the thread.
     """
 
     cpu: float
+    cpu_normalized: float
     active: bool
     stack_watermark: int
+    stack_watermark_percent: float
 
 
-@dataclass
+@dataclass(frozen=True)
 class ThreadInfo:
     """
     Data class to hold information about a single Zephyr RTOS thread.
@@ -85,13 +87,14 @@ class ThreadInfo:
     runtime: ThreadRuntime | None
 
 
-@dataclass
+@dataclass(frozen=True)
 class HeapInfo:
     name: str
     address: int
     free_bytes: int
     allocated_bytes: int
     max_allocated_bytes: int
+    usage_percent: float
     chunks: list[dict] | None
 
 
@@ -461,16 +464,12 @@ class PyOCDScraper(AbstractScraper):
 
         return self.target.read_memory_block32(at, amount)
 
-    def read64(self, at, amount: int = 1) -> Sequence[int]:
-        words = self.read32(at, amount * 2)
-        dwords = []
-        for i in range(0, len(words), 2):
-            if self.endianess == "<":
-                dwords.append((words[i + 1] << 32) | words[i])
-            else:
-                dwords.append((words[i] << 32) | words[i + 1])
+    def read64(self, at: int, amount: int = 1) -> Sequence[int]:
+        if self.target is None:
+            raise Exception("No target available.")
 
-        return dwords
+        raw_bytes = bytes(self.target.read_memory_block8(at, amount * 8))
+        return struct.unpack(f'{self.endianess}{amount}Q', raw_bytes)
 
 
 class ZScraper:
@@ -681,7 +680,7 @@ class ZScraper:
 
         self._m_scraper.end_batch()
 
-    def get_heap_sparsity(self, z_heap_addr: int) -> list[dict]:
+    def get_heap_fragmentation(self, z_heap_addr: int) -> list[dict]:
         """
         Extracts the physical sequence of heap chunks via a single bulk memory read.
         """
@@ -697,10 +696,11 @@ class ZScraper:
             raise ValueError(f"Heap size exceeds sanity limit: {total_bytes} bytes.")
 
         raw_buffer = self._m_scraper.read_bytes(z_heap_addr, total_bytes)
+        mv = memoryview(raw_buffer)
 
         # Evaluate the chunk0 signature structurally
-        val16_raw = int.from_bytes(raw_buffer[2:4], byteorder=self._endianess)
-        val32_raw = int.from_bytes(raw_buffer[4:8], byteorder=self._endianess)
+        val16_raw = struct.unpack_from(f"{self._m_scraper.endianess}H", mv, 2)[0]
+        val32_raw = struct.unpack_from(f"{self._m_scraper.endianess}I", mv, 4)[0]
 
         is_used_16 = bool(val16_raw & 1)
         is_used_32 = bool(val32_raw & 1)
@@ -709,11 +709,13 @@ class ZScraper:
         val32 = val32_raw >> 1
 
         if val32 == 0 and val16 > 0 and is_used_16:
-            is_big_heap = False
-            c = val16  # Start chunk ID is directly provided by the physical struct
+            c = val16  # Start chunk ID
+            fmt = f"{self._m_scraper.endianess}H"
+            offset_in_chunk = 2
         elif val16 == 0 and val32 > 0 and is_used_32:
-            is_big_heap = True
             c = val32
+            fmt = f"{self._m_scraper.endianess}I"
+            offset_in_chunk = 4
         else:
             raise ValueError(
                 f"Corrupted chunk0 header. "
@@ -724,12 +726,8 @@ class ZScraper:
         chunks = []
 
         while c < end_chunk:
-            offset = c * 8
-
-            if is_big_heap:
-                val = int.from_bytes(raw_buffer[offset + 4 : offset + 8], byteorder=self._endianess)
-            else:
-                val = int.from_bytes(raw_buffer[offset + 2 : offset + 4], byteorder=self._endianess)
+            offset = (c * 8) + offset_in_chunk
+            val = struct.unpack_from(fmt, mv, offset)[0]
 
             is_used = bool(val & 1)
             c_size = val >> 1
@@ -833,6 +831,7 @@ class ZScraper:
                 if self.thread_pool is None:
                     raise RuntimeError("Thread pool is uninitialized.")
 
+                polled_raw_data = []
                 for thread_info in self.thread_pool:
                     if self.has_usage:
                         try:
@@ -852,17 +851,9 @@ class ZScraper:
                         if thread_info.address == self.idle_threads_address:
                             cpu_cycles_delta += thread_usage_delta
 
-                        cpu_percent = 0.0
-                        if cpu_cycles_delta > 0:
-                            cpu_percent = (thread_usage_delta / cpu_cycles_delta) * 100
-                        elif thread_usage_delta > 0:
-                            cpu_percent = (thread_usage_delta / self.last_cpu_delta) * 100
-                        else:
-                            cpu_percent = -1
-
                         is_active = thread_usage_delta > 0
                     else:
-                        cpu_percent = -1
+                        thread_usage_delta = 0
                         is_active = False
 
                     try:
@@ -876,12 +867,94 @@ class ZScraper:
                             f"Error polling stack watermark for {thread_info.name}: {e}"
                         ) from e
 
-                    if thread_info.runtime:
-                        thread_info.runtime.cpu = min(cpu_percent, 100)
-                        thread_info.runtime.active = is_active
-                        thread_info.runtime.stack_watermark = watermark
+                    stack_usage_pct = (
+                        (watermark / thread_info.stack_size * 100)
+                        if thread_info.stack_size > 0
+                        else 0.0
+                    )
+
+                    polled_raw_data.append(
+                        {
+                            "info": thread_info,
+                            "usage_delta": thread_usage_delta,
+                            "is_active": is_active,
+                            "watermark": watermark,
+                            "stack_usage_pct": stack_usage_pct,
+                        }
+                    )
+
+                polled_threads = []
+                for data in polled_raw_data:
+                    cpu_percent = 0.0
+                    if self.has_usage:
+                        if cpu_cycles_delta > 0:
+                            cpu_percent = (data["usage_delta"] / cpu_cycles_delta) * 100
+                        elif data["usage_delta"] > 0:
+                            cpu_percent = (data["usage_delta"] / self.last_cpu_delta) * 100
+                        else:
+                            cpu_percent = -1
+
+                    new_runtime = ThreadRuntime(
+                        cpu=min(cpu_percent, 100),
+                        cpu_normalized=0.0,
+                        active=data["is_active"],
+                        stack_watermark=data["watermark"],
+                        stack_watermark_percent=data["stack_usage_pct"],
+                    )
+
+                    polled_threads.append(
+                        ThreadInfo(
+                            address=data["info"].address,
+                            stack_start=data["info"].stack_start,
+                            stack_size=data["info"].stack_size,
+                            name=data["info"].name,
+                            runtime=new_runtime,
+                        )
+                    )
+
+                idle_thread_data = next(
+                    (d for d in polled_raw_data if d["info"].address == self.idle_threads_address),
+                    None,
+                )
+
+                if idle_thread_data:
+                    active_cycles_total = cpu_cycles_delta - idle_thread_data["usage_delta"]
+                else:
+                    active_cycles_total = cpu_cycles_delta
+
+                final_threads = []
+                for data in polled_raw_data:
+                    # Absolute CPU % (t / total_system_time)
+                    absolute_cpu = (
+                        (data["usage_delta"] / cpu_cycles_delta * 100)
+                        if cpu_cycles_delta > 0
+                        else 0.0
+                    )
+
+                    # Relative Load % (t / total_active_time)
+                    if data["info"].address == self.idle_threads_address:
+                        load_pct = 0.0
+                    elif active_cycles_total > 0:
+                        load_pct = min((data["usage_delta"] / active_cycles_total) * 100.0, 100.0)
                     else:
-                        thread_info.runtime = ThreadRuntime(cpu_percent, is_active, watermark)
+                        load_pct = 0.0
+
+                    final_runtime = ThreadRuntime(
+                        cpu=load_pct,
+                        cpu_normalized=absolute_cpu,
+                        active=data["is_active"],
+                        stack_watermark=data["watermark"],
+                        stack_watermark_percent=data["stack_usage_pct"],
+                    )
+                    final_threads.append(
+                        ThreadInfo(
+                            address=data["info"].address,
+                            stack_start=data["info"].stack_start,
+                            stack_size=data["info"].stack_size,
+                            name=data["info"].name,
+                            runtime=final_runtime,
+                        )
+                    )
 
                 if self.has_heaps:
                     for heap_name, heap_addresses in self._k_heap_addresses.items():
@@ -908,12 +981,19 @@ class ZScraper:
                             chunks = None
                             if self.extra_info_heap_address == heap_address_val:
                                 try:
-                                    chunks = self.get_heap_sparsity(heap_address_val)
+                                    chunks = self.get_heap_fragmentation(heap_address_val)
                                 except Exception as e:
                                     data_queue.put(
                                         {"error": f"Error reading sparsity for {heap_name}: {e}"},
                                         block=False,
                                     )
+
+                            total_heap_size = allocated_bytes + free_bytes
+                            heap_usage_pct = (
+                                (allocated_bytes / total_heap_size * 100)
+                                if total_heap_size > 0
+                                else 0.0
+                            )
 
                             heap_info.append(
                                 HeapInfo(
@@ -922,13 +1002,15 @@ class ZScraper:
                                     free_bytes,
                                     allocated_bytes,
                                     max_allocated_bytes,
+                                    heap_usage_pct,
                                     chunks,
                                 )
                             )
+
                 if self.has_heaps:
-                    data_queue.put({"threads": self.thread_pool, "heaps": heap_info}, block=False)
+                    data_queue.put({"threads": final_threads, "heaps": heap_info}, block=False)
                 else:
-                    data_queue.put({"threads": self.thread_pool}, block=False)
+                    data_queue.put({"threads": final_threads}, block=False)
 
                 # Frame successful. Reset error counter.
                 consecutive_errors = 0

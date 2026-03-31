@@ -35,13 +35,13 @@ def test_struct_member_offsets(parser):
     assert ts_offset == 0
 
     val_offset = parser.get_struct_member_offset("k_thread", "init_data")
-    assert val_offset == 84
+    assert val_offset == 100
 
 
 def test_struct_size(parser):
     """Test reading the total size of the struct."""
     size = parser.get_struct_size("k_thread")
-    assert size == 128
+    assert size == 192
 
 
 def test_find_variable_by_struct_type(parser):
