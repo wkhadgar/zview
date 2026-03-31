@@ -19,7 +19,6 @@ def elf_path():
 def parser(elf_path):
     parser = ElfInspector(str(elf_path))
     yield parser
-    parser.close()
 
 
 def test_symbol_address_lookup(parser):
