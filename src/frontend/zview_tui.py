@@ -78,7 +78,7 @@ class ZView:
                 lambda t: t.name,
                 lambda t: t.runtime.cpu if t.runtime else -1,
                 lambda t: t.runtime.cpu_normalized if t.runtime else -1,
-                lambda t: t.runtime.stack_usage_percent if t.runtime else -1,
+                lambda t: t.runtime.stack_watermark_percent if t.runtime else -1,
                 lambda t: t.runtime.stack_watermark if t.runtime else -1,
             ],
             ZViewState.HEAPS_VIEW: [
