@@ -16,6 +16,7 @@ from backend.z_scraper import (
     ThreadRuntime,
     ZScraper,
 )
+from frontend.tui_widgets import TUIBox, TUIGraph, TUIHeapInfo, TUIThreadInfo
 
 
 @dataclass
@@ -152,7 +153,7 @@ class ZView:
         with self.data_queue.mutex:
             self.data_queue.queue.clear()
 
-    def _set_ui_schemes(self):
+    def _set_ui_schemes(self):  # TODO: Remove this logic in favor of view state classes
         thread_basic_info_scheme = {
             "Thread": 30,
             "CPU %": 8,
@@ -176,94 +177,6 @@ class ZView:
         self.ui[ZViewState.HEAPS_VIEW] = heap_scheme
         self.ui[ZViewState.HEAPS_DETAIL] = heap_scheme
         self.ui[ZViewState.FATAL_ERROR] = ZViewTUIScheme({})
-
-    def _draw_graph(
-        self,
-        y,
-        x,
-        h,
-        w,
-        history_list,
-        title,
-        attribute,
-        maximum=100,
-    ):
-        horizontal_limit = "─" * (w - 2)
-        self.stdscr.attron(attribute)
-        self.stdscr.addstr(y, x, "┌" + horizontal_limit + "┐")
-        self.stdscr.addstr(y + h, x, "└" + horizontal_limit + "┘")
-        self.stdscr.addstr(y, x + 1, title)
-
-        blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
-        x_idx = len(history_list)
-        for x_step in range(w):
-            for y_step in range(h - 1):
-                y_pos = y + y_step + 1
-                x_pos = x + w - x_step - 1
-                if x_step == 0 or x_step == w - 1:
-                    self.stdscr.addstr(y_pos, x_pos, "│")
-                else:
-                    full_blocks = int((history_list[x_idx] / maximum) * (h - 2))
-                    last_block = int(
-                        (((history_list[x_idx] / maximum) * (h - 2)) - full_blocks)
-                        * (len(blocks) - 1)
-                    )
-                    self.stdscr.addstr(
-                        y_pos,
-                        x_pos,
-                        " " if y_step < ((h - 1) - full_blocks) else blocks[-1],
-                    )
-                    self.stdscr.addstr(
-                        y_pos,
-                        x_pos,
-                        blocks[last_block] if y_step == ((h - 2) - full_blocks) else "",
-                    )
-            x_idx -= 1 if x_idx else 0
-
-        self.stdscr.addstr(y + 1, x + w - (len(f"{maximum}")), str(maximum))
-        self.stdscr.addstr(y + h - 1, x + w - 1, "0")
-        self.stdscr.attroff(attribute)
-
-    def _draw_progress_bar(
-        self,
-        y,
-        x,
-        width: int,
-        percentage: float,
-        medium_threshold: float,
-        high_threshold: float,
-    ):
-        if percentage > high_threshold:
-            bar_color_attr = self.ATTR_PROGRESS_BAR_HIGH
-        elif percentage > medium_threshold:
-            bar_color_attr = self.ATTR_PROGRESS_BAR_MEDIUM
-        else:
-            bar_color_attr = self.ATTR_PROGRESS_BAR_LOW
-        bar_width = width - 2
-        completed_chars = int(bar_width * (percentage / 100))
-        bar_str = "█" * completed_chars
-        self.stdscr.addstr(y, x, "│" + "·" * bar_width + "│")
-        self.stdscr.attron(bar_color_attr)
-        x += 1
-        self.stdscr.addstr(y, x, bar_str)
-
-        percent_display = f"{percentage:.1f}%"
-        percent_start_x = x + (width // 2) - (len(percent_display) // 2)
-        bar_end_x = x + completed_chars
-
-        split_point = max(0, min(len(percent_display), bar_end_x - percent_start_x))
-
-        text_over_bar = percent_display[:split_point]
-        if text_over_bar:
-            self.stdscr.attron(curses.A_REVERSE)
-            self.stdscr.addstr(y, percent_start_x, text_over_bar)
-            self.stdscr.attroff(curses.A_REVERSE)
-
-        text_outside_bar = percent_display[split_point:]
-        if text_outside_bar:
-            self.stdscr.addstr(y, percent_start_x + split_point, text_outside_bar)
-
-        self.stdscr.attroff(bar_color_attr)
 
     def get_sparsity_map(self, chunks: list[dict], width: int, height: int) -> list[str]:
         """
@@ -343,7 +256,7 @@ class ZView:
             "Chunks": (f"{allocated_chunks}/{total_chunks}", "raw"),
         }
 
-    def _draw_heap_details_footer(self, y: int, x: int, metrics: dict):
+    def _get_heap_details_footer(self, metrics: dict):
         if not metrics:
             return
 
@@ -357,12 +270,7 @@ class ZView:
             return str(value)
 
         parts = [f"{k}: {fmt(v, h)}" for k, (v, h) in metrics.items()]
-        bar = " · ".join(parts)
-
-        with contextlib.suppress(curses.error):
-            self.stdscr.attron(self.ATTR_GRAPH_B)
-            self.stdscr.addstr(y, x, bar)
-            self.stdscr.attroff(self.ATTR_GRAPH_B)
+        return " · ".join(parts)
 
     def _base_draw(self, height, width):
         self.stdscr.erase()
@@ -429,114 +337,6 @@ class ZView:
             self.stdscr.addstr(1, curr_x, txt)
             curr_x += h_width + 1
 
-    def _draw_thread_info(self, y, thread_info: ThreadInfo, selected: bool = False):
-        col_pos = 0
-
-        # Widths
-        scheme = self.ui[self.state]
-        columns = list(scheme.col_widths.keys())
-        thread_name_width = scheme.col_widths[columns[0]]
-        cpu_usage_width = scheme.col_widths[columns[1]]
-        load_usage_width = scheme.col_widths[columns[2]]
-        stack_usage_width = scheme.col_widths[columns[3]]
-        stack_bytes_width = scheme.col_widths[columns[4]]
-
-        # Thread name
-        if len(thread_info.name) > thread_name_width:
-            thread_name_display = thread_info.name[: thread_name_width - 3] + "..."
-        else:
-            thread_name_display = f"{thread_info.name:<{thread_name_width}}"
-
-        runtime = thread_info.runtime or ThreadRuntime(
-            cpu=-1.0,
-            cpu_normalized=-1.0,
-            active=False,
-            stack_watermark=0,
-            stack_watermark_percent=0.0,
-        )
-
-        thread_name_attr = (
-            self.ATTR_CURSOR
-            if selected
-            else (self.ATTR_ACTIVE_THREAD if runtime.active else self.ATTR_INACTIVE_THREAD)
-        )
-        self.stdscr.attron(thread_name_attr)
-        self.stdscr.addstr(y, col_pos, thread_name_display)
-        self.stdscr.attroff(thread_name_attr)
-        col_pos += thread_name_width + 1
-
-        # Thread CPUs
-        if runtime.cpu >= 0:
-            cpu_display = f"{runtime.cpu_normalized:.2f}%".center(cpu_usage_width)
-        else:
-            cpu_display = f"{'-':^{cpu_usage_width}}"
-        self.stdscr.addstr(y, col_pos, cpu_display)
-        col_pos += cpu_usage_width + 1
-
-        # Thread Loads
-        if runtime.cpu >= 0:
-            load_display = f"{runtime.cpu:.1f}%".center(load_usage_width)
-        else:
-            load_display = f"{'-':^{load_usage_width}}"
-        self.stdscr.addstr(y, col_pos, load_display)
-        col_pos += load_usage_width + 1
-
-        # Thread Watermark Progress Bar
-        self._draw_progress_bar(
-            y, col_pos, stack_usage_width, runtime.stack_watermark_percent, 70, 90
-        )
-        col_pos += stack_usage_width + 1
-
-        # Thread Watermark Bytes
-        watermark_bytes_display = f"{runtime.stack_watermark} / {thread_info.stack_size}".ljust(
-            stack_bytes_width
-        )
-        self.stdscr.addstr(y, col_pos, watermark_bytes_display)
-
-    def _draw_heap_info(self, y, heap_info: HeapInfo, selected: bool = False):
-        col_pos = 0
-
-        # Widths
-        scheme = self.ui[self.state]
-        columns = list(scheme.col_widths.keys())
-        heap_name_width = scheme.col_widths[columns[0]]
-        free_bytes_width = scheme.col_widths[columns[1]]
-        allocated_bytes_width = scheme.col_widths[columns[2]]
-        heap_usage_width = scheme.col_widths[columns[3]]
-        watermark_width = scheme.col_widths[columns[4]]
-
-        # Heap name
-        heap_name_display = heap_info.name[:heap_name_width].ljust(heap_name_width)
-        if len(heap_info.name) > heap_name_width:
-            heap_name_display = heap_name_display[:-3] + "..."
-
-        heap_name_attr = self.ATTR_CURSOR if selected else self.ATTR_ACTIVE_THREAD
-        self.stdscr.attron(heap_name_attr)
-        self.stdscr.addstr(y, col_pos, heap_name_display)
-        self.stdscr.attroff(heap_name_attr)
-        col_pos += heap_name_width + 1
-
-        # Free bytes
-        free_bytes_display = f"{heap_info.free_bytes:^{free_bytes_width}}"
-        self.stdscr.addstr(y, col_pos, free_bytes_display)
-        col_pos += free_bytes_width + 1
-
-        # Allocated bytes
-        allocated_bytes_display = f"{heap_info.allocated_bytes:^{allocated_bytes_width}}"
-        self.stdscr.addstr(y, col_pos, allocated_bytes_display)
-        col_pos += allocated_bytes_width + 1
-
-        # Heap Usage Progress Bar
-        heap_size = heap_info.allocated_bytes + heap_info.free_bytes
-        self._draw_progress_bar(y, col_pos, heap_usage_width, heap_info.usage_percent, 70, 90)
-        col_pos += heap_usage_width + 1
-
-        # Heap Watermark Bytes
-        watermark_bytes_display = f"{heap_info.max_allocated_bytes} / {heap_size}".ljust(
-            watermark_width
-        )
-        self.stdscr.addstr(y, col_pos, watermark_bytes_display)
-
     def _draw_fatal_error_view(self, height: int, width: int):
         self.stdscr.erase()
         self.stdscr.attron(self.ATTR_HEADER_FOOTER)
@@ -571,6 +371,17 @@ class ZView:
         self.stdscr.addstr(height - 1, 0, scroll_indicator[:width])
         self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
 
+        thread_info_printer = TUIThreadInfo(
+            self.ATTR_CURSOR,
+            self.ATTR_ACTIVE_THREAD,
+            self.ATTR_INACTIVE_THREAD,
+            (
+                self.ATTR_PROGRESS_BAR_LOW,
+                self.ATTR_PROGRESS_BAR_MEDIUM,
+                self.ATTR_PROGRESS_BAR_HIGH,
+            ),
+        )
+
         table_start = 4
 
         stack_size_sum = sum(t.stack_size for t in self.threads_data)
@@ -603,7 +414,7 @@ class ZView:
             address=0,
             stack_start=0,
             stack_size=stack_size_sum,
-            name="All Threads".center(thread_column_width),
+            name="All Threads".center(thread_column_width - 1),
             runtime=ThreadRuntime(
                 cpu=aggregate_load,
                 cpu_normalized=aggregate_cpu,
@@ -613,7 +424,7 @@ class ZView:
             ),
         )
 
-        self._draw_thread_info(2, all_threads_info, False)
+        thread_info_printer.draw(self.stdscr, 2, 0, all_threads_info, False)
         self.stdscr.hline(3, 0, curses.ACS_S3, width)
 
         key_func = self.sort_keys[ZViewState.DEFAULT_VIEW][
@@ -631,8 +442,12 @@ class ZView:
                 break
 
             absolute_idx = self.top_line + idx
-            self._draw_thread_info(
-                target_y, thread, selected=(absolute_idx == self.cursor[ZViewState.DEFAULT_VIEW])
+            thread_info_printer.draw(
+                self.stdscr,
+                target_y,
+                0,
+                thread,
+                selected=(absolute_idx == self.cursor[ZViewState.DEFAULT_VIEW]),
             )
 
         self.stdscr.refresh()
@@ -646,7 +461,18 @@ class ZView:
         if not thread or thread.runtime is None:
             return
 
-        self._draw_thread_info(y, thread)
+        thread_info_printer = TUIThreadInfo(
+            self.ATTR_CURSOR,
+            self.ATTR_ACTIVE_THREAD,
+            self.ATTR_INACTIVE_THREAD,
+            (
+                self.ATTR_PROGRESS_BAR_LOW,
+                self.ATTR_PROGRESS_BAR_MEDIUM,
+                self.ATTR_PROGRESS_BAR_HIGH,
+            ),
+        )
+
+        thread_info_printer.draw(self.stdscr, y, 0, thread)
 
         if not self.detailing_thread_usages.get(thread.name):
             self.detailing_thread_usages[thread.name] = {"cpu": [], "load": []}
@@ -662,23 +488,23 @@ class ZView:
             self.detailing_thread_usages[thread.name]["cpu"].pop(0)
 
         y += 2
-        self._draw_graph(
+
+        TUIGraph(graph_height, graph_width, "CPU %", "Thread cycles / Cycles", (0, 100)).draw(
+            self.stdscr,
             y,
             0,
-            graph_height,
-            graph_width,
-            self.detailing_thread_usages[thread.name]["cpu"],
-            "CPU %",
             self.ATTR_GRAPH_B,
+            points=self.detailing_thread_usages[thread.name]["cpu"],
         )
-        self._draw_graph(
+
+        TUIGraph(
+            graph_height, graph_width, "Load %", "Thread cycles / Non-idle cycles", (0, 100)
+        ).draw(
+            self.stdscr,
             y,
             graph_width,
-            graph_height,
-            graph_width,
-            self.detailing_thread_usages[thread.name]["load"],
-            "Load %",
             self.ATTR_GRAPH_A,
+            points=self.detailing_thread_usages[thread.name]["load"],
         )
 
         self.stdscr.refresh()
@@ -717,7 +543,17 @@ class ZView:
             chunks=None,
         )
 
-        self._draw_heap_info(2, all_heaps_info, False)
+        tui_heap_info = TUIHeapInfo(
+            self.ATTR_CURSOR,
+            self.ATTR_ACTIVE_THREAD,
+            (
+                self.ATTR_PROGRESS_BAR_LOW,
+                self.ATTR_PROGRESS_BAR_MEDIUM,
+                self.ATTR_PROGRESS_BAR_HIGH,
+            ),
+        )
+
+        tui_heap_info.draw(self.stdscr, 2, 0, all_heaps_info)
         self.stdscr.hline(3, 0, curses.ACS_S3, width)
 
         key_func = self.sort_keys[ZViewState.HEAPS_VIEW][self.current_sort[ZViewState.HEAPS_VIEW]]
@@ -731,18 +567,32 @@ class ZView:
                 break
 
             absolute_idx = self.top_line + idx
-            self._draw_heap_info(
-                target_y, heap, selected=(absolute_idx == self.cursor[ZViewState.HEAPS_VIEW])
+            tui_heap_info.draw(
+                self.stdscr,
+                target_y,
+                0,
+                heap,
+                selected=(absolute_idx == self.cursor[ZViewState.HEAPS_VIEW]),
             )
 
         self.stdscr.refresh()
 
     def _draw_heaps_detail_view(self, height: int, width: int):
+        tui_heap_info = TUIHeapInfo(
+            self.ATTR_CURSOR,
+            self.ATTR_ACTIVE_THREAD,
+            (
+                self.ATTR_PROGRESS_BAR_LOW,
+                self.ATTR_PROGRESS_BAR_MEDIUM,
+                self.ATTR_PROGRESS_BAR_HIGH,
+            ),
+        )
+
         for heap in self.heaps_data:
             if heap.address != self.scraper.extra_info_heap_address or not heap.chunks:
                 continue
 
-            self._draw_heap_info(2, heap, selected=False)
+            tui_heap_info.draw(self.stdscr, 2, 0, heap)
 
             start_y = 5
             start_x = 1
@@ -754,19 +604,18 @@ class ZView:
                 break
 
             sparsity_matrix = self.get_sparsity_map(heap.chunks, map_width, map_height)
+            metrics = self._get_fragmentation_metrics(heap.chunks)
+            desc = self._get_heap_details_footer(metrics)
+            TUIBox(
+                map_height + 2,
+                map_width + 2,
+                f"Fragmentation Map ({heap.name})",
+                desc if desc else "",
+            ).draw(self.stdscr, start_y - 1, start_x - 1, self.ATTR_GRAPH_B)
 
-            horizontal_limit = "─" * (map_width)
-            self.stdscr.attron(self.ATTR_GRAPH_B)
-            self.stdscr.addstr(start_y - 1, start_x - 1, "┌" + horizontal_limit + "┐")
-            self.stdscr.addstr(start_y + map_height, start_x - 1, "└" + horizontal_limit + "┘")
-            self.stdscr.addstr(start_y - 1, start_x, f"Fragmentation Map ({heap.name})")
             for i, row_str in enumerate(sparsity_matrix):
                 with contextlib.suppress(curses.error):
-                    self.stdscr.addstr(start_y + i, start_x - 1, "│" + row_str + "│")
-            self.stdscr.attroff(self.ATTR_GRAPH_B)
-
-            metrics = self._get_fragmentation_metrics(heap.chunks)
-            self._draw_heap_details_footer(height - 4, start_x, metrics)
+                    self.stdscr.addstr(start_y + i, start_x, row_str, self.ATTR_GRAPH_A)
 
             break
 
