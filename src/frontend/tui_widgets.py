@@ -195,7 +195,6 @@ class TUIThreadInfo:
         self._thread_name_width = name
         self._cpu_usage_width = cpu_usage
         self._load_usage_width = load_usage
-        self._stack_bar_width = stack_bar
         self._stack_bytes_width = stack_bytes
 
         self.watermark_bar.width = stack_bar
@@ -261,57 +260,57 @@ class TUIHeapInfo:
         self._selected_attribute: int = selected_attribute
         self._default_attribute: int = default_attribute
 
-        self._heap_info_scheme = {
-            "Heap": 30,
-            "Free B": 8,
-            "Used B": 8,
-            "Heap Usage %": 32,
-            "Watermark Bytes": 18,
-        }
-        self._columns = list(self._heap_info_scheme.keys())
+        # These are nice values to default to
+        self._heap_name_width = 30
+        self._free_bytes_width = 8
+        self._allocated_bytes_width = 8
+        self._watermark_width = 18
 
         self.usage_bar = TUIProgressBar(
-            self._heap_info_scheme[self._columns[3]],
+            32,
             bar_attributes[0],
             (75, bar_attributes[1]),
             (90, bar_attributes[2]),
         )
+
+    def set_field_widths(
+        self, name: int, free_bytes: int, allocated_bytes: int, usage_bar: int, watermark: int
+    ):
+        self._heap_name_width = name
+        self._free_bytes_width = free_bytes
+        self._allocated_bytes_width = allocated_bytes
+        self._watermark_width = watermark
+
+        self.usage_bar.width = usage_bar
 
     def draw(
         self, stdscr: curses.window, y: int, x: int, heap_info: HeapInfo, selected: bool = False
     ):
         col_pos = x
 
-        # Widths
-        heap_name_width = self._heap_info_scheme[self._columns[0]]
-        free_bytes_width = self._heap_info_scheme[self._columns[1]]
-        allocated_bytes_width = self._heap_info_scheme[self._columns[2]]
-        heap_usage_width = self._heap_info_scheme[self._columns[3]]
-        watermark_width = self._heap_info_scheme[self._columns[4]]
-
         # Heap name
-        heap_name_display = _truncate_str(heap_info.name, heap_name_width)
+        heap_name_display = _truncate_str(heap_info.name, self._heap_name_width)
         heap_name_attr = self._selected_attribute if selected else self._default_attribute
         stdscr.addstr(y, col_pos, heap_name_display, heap_name_attr)
-        col_pos += heap_name_width + 1
+        col_pos += self._heap_name_width + 1
 
         # Free bytes
-        free_bytes_display = f"{heap_info.free_bytes:^{free_bytes_width}}"
+        free_bytes_display = f"{heap_info.free_bytes:^{self._free_bytes_width}}"
         stdscr.addstr(y, col_pos, free_bytes_display)
-        col_pos += free_bytes_width + 1
+        col_pos += self._free_bytes_width + 1
 
         # Allocated bytes
-        allocated_bytes_display = f"{heap_info.allocated_bytes:^{allocated_bytes_width}}"
+        allocated_bytes_display = f"{heap_info.allocated_bytes:^{self._allocated_bytes_width}}"
         stdscr.addstr(y, col_pos, allocated_bytes_display)
-        col_pos += allocated_bytes_width + 1
+        col_pos += self._allocated_bytes_width + 1
 
         # Heap Usage Progress Bar
         heap_size = heap_info.allocated_bytes + heap_info.free_bytes
         self.usage_bar.draw(stdscr, y, col_pos, heap_info.usage_percent)
-        col_pos += heap_usage_width + 1
+        col_pos += self.usage_bar.width + 1
 
         # Heap Watermark Bytes
         watermark_bytes_display = f"{heap_info.max_allocated_bytes} / {heap_size}".ljust(
-            watermark_width
+            self._watermark_width
         )
         stdscr.addstr(y, col_pos, watermark_bytes_display)
