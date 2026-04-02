@@ -5,7 +5,6 @@
 import curses
 
 from backend.z_scraper import HeapInfo, ThreadInfo, ThreadRuntime
-from dataclasses import dataclass
 
 
 def _truncate_str(text: str, max_size: int) -> str:
@@ -20,8 +19,8 @@ class TUIProgressBar:
         medium_threshold: tuple[float, int],
         high_threshold: tuple[float, int],
     ):
-        self._w = width
-        self._bar_width = self._w - 2
+        self.width = width
+        self._bar_width = self.width - 2
 
         self._low_threshold_attr: int = std_attribute
 
@@ -53,7 +52,7 @@ class TUIProgressBar:
         stdscr.addstr(y, x, "█" * completed_chars)
 
         percent_display = f"{percentage:.1f}%"
-        percent_start_x = x + (self._w // 2) - (len(percent_display) // 2)
+        percent_start_x = x + (self.width // 2) - (len(percent_display) // 2)
         bar_end_x = x + completed_chars
 
         split_point = max(0, min(len(percent_display), bar_end_x - percent_start_x))
@@ -177,33 +176,34 @@ class TUIThreadInfo:
         self._active_attribute: int = active_attribute
         self._inactive_attribute: int = inactive_attribute
 
-        self._thread_info_scheme = {
-            "Thread": 30,
-            "CPU %": 8,
-            "Load %": 8,
-            "Stack Usage % (Watermark)": 32,
-            "Watermark Bytes": 18,
-        }
-        self._columns = list(self._thread_info_scheme.keys())
+        # These are nice values to default to
+        self._thread_name_width = 30
+        self._cpu_usage_width = 8
+        self._load_usage_width = 8
+        self._stack_bytes_width = 18
 
         self.watermark_bar = TUIProgressBar(
-            self._thread_info_scheme[self._columns[3]],
+            32,
             bar_attributes[0],
             (75, bar_attributes[1]),
             (90, bar_attributes[2]),
         )
 
+    def set_field_widths(
+        self, name: int, cpu_usage: int, load_usage: int, stack_bar: int, stack_bytes: int
+    ):
+        self._thread_name_width = name
+        self._cpu_usage_width = cpu_usage
+        self._load_usage_width = load_usage
+        self._stack_bar_width = stack_bar
+        self._stack_bytes_width = stack_bytes
+
+        self.watermark_bar.width = stack_bar
+
     def draw(
         self, stdscr: curses.window, y: int, x: int, thread_info: ThreadInfo, selected: bool = False
     ):
         col_pos = x
-
-        # Widths
-        thread_name_width = self._thread_info_scheme[self._columns[0]]
-        cpu_usage_width = self._thread_info_scheme[self._columns[1]]
-        load_usage_width = self._thread_info_scheme[self._columns[2]]
-        stack_usage_width = self._thread_info_scheme[self._columns[3]]
-        stack_bytes_width = self._thread_info_scheme[self._columns[4]]
 
         runtime = thread_info.runtime or ThreadRuntime(
             cpu=-1.0,
@@ -220,33 +220,33 @@ class TUIThreadInfo:
             else (self._active_attribute if runtime.active else self._inactive_attribute)
         )
         stdscr.addstr(
-            y, col_pos, _truncate_str(thread_info.name, thread_name_width), thread_name_attr
+            y, col_pos, _truncate_str(thread_info.name, self._thread_name_width), thread_name_attr
         )
-        col_pos += thread_name_width + 1
+        col_pos += self._thread_name_width + 1
 
         # Thread CPUs
         if runtime.cpu >= 0:
-            cpu_display = f"{runtime.cpu_normalized:.2f}%".center(cpu_usage_width)
+            cpu_display = f"{runtime.cpu_normalized:.2f}%".center(self._cpu_usage_width)
         else:
-            cpu_display = f"{'-':^{cpu_usage_width}}"
+            cpu_display = f"{'-':^{self._cpu_usage_width}}"
         stdscr.addstr(y, col_pos, cpu_display)
-        col_pos += cpu_usage_width + 1
+        col_pos += self._cpu_usage_width + 1
 
         # Thread Loads
         if runtime.cpu >= 0:
-            load_display = f"{runtime.cpu:.1f}%".center(load_usage_width)
+            load_display = f"{runtime.cpu:.1f}%".center(self._load_usage_width)
         else:
-            load_display = f"{'-':^{load_usage_width}}"
+            load_display = f"{'-':^{self._load_usage_width}}"
         stdscr.addstr(y, col_pos, load_display)
-        col_pos += load_usage_width + 1
+        col_pos += self._load_usage_width + 1
 
         # Thread Watermark Progress Bar
         self.watermark_bar.draw(stdscr, y, col_pos, runtime.stack_watermark_percent)
-        col_pos += stack_usage_width + 1
+        col_pos += self.watermark_bar.width + 1
 
         # Thread Watermark Bytes
         watermark_bytes_display = f"{runtime.stack_watermark} / {thread_info.stack_size}".center(
-            stack_bytes_width
+            self._stack_bytes_width
         )
         stdscr.addstr(y, col_pos, watermark_bytes_display)
 
