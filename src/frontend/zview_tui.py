@@ -73,6 +73,35 @@ class BaseStateView:
         pass
 
 
+class FatalErrorView(BaseStateView):
+    def __init__(self, controller: Any, error_attribute: int):
+        super().__init__(controller)
+        self._attr_error: int = error_attribute
+
+    def render(self, stdscr: curses.window, height: int, width: int) -> None:
+        stdscr.attron(self._attr_error)
+        msg_lines = self.controller.status_message.split('\n')
+        start_y = (height // 2) - (len(msg_lines) // 2)
+
+        for i, line in enumerate(msg_lines):
+            if 0 <= start_y + i < height - 2:
+                clean_line = line[: width - 2]
+                x_pos = max(0, (width // 2) - (len(clean_line) // 2))
+                stdscr.addstr(start_y + i, x_pos, clean_line)
+
+        stdscr.attroff(self._attr_error)
+        stdscr.refresh()
+
+    def handle_input(self, key: int) -> ZViewState | None:
+        if key == SpecialCode.QUIT:
+            self.controller.running = False
+
+        elif key == SpecialCode.RECONNECT:
+            self.controller.attempt_reconnect()
+
+        return None
+
+
 class ThreadListView(BaseStateView):
     def __init__(self, controller: Any, tui_thread_info: TUIThreadInfo, footer_attr: int):
         super().__init__(controller)
@@ -417,6 +446,7 @@ class ZView:
         self._init_curses()
 
         self.views: dict[ZViewState, BaseStateView] = {
+            ZViewState.FATAL_ERROR: FatalErrorView(self, self.ATTR_ERROR),
             ZViewState.THREAD_LIST_VIEW: ThreadListView(
                 self,
                 TUIThreadInfo(
@@ -493,6 +523,26 @@ class ZView:
     def purge_queue(self):
         with self.data_queue.mutex:
             self.data_queue.queue.clear()
+
+    def attempt_reconnect(self):
+        """Executes hardware reconnection and data pipeline reset."""
+        self.status_message = "Attempting to reconnect..."
+        self.scraper.finish_polling_thread()
+        self.scraper._m_scraper.disconnect()
+        self.purge_queue()
+
+        self.stop_event.clear()
+
+        try:
+            self.scraper.update_available_threads()
+            self.scraper.reset_thread_pool()
+            self.scraper.start_polling_thread(
+                self.data_queue, self.stop_event, self.scraper.inspection_period
+            )
+            self.transition_to(ZViewState.THREAD_LIST_VIEW)
+            self.stdscr.clear()
+        except Exception as e:
+            self.process_data({"fatal_error": f"Reconnection failed: {e}"})
 
     def get_sparsity_map(self, chunks: list[dict], width: int, height: int) -> list[str]:
         """
@@ -589,10 +639,12 @@ class ZView:
         return " · ".join(parts)
 
     def _base_draw(self, height, width):
+        # TODO: move this to base ABC render
         self.stdscr.erase()
 
         header_text = "ZView - Zephyr RTOS Runtime Viewer"
         footer_text = {
+            ZViewState.FATAL_ERROR: "Quit: q | Reconnect: r ",
             ZViewState.THREAD_LIST_VIEW: "Quit: q | Sort: s | Invert: i | Details: <Enter> ",
             ZViewState.THREAD_DETAIL_VIEW: "Quit: q | All threads: <Enter> ",
             ZViewState.HEAP_LIST_VIEW: "Quit: q | Threads: h | Details: <Enter> ",
@@ -622,7 +674,11 @@ class ZView:
             self.stdscr.attron(self.ATTR_ERROR)
 
         status_row = footer_row - 1
-        self.stdscr.addstr(status_row, 0, self.status_message[:width])
+        self.stdscr.addstr(
+            status_row,
+            0,
+            self.status_message[:width] if self.state is not ZViewState.FATAL_ERROR else "",
+        )
 
         if is_error:
             self.stdscr.attroff(self.ATTR_ERROR)
@@ -630,24 +686,6 @@ class ZView:
         if height <= 5:  # Realistic minimum height check
             self.stdscr.addstr(2, 0, "Terminal too small.")
             return
-
-    def _draw_fatal_error_view(self, height: int, width: int):
-        self.stdscr.erase()
-        self.stdscr.attron(self.ATTR_HEADER_FOOTER)
-        self.stdscr.addstr(0, 0, f"{'ZView - Zephyr RTOS Runtime Viewer':^{width - 1}}")
-        self.stdscr.addstr(height - 1, 0, f"{' Quit: q | Reconnect: r ':>{width - 1}}")
-        self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
-
-        self.stdscr.attron(self.ATTR_ERROR)
-        msg_lines = self.status_message.split('\n')
-
-        start_y = (height // 2) - (len(msg_lines) // 2)
-        for i, line in enumerate(msg_lines):
-            if 0 <= start_y + i < height - 2:
-                clean_line = line[: width - 2]
-                self.stdscr.addstr(start_y + i, (width // 2) - (len(clean_line) // 2), clean_line)
-        self.stdscr.attroff(self.ATTR_ERROR)
-        self.stdscr.refresh()
 
     def _draw_thread_detail_view(self, h, w, y=2):
         """
@@ -751,10 +789,6 @@ class ZView:
         self.stdscr.refresh()
 
     def draw_state(self, state: ZViewState, height: int, width: int):
-        if state == ZViewState.FATAL_ERROR:
-            self._draw_fatal_error_view(height, width)
-            return
-
         self._base_draw(height, width)
         self.views[state].render(self.stdscr, height, width)
 
@@ -820,30 +854,6 @@ class ZView:
 
     def process_events(self, height, inspection_period):
         key = self.stdscr.getch()
-
-        # TODO: remove this to a view class
-        if self.state == ZViewState.FATAL_ERROR:
-            if key == SpecialCode.QUIT:
-                self.running = False
-            elif key == SpecialCode.RECONNECT:
-                self.status_message = "Attempting to reconnect..."
-                self.scraper.finish_polling_thread()
-                self.scraper._m_scraper.disconnect()
-                self.purge_queue()
-                self.state = ZViewState.THREAD_LIST_VIEW
-
-                self.stop_event.clear()
-
-                # Re-initialize the connection cleanly
-                try:
-                    self.scraper.update_available_threads()
-                    self.scraper.reset_thread_pool()
-                    self.scraper.start_polling_thread(
-                        self.data_queue, self.stop_event, inspection_period
-                    )
-                except Exception as e:
-                    self.process_data({"fatal_error": f"Reconnection failed: {e}"})
-            return  # Block all other input during fatal error
 
         new_state = self.views[self.state].handle_input(key)
         if new_state:

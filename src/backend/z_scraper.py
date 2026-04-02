@@ -489,6 +489,7 @@ class ZScraper:
         self._polling_thread: threading.Thread | None = None
         self._thread_pool: list[ThreadInfo] | None = None
         self._stop_event: Event | None = None
+        self.inspection_period = 0.2
 
         self.has_heaps: bool = True
         self.has_usage: bool = True
@@ -756,6 +757,7 @@ class ZScraper:
             data_queue.put({"error": "Already started..."})
             return
 
+        self.inspection_period = inspection_period
         self._polling_thread = threading.Thread(
             target=self._poll_thread_worker,
             args=(data_queue, stop_event, inspection_period),
