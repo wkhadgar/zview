@@ -74,7 +74,7 @@ class BaseStateView:
 
 
 class FatalErrorView(BaseStateView):
-    def __init__(self, controller: Any, error_attribute: int):
+    def __init__(self, controller: Any, error_attribute: int, footer_attr: int):
         super().__init__(controller)
         self._attr_error: int = error_attribute
 
@@ -288,9 +288,11 @@ class HeapListView(BaseStateView):
             lambda h: h.free_bytes,
             lambda h: h.allocated_bytes,
             lambda h: h.max_allocated_bytes,
-            lambda h: (h.allocated_bytes / (h.allocated_bytes + h.free_bytes))
-            if (h.allocated_bytes + h.free_bytes) > 0
-            else 0,
+            lambda h: (
+                (h.allocated_bytes / (h.allocated_bytes + h.free_bytes))
+                if (h.allocated_bytes + h.free_bytes) > 0
+                else 0
+            ),
         ]
 
         self.top_line: int = 0
@@ -427,7 +429,7 @@ class ZView:
             stdscr: The main curses window object provided by curses.wrapper.
         """
         self.min_dimensions = (14, 86)
-        self.stdscr = stdscr
+        self.stdscr: curses.window = stdscr
         self.scraper: ZScraper = scraper
         self.running = True
         self.threads_data: list[ThreadInfo] = []
@@ -444,20 +446,21 @@ class ZView:
         self.idle_thread: ThreadInfo | None = None
 
         self._init_curses()
+        bar_attributes = (
+            self.ATTR_PROGRESS_BAR_LOW,
+            self.ATTR_PROGRESS_BAR_MEDIUM,
+            self.ATTR_PROGRESS_BAR_HIGH,
+        )
 
         self.views: dict[ZViewState, BaseStateView] = {
-            ZViewState.FATAL_ERROR: FatalErrorView(self, self.ATTR_ERROR),
+            ZViewState.FATAL_ERROR: FatalErrorView(self, self.ATTR_ERROR, self.ATTR_HEADER_FOOTER),
             ZViewState.THREAD_LIST_VIEW: ThreadListView(
                 self,
                 TUIThreadInfo(
                     self.ATTR_CURSOR,
                     self.ATTR_ACTIVE_THREAD,
                     self.ATTR_INACTIVE_THREAD,
-                    (
-                        self.ATTR_PROGRESS_BAR_LOW,
-                        self.ATTR_PROGRESS_BAR_MEDIUM,
-                        self.ATTR_PROGRESS_BAR_HIGH,
-                    ),
+                    bar_attributes,
                 ),
                 self.ATTR_HEADER_FOOTER,
             ),
@@ -466,11 +469,7 @@ class ZView:
                 TUIHeapInfo(
                     self.ATTR_CURSOR,
                     self.ATTR_ACTIVE_THREAD,
-                    (
-                        self.ATTR_PROGRESS_BAR_LOW,
-                        self.ATTR_PROGRESS_BAR_MEDIUM,
-                        self.ATTR_PROGRESS_BAR_HIGH,
-                    ),
+                    bar_attributes,
                 ),
                 self.ATTR_HEADER_FOOTER,
             ),
@@ -669,23 +668,15 @@ class ZView:
         self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
 
         is_error = self.status_message.startswith("Error")
-
-        if is_error:
-            self.stdscr.attron(self.ATTR_ERROR)
-
+        attr = self.stdscr.getbkgd()
+        attr = attr & ~0xFF if isinstance(attr, int) else attr[0]
         status_row = footer_row - 1
         self.stdscr.addstr(
             status_row,
             0,
             self.status_message[:width] if self.state is not ZViewState.FATAL_ERROR else "",
+            (attr | self.ATTR_ERROR) if is_error else attr,
         )
-
-        if is_error:
-            self.stdscr.attroff(self.ATTR_ERROR)
-
-        if height <= 5:  # Realistic minimum height check
-            self.stdscr.addstr(2, 0, "Terminal too small.")
-            return
 
     def _draw_thread_detail_view(self, h, w, y=2):
         """
