@@ -45,13 +45,56 @@ class SpecialCode:
 
 
 class BaseStateView:
-    def __init__(self, controller: Any):
+    def __init__(self, controller: Any, frame_attribute: int, error_attribute: int):
         """
         The controller reference allows the view to access global state
         (like colors or the max threads limit) without owning it.
         """
         self.controller = controller
         self.cursor: int = 0
+        self._frame_attr: int = frame_attribute
+        self._error_attr: int = error_attribute
+
+    def _render_status(
+        self,
+        stdscr: curses.window,
+        width: int,
+        y: int,
+    ):
+        is_error = self.controller.status_message.startswith("Error")
+        attr = stdscr.getbkgd()
+        attr = attr & ~0xFF if isinstance(attr, int) else attr[0]
+        status_row = y
+        stdscr.addstr(
+            status_row,
+            0,
+            self.controller.status_message[:width],
+            (attr | self._error_attr) if is_error else attr,
+        )
+
+    def _render_frame(
+        self,
+        stdscr: curses.window,
+        footer_hint: str,
+        height: int,
+        width: int,
+    ):
+        header_text = "ZView - Zephyr RTOS Runtime Viewer"
+        footer_text = {
+            ZViewState.THREAD_DETAIL_VIEW: "Quit: q | All threads: <Enter> ",
+            ZViewState.HEAPS_DETAIL_VIEW: "Quit: q | All heaps: <Enter> ",
+        }
+
+        stdscr.move(0, 0)
+        stdscr.clrtoeol()
+        stdscr.addstr(0, 0, f"{header_text:^{width}}", self._frame_attr)
+        footer_row = height - 1
+        stdscr.move(footer_row, 0)
+        stdscr.clrtoeol()
+        with contextlib.suppress(curses.error):
+            # This is needed since curses try to advance the cursor to the next
+            # position, wich is outside the terminal, we safely ignore this.
+            stdscr.addstr(footer_row, 0, f"{footer_hint:>{width}}", self._frame_attr)
 
     @abstractmethod
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
@@ -74,11 +117,20 @@ class BaseStateView:
 
 
 class FatalErrorView(BaseStateView):
-    def __init__(self, controller: Any, error_attribute: int):
-        super().__init__(controller)
+    def __init__(
+        self,
+        controller: Any,
+        frame_attr: int,
+        error_attribute: int,
+    ):
+        super().__init__(controller, frame_attr, error_attribute)
         self._attr_error: int = error_attribute
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
+        stdscr.erase()
+
+        self._render_frame(stdscr, "Quit: q | Reconnect: r ", height, width)
+
         stdscr.attron(self._attr_error)
         msg_lines = self.controller.status_message.split('\n')
         start_y = (height // 2) - (len(msg_lines) // 2)
@@ -103,8 +155,10 @@ class FatalErrorView(BaseStateView):
 
 
 class ThreadListView(BaseStateView):
-    def __init__(self, controller: Any, tui_thread_info: TUIThreadInfo, footer_attr: int):
-        super().__init__(controller)
+    def __init__(
+        self, controller: Any, tui_thread_info: TUIThreadInfo, frame_attr: int, error_attr: int
+    ):
+        super().__init__(controller, frame_attr, error_attr)
 
         self._current_sort_idx = 0
         self._invert_sorting = False
@@ -127,12 +181,22 @@ class ThreadListView(BaseStateView):
         self.top_line: int = 0
 
         self._tui_thread_info: TUIThreadInfo = tui_thread_info
-        self._footer_attr: int = footer_attr
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         """
         Draws the thread data table and its general informations.
         """
+
+        stdscr.erase()
+
+        self._render_frame(
+            stdscr,
+            "Quit: q | Sort: s | Invert: i | Details: <Enter> " + "| Heaps: h "
+            if self.controller.scraper.has_heaps
+            else "",
+            height,
+            width,
+        )
 
         max_table_rows = height - 6
         total_threads = len(self.controller.threads_data)
@@ -162,7 +226,7 @@ class ThreadListView(BaseStateView):
             curr_x += h_width + 1
 
         scroll_indicator = f" Threads: {start_num}-{end_num} of {total_threads} "
-        stdscr.addstr(height - 1, 0, scroll_indicator[:width], self._footer_attr)
+        stdscr.addstr(height - 1, 0, scroll_indicator[:width], self._frame_attr)
 
         table_start = 4
 
@@ -228,6 +292,8 @@ class ThreadListView(BaseStateView):
                 selected=(absolute_idx == self.cursor),
             )
 
+        self._render_status(stdscr, width, height - 2)
+
         stdscr.refresh()
 
     def handle_input(self, key: int) -> ZViewState | None:
@@ -269,8 +335,10 @@ class ThreadListView(BaseStateView):
 
 
 class HeapListView(BaseStateView):
-    def __init__(self, controller: Any, tui_heap_info: TUIHeapInfo, footer_attr: int):
-        super().__init__(controller)
+    def __init__(
+        self, controller: Any, tui_heap_info: TUIHeapInfo, frame_attr: int, error_attribute: int
+    ):
+        super().__init__(controller, frame_attr, error_attribute)
 
         self._current_sort_idx = 0
         self._invert_sorting = False
@@ -288,19 +356,24 @@ class HeapListView(BaseStateView):
             lambda h: h.free_bytes,
             lambda h: h.allocated_bytes,
             lambda h: h.max_allocated_bytes,
-            lambda h: (h.allocated_bytes / (h.allocated_bytes + h.free_bytes))
-            if (h.allocated_bytes + h.free_bytes) > 0
-            else 0,
+            lambda h: (
+                (h.allocated_bytes / (h.allocated_bytes + h.free_bytes))
+                if (h.allocated_bytes + h.free_bytes) > 0
+                else 0
+            ),
         ]
 
         self.top_line: int = 0
         self._tui_heap_info: TUIHeapInfo = tui_heap_info
-        self._footer_attr: int = footer_attr
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         """
         Draws the heap data table and its aggregate information.
         """
+        stdscr.erase()
+
+        self._render_frame(stdscr, "Quit: q | Threads: h | Details: <Enter> ", height, width)
+
         max_table_rows = height - 6
         total_heaps = len(self.controller.heaps_data)
         start_num = self.top_line + 1 if total_heaps > 0 else 0
@@ -329,7 +402,7 @@ class HeapListView(BaseStateView):
             curr_x += h_width + 1
 
         scroll_indicator = f" Heaps: {start_num}-{end_num} of {total_heaps} "
-        stdscr.addstr(height - 1, 0, scroll_indicator[:width], self._footer_attr)
+        stdscr.addstr(height - 1, 0, scroll_indicator[:width], self._frame_attr)
 
         table_start = 4
 
@@ -374,6 +447,8 @@ class HeapListView(BaseStateView):
                 heap,
                 selected=(absolute_idx == self.cursor),
             )
+
+        self._render_status(stdscr, width, height - 2)
 
         stdscr.refresh()
 
@@ -427,7 +502,7 @@ class ZView:
             stdscr: The main curses window object provided by curses.wrapper.
         """
         self.min_dimensions = (14, 86)
-        self.stdscr = stdscr
+        self.stdscr: curses.window = stdscr
         self.scraper: ZScraper = scraper
         self.running = True
         self.threads_data: list[ThreadInfo] = []
@@ -444,35 +519,38 @@ class ZView:
         self.idle_thread: ThreadInfo | None = None
 
         self._init_curses()
+        bar_attributes = (
+            self.ATTR_PROGRESS_BAR_LOW,
+            self.ATTR_PROGRESS_BAR_MEDIUM,
+            self.ATTR_PROGRESS_BAR_HIGH,
+        )
 
         self.views: dict[ZViewState, BaseStateView] = {
-            ZViewState.FATAL_ERROR: FatalErrorView(self, self.ATTR_ERROR),
+            ZViewState.FATAL_ERROR: FatalErrorView(
+                self,
+                self.ATTR_HEADER_FOOTER,
+                self.ATTR_ERROR,
+            ),
             ZViewState.THREAD_LIST_VIEW: ThreadListView(
                 self,
                 TUIThreadInfo(
                     self.ATTR_CURSOR,
                     self.ATTR_ACTIVE_THREAD,
                     self.ATTR_INACTIVE_THREAD,
-                    (
-                        self.ATTR_PROGRESS_BAR_LOW,
-                        self.ATTR_PROGRESS_BAR_MEDIUM,
-                        self.ATTR_PROGRESS_BAR_HIGH,
-                    ),
+                    bar_attributes,
                 ),
                 self.ATTR_HEADER_FOOTER,
+                self.ATTR_ERROR,
             ),
             ZViewState.HEAP_LIST_VIEW: HeapListView(
                 self,
                 TUIHeapInfo(
                     self.ATTR_CURSOR,
                     self.ATTR_ACTIVE_THREAD,
-                    (
-                        self.ATTR_PROGRESS_BAR_LOW,
-                        self.ATTR_PROGRESS_BAR_MEDIUM,
-                        self.ATTR_PROGRESS_BAR_HIGH,
-                    ),
+                    bar_attributes,
                 ),
                 self.ATTR_HEADER_FOOTER,
+                self.ATTR_ERROR,
             ),
         }
 
@@ -638,55 +716,6 @@ class ZView:
         parts = [f"{k}: {fmt(v, h)}" for k, (v, h) in metrics.items()]
         return " · ".join(parts)
 
-    def _base_draw(self, height, width):
-        # TODO: move this to base ABC render
-        self.stdscr.erase()
-
-        header_text = "ZView - Zephyr RTOS Runtime Viewer"
-        footer_text = {
-            ZViewState.FATAL_ERROR: "Quit: q | Reconnect: r ",
-            ZViewState.THREAD_LIST_VIEW: "Quit: q | Sort: s | Invert: i | Details: <Enter> ",
-            ZViewState.THREAD_DETAIL_VIEW: "Quit: q | All threads: <Enter> ",
-            ZViewState.HEAP_LIST_VIEW: "Quit: q | Threads: h | Details: <Enter> ",
-            ZViewState.HEAPS_DETAIL_VIEW: "Quit: q | All heaps: <Enter> ",
-        }
-
-        if self.scraper.has_heaps:
-            footer_text[ZViewState.THREAD_LIST_VIEW] += "| Heaps: h "
-
-        self.stdscr.attron(self.ATTR_HEADER_FOOTER)
-        self.stdscr.move(0, 0)
-        self.stdscr.clrtoeol()
-        self.stdscr.addstr(0, 0, f"{header_text:^{width}}")
-
-        footer_row = height - 1
-        self.stdscr.move(footer_row, 0)
-        self.stdscr.clrtoeol()
-        with contextlib.suppress(curses.error):
-            # This is needed since curses try to advance the cursor to the next
-            # position, wich is outside the terminal, we safely ignore this.
-            self.stdscr.addstr(footer_row, 0, f"{footer_text[self.state]:>{width}}")
-        self.stdscr.attroff(self.ATTR_HEADER_FOOTER)
-
-        is_error = self.status_message.startswith("Error")
-
-        if is_error:
-            self.stdscr.attron(self.ATTR_ERROR)
-
-        status_row = footer_row - 1
-        self.stdscr.addstr(
-            status_row,
-            0,
-            self.status_message[:width] if self.state is not ZViewState.FATAL_ERROR else "",
-        )
-
-        if is_error:
-            self.stdscr.attroff(self.ATTR_ERROR)
-
-        if height <= 5:  # Realistic minimum height check
-            self.stdscr.addstr(2, 0, "Terminal too small.")
-            return
-
     def _draw_thread_detail_view(self, h, w, y=2):
         """
         Draws a single thread details, and its recent CPU usage as a graph.
@@ -788,10 +817,6 @@ class ZView:
 
         self.stdscr.refresh()
 
-    def draw_state(self, state: ZViewState, height: int, width: int):
-        self._base_draw(height, width)
-        self.views[state].render(self.stdscr, height, width)
-
     def draw_tui(self, height, width):
         if height < self.min_dimensions[0] or width < self.min_dimensions[1]:
             self.stdscr.erase()
@@ -810,8 +835,9 @@ class ZView:
                 if 0 <= start_y + i < height:
                     centered_line = f"{msg:^{width}}"[: width - 1]
                     self.stdscr.addstr(start_y + i, 0, centered_line)
-        else:
-            self.draw_state(self.state, height, width)
+            return
+
+        self.views[self.state].render(self.stdscr, height, width)
 
     def transition_to(self, new_state: ZViewState):
         """Centralized state transition and data pipeline management."""
@@ -852,7 +878,7 @@ class ZView:
 
         self.state = new_state
 
-    def process_events(self, height, inspection_period):
+    def process_events(self):
         key = self.stdscr.getch()
 
         new_state = self.views[self.state].handle_input(key)
@@ -873,11 +899,6 @@ class ZView:
                         self.state = ZViewState.HEAPS_VIEW
                         self.scraper.extra_info_heap_address = None
                         self.purge_queue()
-
-            case SpecialCode.QUIT:
-                self.running = False
-            case _:
-                return
 
         return
 
@@ -933,7 +954,7 @@ class ZView:
 
             self.draw_tui(h, w)
 
-            self.process_events(h, inspection_period)
+            self.process_events()
 
             time.sleep(0.01)
 
