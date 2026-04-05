@@ -334,6 +334,99 @@ class ThreadListView(BaseStateView):
                 return None
 
 
+class ThreadDetailView(ThreadListView):
+    def __init__(
+        self,
+        controller: Any,
+        tui_thread_info: TUIThreadInfo,
+        frame_attr: int,
+        error_attr: int,
+        graph_a_attr: int,
+        graph_b_attr: int,
+    ):
+        super().__init__(controller, tui_thread_info, frame_attr, error_attr)
+        self._cpu_graph: TUIGraph = TUIGraph(
+            "CPU %", "Thread cycles / Cycles", (0, 100), graph_b_attr
+        )
+        self._load_graph: TUIGraph = TUIGraph(
+            "Load %", "Thread cycles / Non-idle cycles", (0, 100), graph_a_attr
+        )
+
+        self._current_thread_name: str | None = None
+        self._usages: dict[str, list[int]] = {"cpu": [], "load": []}
+
+    def render(self, stdscr: curses.window, height: int, width: int) -> None:
+        stdscr.erase()
+
+        self._render_frame(stdscr, "Quit: q | All threads: <Enter> ", height, width)
+
+        curr_x = 0
+        for col_header, h_width in self._scheme.items():
+            if curr_x >= width:
+                break
+
+            txt = f"{col_header:^{h_width}}"[: width - curr_x]
+            stdscr.addstr(1, curr_x, txt)
+            curr_x += h_width + 1
+
+        thread = next(
+            (t for t in self.controller.threads_data if t.name == self.controller.detailing_thread),
+            None,
+        )
+        if not thread or thread.runtime is None:
+            self._render_status(stdscr, width, height - 2)
+            stdscr.refresh()
+            return
+
+        # Reset history if switching to a new thread
+        if self._current_thread_name != thread.name:
+            self._current_thread_name = thread.name
+            self._usages = {"cpu": [], "load": []}
+
+        self._tui_thread_info.draw(stdscr, 2, 0, thread)
+
+        self._usages["cpu"].append(int(thread.runtime.cpu_normalized))
+        self._usages["load"].append(int(thread.runtime.cpu))
+
+        graph_height = max(self.controller.min_dimensions[0] - 6, height - 7)
+        graph_width = width // 2
+
+        if len(self._usages["load"]) > graph_width - 2:
+            self._usages["load"].pop(0)
+            self._usages["cpu"].pop(0)
+
+        y = 4
+
+        self._cpu_graph.draw(
+            stdscr,
+            y,
+            0,
+            graph_height,
+            graph_width,
+            points=self._usages["cpu"],
+        )
+
+        self._load_graph.draw(
+            stdscr,
+            y,
+            graph_width,
+            graph_height,
+            graph_width,
+            points=self._usages["load"],
+        )
+
+        self._render_status(stdscr, width, height - 2)
+
+        stdscr.refresh()
+
+    def handle_input(self, key: int) -> ZViewState | None:
+        if key in (curses.KEY_ENTER, SpecialCode.NEWLINE, SpecialCode.RETURN):
+            return ZViewState.THREAD_LIST_VIEW
+        elif key == SpecialCode.QUIT:
+            self.controller.running = False
+        return None
+
+
 class HeapListView(BaseStateView):
     def __init__(
         self, controller: Any, tui_heap_info: TUIHeapInfo, frame_attr: int, error_attribute: int
@@ -515,7 +608,6 @@ class ZView:
         self.state: ZViewState = ZViewState.THREAD_LIST_VIEW
 
         self.detailing_thread: str | None = None
-        self.detailing_thread_usages = {}
         self.idle_thread: ThreadInfo | None = None
 
         self._init_curses()
@@ -541,6 +633,19 @@ class ZView:
                 ),
                 self.ATTR_HEADER_FOOTER,
                 self.ATTR_ERROR,
+            ),
+            ZViewState.THREAD_DETAIL_VIEW: ThreadDetailView(
+                self,
+                TUIThreadInfo(
+                    self.ATTR_CURSOR,
+                    self.ATTR_ACTIVE_THREAD,
+                    self.ATTR_INACTIVE_THREAD,
+                    bar_attributes,
+                ),
+                self.ATTR_HEADER_FOOTER,
+                self.ATTR_ERROR,
+                self.ATTR_GRAPH_A,
+                self.ATTR_GRAPH_B,
             ),
             ZViewState.HEAP_LIST_VIEW: HeapListView(
                 self,
@@ -716,63 +821,6 @@ class ZView:
         parts = [f"{k}: {fmt(v, h)}" for k, (v, h) in metrics.items()]
         return " · ".join(parts)
 
-    def _draw_thread_detail_view(self, h, w, y=2):
-        """
-        Draws a single thread details, and its recent CPU usage as a graph.
-        """
-        thread = next((t for t in self.threads_data if t.name == self.detailing_thread), None)
-
-        if not thread or thread.runtime is None:
-            return
-
-        thread_info_printer = TUIThreadInfo(
-            self.ATTR_CURSOR,
-            self.ATTR_ACTIVE_THREAD,
-            self.ATTR_INACTIVE_THREAD,
-            (
-                self.ATTR_PROGRESS_BAR_LOW,
-                self.ATTR_PROGRESS_BAR_MEDIUM,
-                self.ATTR_PROGRESS_BAR_HIGH,
-            ),
-        )
-
-        thread_info_printer.draw(self.stdscr, y, 0, thread)
-
-        if not self.detailing_thread_usages.get(thread.name):
-            self.detailing_thread_usages[thread.name] = {"cpu": [], "load": []}
-
-        self.detailing_thread_usages[thread.name]["cpu"].append(int(thread.runtime.cpu_normalized))
-        self.detailing_thread_usages[thread.name]["load"].append(int(thread.runtime.cpu))
-
-        graph_height = max(self.min_dimensions[0] - 6, h - 7)
-        graph_width = w // 2
-
-        if len(self.detailing_thread_usages[thread.name]["load"]) > graph_width - 2:
-            self.detailing_thread_usages[thread.name]["load"].pop(0)
-            self.detailing_thread_usages[thread.name]["cpu"].pop(0)
-
-        y += 2
-
-        TUIGraph(graph_height, graph_width, "CPU %", "Thread cycles / Cycles", (0, 100)).draw(
-            self.stdscr,
-            y,
-            0,
-            self.ATTR_GRAPH_B,
-            points=self.detailing_thread_usages[thread.name]["cpu"],
-        )
-
-        TUIGraph(
-            graph_height, graph_width, "Load %", "Thread cycles / Non-idle cycles", (0, 100)
-        ).draw(
-            self.stdscr,
-            y,
-            graph_width,
-            self.ATTR_GRAPH_A,
-            points=self.detailing_thread_usages[thread.name]["load"],
-        )
-
-        self.stdscr.refresh()
-
     def _draw_heaps_detail_view(self, height: int, width: int):
         tui_heap_info = TUIHeapInfo(
             self.ATTR_CURSOR,
@@ -803,11 +851,16 @@ class ZView:
             metrics = self._get_fragmentation_metrics(heap.chunks)
             desc = self._get_heap_details_footer(metrics)
             TUIBox(
-                map_height + 2,
-                map_width + 2,
                 f"Fragmentation Map ({heap.name})",
                 desc if desc else "",
-            ).draw(self.stdscr, start_y - 1, start_x - 1, self.ATTR_GRAPH_B)
+                self.ATTR_GRAPH_B,
+            ).draw(
+                self.stdscr,
+                start_y - 1,
+                start_x - 1,
+                map_height + 2,
+                map_width + 2,
+            )
 
             for i, row_str in enumerate(sparsity_matrix):
                 with contextlib.suppress(curses.error):
@@ -857,7 +910,6 @@ class ZView:
                 target_thread = self.scraper.all_threads.get(self.detailing_thread)
                 if target_thread:
                     new_pool = [target_thread]
-                    # TODO: ensure idle thread is needed here
                     idle_t = next(
                         (
                             t
@@ -890,11 +942,6 @@ class ZView:
         match key:
             case curses.KEY_ENTER | SpecialCode.NEWLINE | SpecialCode.RETURN:
                 match self.state:
-                    case ZViewState.THREAD_DETAIL:
-                        self.state = ZViewState.DEFAULT_VIEW
-                        self.scraper.thread_pool = list(self.scraper.all_threads.values())
-                        self.purge_queue()
-
                     case ZViewState.HEAPS_DETAIL:
                         self.state = ZViewState.HEAPS_VIEW
                         self.scraper.extra_info_heap_address = None

@@ -71,39 +71,42 @@ class TUIProgressBar:
 
 
 class TUIBox:
-    def __init__(self, h: int, w: int, title: str, description: str):
-        self._h: int = h
-        self._w: int = w
-        self._title: str = _truncate_str(title, w - 2)
-        self._description: str = _truncate_str(description, w - 2)
+    def __init__(self, title: str, description: str, attribute: int):
+        self._title: str = title
+        self._description: str = description
+        self._attr: int = attribute
 
-        horizontal_bar = "─" * (self._w - 2)
-        self._top_str = "┌" + self._title + horizontal_bar[len(self._title) :] + "┐"
-        self._bottom_str = "└" + self._description + horizontal_bar[len(self._description) :] + "┘"
-        self._side_str = "│"
+    def draw(
+        self,
+        stdscr: curses.window,
+        y: int,
+        x: int,
+        height: int,
+        width: int,
+        **kwargs,
+    ):
+        title = _truncate_str(self._title, width - 2)
+        description = _truncate_str(self._description, width - 2)
 
-    def draw(self, stdscr: curses.window, y: int, x: int, attributes: int, **kwargs):
-        stdscr.attron(attributes)
+        horizontal_bar = "─" * (width - 2)
+        top_str = "┌" + title + horizontal_bar[len(title) :] + "┐"
+        bottom_str = "└" + description + horizontal_bar[len(description) :] + "┘"
+        side_str = "│"
 
-        stdscr.addstr(y, x, self._top_str)
-        for row in range(1, self._h - 1):
-            stdscr.addstr(y + row, x, self._side_str)
-            stdscr.addstr(y + row, x + self._w - 1, self._side_str)
-        stdscr.addstr(y + self._h - 1, x, self._bottom_str)
+        stdscr.attron(self._attr)
 
-        stdscr.attroff(attributes)
+        stdscr.addstr(y, x, top_str)
+        for row in range(1, height - 1):
+            stdscr.addstr(y + row, x, side_str)
+            stdscr.addstr(y + row, x + width - 1, side_str)
+        stdscr.addstr(y + height - 1, x, bottom_str)
+
+        stdscr.attroff(self._attr)
 
 
 class TUIGraph(TUIBox):
-    def __init__(
-        self,
-        h: int,
-        w: int,
-        title: str,
-        description: str,
-        limits: tuple[int, int],
-    ):
-        super().__init__(h, w, title, description)
+    def __init__(self, title: str, description: str, limits: tuple[int, int], attribute: int):
+        super().__init__(title, description, attribute)
 
         self._max_limit: int = max(limits)
         self._min_limit: int = min(limits)
@@ -130,18 +133,26 @@ class TUIGraph(TUIBox):
 
         return res
 
-    def draw(self, stdscr: curses.window, y, x, attributes: int, **kwargs):
-        super().draw(stdscr, y, x, attributes)
+    def draw(
+        self,
+        stdscr: curses.window,
+        y: int,
+        x: int,
+        height: int,
+        width: int,
+        **kwargs,
+    ):
+        super().draw(stdscr, y, x, height, width)
 
         all_points: list[float | int] = kwargs.get("points", [])
         if not all_points:
             return
 
-        norm_points = self._process_points(all_points, self._w - 2)
+        norm_points = self._process_points(all_points, width - 2)
 
-        internal_height = self._h - 2
-        internal_width = self._w - 2
-        stdscr.attron(attributes)
+        internal_height = height - 2
+        internal_width = width - 2
+        stdscr.attron(self._attr)
         for x_step in range(internal_width):
             x_pos = x + x_step + 1
             full_blocks_f = (norm_points[x_step] / self._max_limit) * internal_height
@@ -157,11 +168,11 @@ class TUIGraph(TUIBox):
                 else:
                     stdscr.addstr(y_pos, x_pos, " ")
 
-        stdscr.addstr(y + 1, x + self._w - len(self._max_limit_str), self._max_limit_str)
+        stdscr.addstr(y + 1, x + width - len(self._max_limit_str), self._max_limit_str)
         stdscr.addstr(
-            y + internal_height, x + self._w - len(self._min_limit_str), self._min_limit_str
+            y + internal_height, x + width - len(self._min_limit_str), self._min_limit_str
         )
-        stdscr.attroff(attributes)
+        stdscr.attroff(self._attr)
 
 
 class TUIThreadInfo:
