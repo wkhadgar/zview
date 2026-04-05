@@ -80,10 +80,6 @@ class BaseStateView:
         width: int,
     ):
         header_text = "ZView - Zephyr RTOS Runtime Viewer"
-        footer_text = {
-            ZViewState.THREAD_DETAIL_VIEW: "Quit: q | All threads: <Enter> ",
-            ZViewState.HEAPS_DETAIL_VIEW: "Quit: q | All heaps: <Enter> ",
-        }
 
         stdscr.move(0, 0)
         stdscr.clrtoeol()
@@ -579,6 +575,160 @@ class HeapListView(BaseStateView):
                 return None
 
 
+class HeapDetailView(HeapListView):
+    def __init__(
+        self,
+        controller: Any,
+        tui_heap_info: TUIHeapInfo,
+        frame_attr: int,
+        error_attr: int,
+        graph_a_attr: int,
+        graph_b_attr: int,
+    ):
+        super().__init__(controller, tui_heap_info, frame_attr, error_attr)
+        self._graph_a_attr = graph_a_attr
+        self._frag_map_frame: TUIBox = TUIBox("Fragmentation Map", "", graph_b_attr)
+
+    @staticmethod
+    def get_sparsity_map(chunks: list[dict], width: int, height: int) -> list[str]:
+        total_chars = width * height
+        if not chunks or total_chars <= 0:
+            return []
+
+        total_bytes = sum(chunk["size"] for chunk in chunks)
+        if total_bytes == 0:
+            return []
+
+        bytes_per_char = total_bytes / total_chars
+        output = []
+        chunk_idx = 0
+        chunk_rem = float(chunks[0]["size"])
+        chunk_is_used = chunks[0]["used"]
+
+        for _ in range(total_chars):
+            bucket_used = 0.0
+            bucket_rem = bytes_per_char
+
+            while bucket_rem > 0 and chunk_idx < len(chunks):
+                take = min(chunk_rem, bucket_rem)
+                if chunk_is_used:
+                    bucket_used += take
+                chunk_rem -= take
+                bucket_rem -= take
+                if chunk_rem <= 0:
+                    chunk_idx += 1
+                    if chunk_idx < len(chunks):
+                        chunk_rem = float(chunks[chunk_idx]["size"])
+                        chunk_is_used = chunks[chunk_idx]["used"]
+
+            ratio = bucket_used / bytes_per_char
+            if ratio == 0:
+                output.append(" ")
+            elif ratio <= 0.33:
+                output.append("░")
+            elif ratio <= 0.66:
+                output.append("▒")
+            elif ratio <= 0.99:
+                output.append("▓")
+            else:
+                output.append("█")
+
+        return ["".join(output[i : i + width]) for i in range(0, len(output), width)]
+
+    @staticmethod
+    def _get_fragmentation_metrics(chunks: list[dict]) -> dict:
+        if not chunks:
+            return {}
+        total_chunks = len(chunks)
+        allocated_chunks = sum(1 for c in chunks if c["used"])
+        free_bytes = sum(c["size"] for c in chunks if not c["used"])
+        largest_free = max((c["size"] for c in chunks if not c["used"]), default=0)
+        ratio = (1 - largest_free / free_bytes) * 100 if free_bytes > 0 else 0.0
+        return {
+            "Largest free": (largest_free, "bytes"),
+            "Frag ratio": (ratio, "percent"),
+            "Chunks": (f"{allocated_chunks}/{total_chunks}", "raw"),
+        }
+
+    @staticmethod
+    def _get_heap_details_footer(metrics: dict):
+        if not metrics:
+            return ""
+
+        def fmt(value, hint):
+            if hint == "bytes":
+                return f"{value / 1024:.1f} KB" if value >= 1024 else f"{value} B"
+            if hint == "percent":
+                return f"{value:.1f}%"
+            return str(value)
+
+        return " · ".join([f"{k}: {fmt(v, h)}" for k, (v, h) in metrics.items()])
+
+    def render(self, stdscr: curses.window, height: int, width: int) -> None:
+        stdscr.erase()
+
+        self._render_frame(stdscr, "Quit: q | All heaps: <Enter> ", height, width)
+
+        curr_x = 0
+        for col_header, h_width in self._scheme.items():
+            if curr_x >= width:
+                break
+
+            txt = f"{col_header:^{h_width}}"[: width - curr_x]
+            stdscr.addstr(1, curr_x, txt)
+            curr_x += h_width + 1
+
+        heap = next(
+            (
+                h
+                for h in self.controller.heaps_data
+                if h.address == self.controller.detailing_heap_address
+            ),
+            None,
+        )
+
+        if not heap or not heap.chunks:
+            self._render_status(stdscr, width, height - 2)
+            stdscr.refresh()
+            return
+
+        self._tui_heap_info.draw(stdscr, 2, 0, heap, False)
+
+        start_y = 5
+        start_x = 1
+        map_height = height - start_y - 4
+        map_width = width - start_x - 1
+
+        if map_height > 0 and map_width > 0:
+            sparsity_matrix = self.get_sparsity_map(heap.chunks, map_width, map_height)
+            metrics = self._get_fragmentation_metrics(heap.chunks)
+            desc = self._get_heap_details_footer(metrics)
+
+            self._frag_map_frame._description = desc
+            self._frag_map_frame.draw(
+                stdscr,
+                start_y - 1,
+                start_x - 1,
+                map_height + 2,
+                map_width + 2,
+            )
+
+            for i, row_str in enumerate(sparsity_matrix):
+                with contextlib.suppress(curses.error):
+                    stdscr.addstr(start_y + i, start_x, row_str, self._graph_a_attr)
+
+        self._render_status(stdscr, width, height - 2)
+
+        stdscr.refresh()
+
+    def handle_input(self, key: int) -> ZViewState | None:
+        if key in (curses.KEY_ENTER, SpecialCode.NEWLINE, SpecialCode.RETURN):
+            return ZViewState.HEAP_LIST_VIEW
+        elif key == SpecialCode.QUIT:
+            self.controller.running = False
+        return None
+
+
 class ZView:
     """
     A curses-based application for viewing Zephyr RTOS thread runtime information.
@@ -608,6 +758,7 @@ class ZView:
         self.state: ZViewState = ZViewState.THREAD_LIST_VIEW
 
         self.detailing_thread: str | None = None
+        self.detailing_heap_address: int | None = None
         self.idle_thread: ThreadInfo | None = None
 
         self._init_curses()
@@ -656,6 +807,18 @@ class ZView:
                 ),
                 self.ATTR_HEADER_FOOTER,
                 self.ATTR_ERROR,
+            ),
+            ZViewState.HEAPS_DETAIL_VIEW: HeapDetailView(
+                self,
+                TUIHeapInfo(
+                    self.ATTR_CURSOR,
+                    self.ATTR_ACTIVE_THREAD,
+                    bar_attributes,
+                ),
+                self.ATTR_HEADER_FOOTER,
+                self.ATTR_ERROR,
+                self.ATTR_GRAPH_A,
+                self.ATTR_GRAPH_B,
             ),
         }
 
@@ -727,149 +890,6 @@ class ZView:
         except Exception as e:
             self.process_data({"fatal_error": f"Reconnection failed: {e}"})
 
-    def get_sparsity_map(self, chunks: list[dict], width: int, height: int) -> list[str]:
-        """
-        Compresses a linear map of physical heap chunks into a 2D terminal grid.
-
-        Args:
-            chunks: List of dicts, e.g., [{"used": True, "size": 32}, {"used": False, "size": 128}]
-            width: The exact integer number of columns available for rendering.
-            height: The exact integer number of rows available for rendering.
-
-        Returns:
-            A list of strings, where each string is exactly `width` characters long.
-        """
-        total_chars = width * height
-        if not chunks or total_chars <= 0:
-            return []
-
-        total_bytes = sum(chunk["size"] for chunk in chunks)
-        if total_bytes == 0:
-            return []
-
-        bytes_per_char = total_bytes / total_chars
-
-        output = []
-        chunk_idx = 0
-
-        chunk_rem = float(chunks[0]["size"])
-        chunk_is_used = chunks[0]["used"]
-
-        for _ in range(total_chars):
-            bucket_used = 0.0
-            bucket_rem = bytes_per_char
-
-            while bucket_rem > 0 and chunk_idx < len(chunks):
-                take = min(chunk_rem, bucket_rem)
-
-                if chunk_is_used:
-                    bucket_used += take
-
-                chunk_rem -= take
-                bucket_rem -= take
-
-                if chunk_rem <= 0:
-                    chunk_idx += 1
-                    if chunk_idx < len(chunks):
-                        chunk_rem = float(chunks[chunk_idx]["size"])
-                        chunk_is_used = chunks[chunk_idx]["used"]
-
-            ratio = bucket_used / bytes_per_char
-
-            if ratio == 0:
-                output.append(" ")
-            elif ratio <= 0.33:
-                output.append("░")
-            elif ratio <= 0.66:
-                output.append("▒")
-            elif ratio <= 0.99:
-                output.append("▓")
-            else:
-                output.append("█")
-
-        return ["".join(output[i : i + width]) for i in range(0, len(output), width)]
-
-    def _get_fragmentation_metrics(self, chunks: list[dict]) -> dict:
-        if not chunks:
-            return {}
-
-        total_chunks = len(chunks)
-        allocated_chunks = sum(1 for c in chunks if c["used"])
-        free_bytes = sum(c["size"] for c in chunks if not c["used"])
-        largest_free = max((c["size"] for c in chunks if not c["used"]), default=0)
-        ratio = (1 - largest_free / free_bytes) * 100 if free_bytes > 0 else 0.0
-
-        return {
-            "Largest free": (largest_free, "bytes"),
-            "Frag ratio": (ratio, "percent"),
-            "Chunks": (f"{allocated_chunks}/{total_chunks}", "raw"),
-        }
-
-    def _get_heap_details_footer(self, metrics: dict):
-        if not metrics:
-            return
-
-        def fmt(value, hint):
-            if hint == "bytes":
-                if value >= 1024:
-                    return f"{value / 1024:.1f} KB"
-                return f"{value} B"
-            if hint == "percent":
-                return f"{value:.1f}%"
-            return str(value)
-
-        parts = [f"{k}: {fmt(v, h)}" for k, (v, h) in metrics.items()]
-        return " · ".join(parts)
-
-    def _draw_heaps_detail_view(self, height: int, width: int):
-        tui_heap_info = TUIHeapInfo(
-            self.ATTR_CURSOR,
-            self.ATTR_ACTIVE_THREAD,
-            (
-                self.ATTR_PROGRESS_BAR_LOW,
-                self.ATTR_PROGRESS_BAR_MEDIUM,
-                self.ATTR_PROGRESS_BAR_HIGH,
-            ),
-        )
-
-        for heap in self.heaps_data:
-            if heap.address != self.scraper.extra_info_heap_address or not heap.chunks:
-                continue
-
-            tui_heap_info.draw(self.stdscr, 2, 0, heap)
-
-            start_y = 5
-            start_x = 1
-
-            map_height = height - start_y - 4
-            map_width = width - start_x - 1
-
-            if map_height <= 0 or map_width <= 0:
-                break
-
-            sparsity_matrix = self.get_sparsity_map(heap.chunks, map_width, map_height)
-            metrics = self._get_fragmentation_metrics(heap.chunks)
-            desc = self._get_heap_details_footer(metrics)
-            TUIBox(
-                f"Fragmentation Map ({heap.name})",
-                desc if desc else "",
-                self.ATTR_GRAPH_B,
-            ).draw(
-                self.stdscr,
-                start_y - 1,
-                start_x - 1,
-                map_height + 2,
-                map_width + 2,
-            )
-
-            for i, row_str in enumerate(sparsity_matrix):
-                with contextlib.suppress(curses.error):
-                    self.stdscr.addstr(start_y + i, start_x, row_str, self.ATTR_GRAPH_A)
-
-            break
-
-        self.stdscr.refresh()
-
     def draw_tui(self, height, width):
         if height < self.min_dimensions[0] or width < self.min_dimensions[1]:
             self.stdscr.erase()
@@ -925,7 +945,12 @@ class ZView:
                     self.purge_queue()
 
             case ZViewState.HEAP_LIST_VIEW:
+                self.scraper.extra_info_heap_address = None
                 self.scraper.thread_pool = []
+                self.purge_queue()
+
+            case ZViewState.HEAPS_DETAIL_VIEW:
+                self.scraper.extra_info_heap_address = self.detailing_heap_address
                 self.purge_queue()
 
         self.state = new_state
@@ -936,16 +961,6 @@ class ZView:
         new_state = self.views[self.state].handle_input(key)
         if new_state:
             self.transition_to(new_state)
-
-        return
-
-        match key:
-            case curses.KEY_ENTER | SpecialCode.NEWLINE | SpecialCode.RETURN:
-                match self.state:
-                    case ZViewState.HEAPS_DETAIL:
-                        self.state = ZViewState.HEAPS_VIEW
-                        self.scraper.extra_info_heap_address = None
-                        self.purge_queue()
 
         return
 
