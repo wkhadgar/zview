@@ -22,8 +22,22 @@ from frontend.tui_widgets import TUIBox, TUIGraph, TUIHeapInfo, TUIThreadInfo
 
 
 @dataclass
-class ZViewTUIScheme:
-    col_widths: dict[str, int]
+class ZViewTUIAttributes:
+    ACTIVE: int
+    INACTIVE: int
+    PROGRESS_BAR_LOW: int
+    PROGRESS_BAR_MEDIUM: int
+    PROGRESS_BAR_HIGH: int
+    HEADER_FOOTER: int
+    ERROR: int
+    CURSOR: int
+    GRAPH_A: int
+    GRAPH_B: int
+
+    @classmethod
+    def create_mono(cls):
+        """Returns a default monochromatic theme for featureless consoles."""
+        return cls(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
 
 class ZViewState(enum.Enum):
@@ -45,15 +59,15 @@ class SpecialCode:
 
 
 class BaseStateView:
-    def __init__(self, controller: Any, frame_attribute: int, error_attribute: int):
+    def __init__(self, controller: Any, theme: ZViewTUIAttributes):
         """
         The controller reference allows the view to access global state
         (like colors or the max threads limit) without owning it.
         """
         self.controller = controller
         self.cursor: int = 0
-        self._frame_attr: int = frame_attribute
-        self._error_attr: int = error_attribute
+        self._frame_attr: int = theme.HEADER_FOOTER
+        self._error_attr: int = theme.ERROR
 
     def _render_status(
         self,
@@ -113,21 +127,15 @@ class BaseStateView:
 
 
 class FatalErrorView(BaseStateView):
-    def __init__(
-        self,
-        controller: Any,
-        frame_attr: int,
-        error_attribute: int,
-    ):
-        super().__init__(controller, frame_attr, error_attribute)
-        self._attr_error: int = error_attribute
+    def __init__(self, controller: Any, theme: ZViewTUIAttributes):
+        super().__init__(controller, theme)
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()
 
         self._render_frame(stdscr, "Quit: q | Reconnect: r ", height, width)
 
-        stdscr.attron(self._attr_error)
+        stdscr.attron(self._error_attr)
         msg_lines = self.controller.status_message.split('\n')
         start_y = (height // 2) - (len(msg_lines) // 2)
 
@@ -137,7 +145,7 @@ class FatalErrorView(BaseStateView):
                 x_pos = max(0, (width // 2) - (len(clean_line) // 2))
                 stdscr.addstr(start_y + i, x_pos, clean_line)
 
-        stdscr.attroff(self._attr_error)
+        stdscr.attroff(self._error_attr)
         stdscr.refresh()
 
     def handle_input(self, key: int) -> ZViewState | None:
@@ -151,10 +159,8 @@ class FatalErrorView(BaseStateView):
 
 
 class ThreadListView(BaseStateView):
-    def __init__(
-        self, controller: Any, tui_thread_info: TUIThreadInfo, frame_attr: int, error_attr: int
-    ):
-        super().__init__(controller, frame_attr, error_attr)
+    def __init__(self, controller: Any, theme: ZViewTUIAttributes):
+        super().__init__(controller, theme)
 
         self._current_sort_idx = 0
         self._invert_sorting = False
@@ -176,7 +182,10 @@ class ThreadListView(BaseStateView):
 
         self.top_line: int = 0
 
-        self._tui_thread_info: TUIThreadInfo = tui_thread_info
+        bar_theme = (theme.PROGRESS_BAR_LOW, theme.PROGRESS_BAR_MEDIUM, theme.PROGRESS_BAR_HIGH)
+        self._tui_thread_info: TUIThreadInfo = TUIThreadInfo(
+            theme.CURSOR, theme.ACTIVE, theme.INACTIVE, bar_theme
+        )
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         """
@@ -331,21 +340,13 @@ class ThreadListView(BaseStateView):
 
 
 class ThreadDetailView(ThreadListView):
-    def __init__(
-        self,
-        controller: Any,
-        tui_thread_info: TUIThreadInfo,
-        frame_attr: int,
-        error_attr: int,
-        graph_a_attr: int,
-        graph_b_attr: int,
-    ):
-        super().__init__(controller, tui_thread_info, frame_attr, error_attr)
+    def __init__(self, controller: Any, theme: ZViewTUIAttributes):
+        super().__init__(controller, theme)
         self._cpu_graph: TUIGraph = TUIGraph(
-            "CPU %", "Thread cycles / Cycles", (0, 100), graph_b_attr
+            "CPU %", "Thread cycles / Cycles", (0, 100), theme.GRAPH_B
         )
         self._load_graph: TUIGraph = TUIGraph(
-            "Load %", "Thread cycles / Non-idle cycles", (0, 100), graph_a_attr
+            "Load %", "Thread cycles / Non-idle cycles", (0, 100), theme.GRAPH_A
         )
 
         self._current_thread_name: str | None = None
@@ -424,10 +425,8 @@ class ThreadDetailView(ThreadListView):
 
 
 class HeapListView(BaseStateView):
-    def __init__(
-        self, controller: Any, tui_heap_info: TUIHeapInfo, frame_attr: int, error_attribute: int
-    ):
-        super().__init__(controller, frame_attr, error_attribute)
+    def __init__(self, controller: Any, theme: ZViewTUIAttributes):
+        super().__init__(controller, theme)
 
         self._current_sort_idx = 0
         self._invert_sorting = False
@@ -453,7 +452,9 @@ class HeapListView(BaseStateView):
         ]
 
         self.top_line: int = 0
-        self._tui_heap_info: TUIHeapInfo = tui_heap_info
+
+        bar_theme = (theme.PROGRESS_BAR_LOW, theme.PROGRESS_BAR_MEDIUM, theme.PROGRESS_BAR_HIGH)
+        self._tui_heap_info: TUIHeapInfo = TUIHeapInfo(theme.CURSOR, theme.ACTIVE, bar_theme)
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         """
@@ -576,18 +577,10 @@ class HeapListView(BaseStateView):
 
 
 class HeapDetailView(HeapListView):
-    def __init__(
-        self,
-        controller: Any,
-        tui_heap_info: TUIHeapInfo,
-        frame_attr: int,
-        error_attr: int,
-        graph_a_attr: int,
-        graph_b_attr: int,
-    ):
-        super().__init__(controller, tui_heap_info, frame_attr, error_attr)
-        self._graph_a_attr = graph_a_attr
-        self._frag_map_frame: TUIBox = TUIBox("Fragmentation Map", "", graph_b_attr)
+    def __init__(self, controller: Any, theme: ZViewTUIAttributes):
+        super().__init__(controller, theme)
+        self._graph_a_attr = theme.GRAPH_A
+        self._frag_map_frame: TUIBox = TUIBox("Fragmentation Map", "", theme.GRAPH_B)
 
     @staticmethod
     def get_sparsity_map(chunks: list[dict], width: int, height: int) -> list[str]:
@@ -761,68 +754,17 @@ class ZView:
         self.detailing_heap_address: int | None = None
         self.idle_thread: ThreadInfo | None = None
 
-        self._init_curses()
-        bar_attributes = (
-            self.ATTR_PROGRESS_BAR_LOW,
-            self.ATTR_PROGRESS_BAR_MEDIUM,
-            self.ATTR_PROGRESS_BAR_HIGH,
-        )
+        theme = self._init_curses()
 
         self.views: dict[ZViewState, BaseStateView] = {
-            ZViewState.FATAL_ERROR: FatalErrorView(
-                self,
-                self.ATTR_HEADER_FOOTER,
-                self.ATTR_ERROR,
-            ),
-            ZViewState.THREAD_LIST_VIEW: ThreadListView(
-                self,
-                TUIThreadInfo(
-                    self.ATTR_CURSOR,
-                    self.ATTR_ACTIVE_THREAD,
-                    self.ATTR_INACTIVE_THREAD,
-                    bar_attributes,
-                ),
-                self.ATTR_HEADER_FOOTER,
-                self.ATTR_ERROR,
-            ),
-            ZViewState.THREAD_DETAIL_VIEW: ThreadDetailView(
-                self,
-                TUIThreadInfo(
-                    self.ATTR_CURSOR,
-                    self.ATTR_ACTIVE_THREAD,
-                    self.ATTR_INACTIVE_THREAD,
-                    bar_attributes,
-                ),
-                self.ATTR_HEADER_FOOTER,
-                self.ATTR_ERROR,
-                self.ATTR_GRAPH_A,
-                self.ATTR_GRAPH_B,
-            ),
-            ZViewState.HEAP_LIST_VIEW: HeapListView(
-                self,
-                TUIHeapInfo(
-                    self.ATTR_CURSOR,
-                    self.ATTR_ACTIVE_THREAD,
-                    bar_attributes,
-                ),
-                self.ATTR_HEADER_FOOTER,
-                self.ATTR_ERROR,
-            ),
-            ZViewState.HEAPS_DETAIL_VIEW: HeapDetailView(
-                self,
-                TUIHeapInfo(
-                    self.ATTR_CURSOR,
-                    self.ATTR_ACTIVE_THREAD,
-                    bar_attributes,
-                ),
-                self.ATTR_HEADER_FOOTER,
-                self.ATTR_ERROR,
-                self.ATTR_GRAPH_A,
-                self.ATTR_GRAPH_B,
-            ),
+            ZViewState.FATAL_ERROR: FatalErrorView(self, theme),
+            ZViewState.THREAD_LIST_VIEW: ThreadListView(self, theme),
+            ZViewState.THREAD_DETAIL_VIEW: ThreadDetailView(self, theme),
+            ZViewState.HEAP_LIST_VIEW: HeapListView(self, theme),
+            ZViewState.HEAPS_DETAIL_VIEW: HeapDetailView(self, theme),
         }
 
-    def _init_curses(self):
+    def _init_curses(self) -> ZViewTUIAttributes:
         """
         Initializes curses settings and defines color pairs used in the UI.
         """
@@ -832,7 +774,9 @@ class ZView:
         self.stdscr.keypad(True)
         self.stdscr.nodelay(True)
 
-        if curses.has_colors():
+        if not curses.has_colors():
+            return ZViewTUIAttributes.create_mono()
+        else:
             curses.start_color()
             # Active thread name
             curses.init_pair(1, curses.COLOR_CYAN, curses.COLOR_BLACK)
@@ -855,16 +799,18 @@ class ZView:
             # Graph B
             curses.init_pair(10, curses.COLOR_CYAN, curses.COLOR_BLACK)
 
-            self.ATTR_ACTIVE_THREAD = curses.color_pair(1)
-            self.ATTR_INACTIVE_THREAD = curses.color_pair(2)
-            self.ATTR_PROGRESS_BAR_LOW = curses.color_pair(3)
-            self.ATTR_PROGRESS_BAR_MEDIUM = curses.color_pair(4)
-            self.ATTR_PROGRESS_BAR_HIGH = curses.color_pair(5)
-            self.ATTR_HEADER_FOOTER = curses.color_pair(6)
-            self.ATTR_ERROR = curses.color_pair(7)
-            self.ATTR_CURSOR = curses.color_pair(8)
-            self.ATTR_GRAPH_A = curses.color_pair(9)
-            self.ATTR_GRAPH_B = curses.color_pair(10)
+            return ZViewTUIAttributes(
+                curses.color_pair(1),
+                curses.color_pair(2),
+                curses.color_pair(3),
+                curses.color_pair(4),
+                curses.color_pair(5),
+                curses.color_pair(6),
+                curses.color_pair(7),
+                curses.color_pair(8),
+                curses.color_pair(9),
+                curses.color_pair(10),
+            )
 
     def purge_queue(self):
         with self.data_queue.mutex:
