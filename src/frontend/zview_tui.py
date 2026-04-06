@@ -707,8 +707,7 @@ class HeapDetailView(HeapListView):
             )
 
             for i, row_str in enumerate(sparsity_matrix):
-                with contextlib.suppress(curses.error):
-                    stdscr.addstr(start_y + i, start_x, row_str, self._graph_a_attr)
+                stdscr.addstr(start_y + i, start_x, row_str, self._graph_a_attr)
 
         self._render_status(stdscr, width, height - 2)
 
@@ -903,12 +902,12 @@ class ZView:
 
     def process_events(self):
         key = self.stdscr.getch()
+        if key == -1:
+            return
 
         new_state = self.views[self.state].handle_input(key)
-        if new_state:
+        if new_state and new_state != self.state:
             self.transition_to(new_state)
-
-        return
 
     def process_data(self, data):
         if data.get("fatal_error"):
@@ -954,9 +953,11 @@ class ZView:
         self.scraper.start_polling_thread(self.data_queue, self.stop_event, inspection_period)
 
         while self.running:
-            with contextlib.suppress(queue.Empty):
-                data = self.data_queue.get_nowait()
-                self.process_data(data)
+            # Drain the queue completely on every frame
+            while not self.data_queue.empty():
+                with contextlib.suppress(queue.Empty):
+                    data = self.data_queue.get_nowait()
+                    self.process_data(data)
 
             h, w = self.stdscr.getmaxyx()
 
