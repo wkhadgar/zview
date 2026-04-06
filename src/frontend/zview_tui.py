@@ -159,19 +159,21 @@ class FatalErrorView(BaseStateView):
 
 
 class ThreadListView(BaseStateView):
+    SCHEMA: dict[str, int] = {
+        "Thread": 30,
+        "CPU %": 8,
+        "Load %": 8,
+        "Stack Usage % (Watermark)": 32,
+        "Watermark Bytes": 18,
+    }
+    COLLUMS: list[str] = list(SCHEMA.keys())
+    COLLUM_WIDTHS: list[int] = list(SCHEMA.values())
+
     def __init__(self, controller: Any, theme: ZViewTUIAttributes):
         super().__init__(controller, theme)
 
         self._current_sort_idx = 0
         self._invert_sorting = False
-        self._scheme = {
-            "Thread": 30,
-            "CPU %": 8,
-            "Load %": 8,
-            "Stack Usage % (Watermark)": 32,
-            "Watermark Bytes": 18,
-        }
-        self._collumns: list[str] = list(self._scheme.keys())
         self._sort_keys = [
             lambda t: t.name,
             lambda t: t.runtime.cpu if t.runtime else -1,
@@ -185,6 +187,13 @@ class ThreadListView(BaseStateView):
         bar_theme = (theme.PROGRESS_BAR_LOW, theme.PROGRESS_BAR_MEDIUM, theme.PROGRESS_BAR_HIGH)
         self._tui_thread_info: TUIThreadInfo = TUIThreadInfo(
             theme.CURSOR, theme.ACTIVE, theme.INACTIVE, bar_theme
+        )
+        self._tui_thread_info.set_field_widths(
+            self.COLLUM_WIDTHS[0],
+            self.COLLUM_WIDTHS[1],
+            self.COLLUM_WIDTHS[2],
+            self.COLLUM_WIDTHS[3],
+            self.COLLUM_WIDTHS[4],
         )
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
@@ -207,7 +216,7 @@ class ThreadListView(BaseStateView):
         total_threads = len(self.controller.threads_data)
         start_num = self.top_line + 1 if total_threads > 0 else 0
         end_num = min(self.top_line + max_table_rows, total_threads)
-        thread_column_width = self._scheme[self._collumns[0]]
+        thread_column_width = self.COLLUM_WIDTHS[0]
 
         self.cursor = max(min(total_threads - 1, self.cursor), 0)
         if self.cursor >= self.top_line + max_table_rows:
@@ -216,10 +225,10 @@ class ThreadListView(BaseStateView):
             self.top_line = self.cursor
 
         order_symbol = " ▼" if self._invert_sorting else " ▲"
-        sorting_header = self._collumns[self._current_sort_idx]
+        sorting_header = self.COLLUMS[self._current_sort_idx]
 
         curr_x = 0
-        for col_header, h_width in self._scheme.items():
+        for col_header, h_width in self.SCHEMA.items():
             if curr_x >= width:
                 break
 
@@ -272,7 +281,7 @@ class ThreadListView(BaseStateView):
         )
 
         self._tui_thread_info.draw(stdscr, 2, 0, all_threads_info, False)
-        stdscr.hline(3, 0, curses.ACS_S3, width)
+        stdscr.addstr(3, 0, "─" * width)
 
         key_func = self._sort_keys[self._current_sort_idx]
 
@@ -339,7 +348,7 @@ class ThreadListView(BaseStateView):
                 return None
 
 
-class ThreadDetailView(ThreadListView):
+class ThreadDetailView(BaseStateView):
     def __init__(self, controller: Any, theme: ZViewTUIAttributes):
         super().__init__(controller, theme)
         self._cpu_graph: TUIGraph = TUIGraph(
@@ -349,6 +358,18 @@ class ThreadDetailView(ThreadListView):
             "Load %", "Thread cycles / Non-idle cycles", (0, 100), theme.GRAPH_A
         )
 
+        self._scheme: dict[str, int] = ThreadListView.SCHEMA
+        bar_theme = (theme.PROGRESS_BAR_LOW, theme.PROGRESS_BAR_MEDIUM, theme.PROGRESS_BAR_HIGH)
+        self._tui_thread_info: TUIThreadInfo = TUIThreadInfo(
+            theme.CURSOR, theme.ACTIVE, theme.INACTIVE, bar_theme
+        )
+        self._tui_thread_info.set_field_widths(
+            ThreadListView.COLLUM_WIDTHS[0],
+            ThreadListView.COLLUM_WIDTHS[1],
+            ThreadListView.COLLUM_WIDTHS[2],
+            ThreadListView.COLLUM_WIDTHS[3],
+            ThreadListView.COLLUM_WIDTHS[4],
+        )
         self._current_thread_name: str | None = None
         self._usages: dict[str, list[int]] = {"cpu": [], "load": []}
 
@@ -425,20 +446,22 @@ class ThreadDetailView(ThreadListView):
 
 
 class HeapListView(BaseStateView):
+    SCHEMA = {
+        "Heap": 30,
+        "Free B": 8,
+        "Used B": 8,
+        "Heap Usage %": 32,
+        "Watermark Bytes": 18,
+    }
+    COLLUMS: list[str] = list(SCHEMA.keys())
+    COLLUM_WIDTHS: list[int] = list(SCHEMA.values())
+
     def __init__(self, controller: Any, theme: ZViewTUIAttributes):
         super().__init__(controller, theme)
 
         self._current_sort_idx = 0
         self._invert_sorting = False
 
-        self._scheme = {
-            "Heap": 30,
-            "Free B": 8,
-            "Used B": 8,
-            "Heap Usage %": 32,
-            "Watermark Bytes": 18,
-        }
-        self._columns: list[str] = list(self._scheme.keys())
         self._sort_keys = [
             lambda h: h.name,
             lambda h: h.free_bytes,
@@ -455,6 +478,13 @@ class HeapListView(BaseStateView):
 
         bar_theme = (theme.PROGRESS_BAR_LOW, theme.PROGRESS_BAR_MEDIUM, theme.PROGRESS_BAR_HIGH)
         self._tui_heap_info: TUIHeapInfo = TUIHeapInfo(theme.CURSOR, theme.ACTIVE, bar_theme)
+        self._tui_heap_info.set_field_widths(
+            self.COLLUM_WIDTHS[0],
+            self.COLLUM_WIDTHS[1],
+            self.COLLUM_WIDTHS[2],
+            self.COLLUM_WIDTHS[3],
+            self.COLLUM_WIDTHS[4],
+        )
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         """
@@ -468,7 +498,7 @@ class HeapListView(BaseStateView):
         total_heaps = len(self.controller.heaps_data)
         start_num = self.top_line + 1 if total_heaps > 0 else 0
         end_num = min(self.top_line + max_table_rows, total_heaps)
-        heap_column_width = self._scheme[self._columns[0]]
+        heap_column_width = self.COLLUM_WIDTHS[0]
 
         self.cursor = max(min(total_heaps - 1, self.cursor), 0)
         if self.cursor >= self.top_line + max_table_rows:
@@ -477,10 +507,10 @@ class HeapListView(BaseStateView):
             self.top_line = self.cursor
 
         order_symbol = " ▼" if self._invert_sorting else " ▲"
-        sorting_header = self._columns[self._current_sort_idx]
+        sorting_header = self.COLLUM_WIDTHS[self._current_sort_idx]
 
         curr_x = 0
-        for col_header, h_width in self._scheme.items():
+        for col_header, h_width in self.SCHEMA.items():
             if curr_x >= width:
                 break
 
@@ -576,11 +606,22 @@ class HeapListView(BaseStateView):
                 return None
 
 
-class HeapDetailView(HeapListView):
+class HeapDetailView(BaseStateView):
     def __init__(self, controller: Any, theme: ZViewTUIAttributes):
         super().__init__(controller, theme)
+        self._scheme = HeapListView.SCHEMA
         self._graph_a_attr = theme.GRAPH_A
         self._frag_map_frame: TUIBox = TUIBox("Fragmentation Map", "", theme.GRAPH_B)
+
+        bar_theme = (theme.PROGRESS_BAR_LOW, theme.PROGRESS_BAR_MEDIUM, theme.PROGRESS_BAR_HIGH)
+        self._tui_heap_info: TUIHeapInfo = TUIHeapInfo(theme.CURSOR, theme.ACTIVE, bar_theme)
+        self._tui_heap_info.set_field_widths(
+            HeapListView.COLLUM_WIDTHS[0],
+            HeapListView.COLLUM_WIDTHS[1],
+            HeapListView.COLLUM_WIDTHS[2],
+            HeapListView.COLLUM_WIDTHS[3],
+            HeapListView.COLLUM_WIDTHS[4],
+        )
 
     @staticmethod
     def get_sparsity_map(chunks: list[dict], width: int, height: int) -> list[str]:

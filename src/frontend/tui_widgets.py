@@ -108,7 +108,7 @@ class TUIGraph(TUIBox):
     def __init__(self, title: str, description: str, limits: tuple[int, int], attribute: int):
         super().__init__(title, description, attribute)
 
-        self._max_limit: int = max(limits)
+        self._max_limit: int = max(limits) or 1
         self._min_limit: int = min(limits)
         self._max_limit_str = f"{self._max_limit}"
         self._min_limit_str = f"{self._min_limit}"
@@ -129,7 +129,7 @@ class TUIGraph(TUIBox):
             end = ((i + 1) * n) // target_len
 
             bucket = points[start:end]
-            res[i] = sum(bucket) // len(bucket)
+            res[i] = sum(bucket) // len(bucket) if bucket else 0
 
         return res
 
