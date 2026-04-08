@@ -205,9 +205,8 @@ class ThreadListView(BaseStateView):
 
         self._render_frame(
             stdscr,
-            "Quit: q | Sort: s | Invert: i | Details: <Enter> " + "| Heaps: h "
-            if self.controller.scraper.has_heaps
-            else "",
+            "Quit: q | Sort: s | Invert: i | Details: <Enter> "
+            + ("| Heaps: h " if self.controller.scraper.has_heaps else ""),
             height,
             width,
         )
