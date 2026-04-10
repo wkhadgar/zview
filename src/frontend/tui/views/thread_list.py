@@ -56,7 +56,7 @@ class ThreadListView(BaseStateView):
 
         self._render_frame(
             stdscr,
-            "Quit: q | Sort: s | Invert: i | Details: <Enter> "
+            "Quit: q | Sort: s | Invert: i | Refresh: r | Details: <Enter> "
             + ("| Heaps: h " if self.controller.scraper.has_heaps else ""),
             height,
             width,
@@ -156,6 +156,15 @@ class ThreadListView(BaseStateView):
                 selected=(absolute_idx == self.cursor),
             )
 
+        if not sorted_threads:
+            no_threads_strs = (
+                "No threads found on kernel.",
+                "If you had any, they are probably dead.",
+                "You may try to refresh (r) the thread list.",
+            )
+            for i, _str in enumerate(no_threads_strs):
+                stdscr.addstr(height // 2 + i, width // 2 - len(_str) // 2, _str)
+
         self._render_status(stdscr, width, height - 2)
 
         stdscr.refresh()
@@ -184,6 +193,19 @@ class ThreadListView(BaseStateView):
 
             case SpecialCode.INVERSE:
                 self._invert_sorting = not self._invert_sorting
+
+            case SpecialCode.RECONNECT:
+                self.controller.status_message = "Refreshing thread list..."
+
+                # Force the scraper to re-read the kernel's thread linked-list
+                try:
+                    self.controller.scraper.update_available_threads()
+                    self.controller.scraper.reset_thread_pool()
+                    self.controller.purge_queue()
+                except Exception as e:
+                    self.controller.status_message = f"Error refreshing threads: {e}"
+
+                return None  # Stay in the list view
 
             case SpecialCode.HEAPS:
                 if not self.controller.scraper.has_heaps:
