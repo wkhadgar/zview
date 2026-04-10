@@ -156,6 +156,14 @@ class ThreadListView(BaseStateView):
                 selected=(absolute_idx == self.cursor),
             )
 
+        if not sorted_threads:
+            no_threads_strs = (
+                "No threads found on kernel.",
+                "If you had any, they are problably dead.",
+            )
+            for i, _str in enumerate(no_threads_strs):
+                stdscr.addstr(height // 2 + i, width // 2 - len(_str) // 2, _str)
+
         self._render_status(stdscr, width, height - 2)
 
         stdscr.refresh()
