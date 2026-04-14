@@ -709,11 +709,11 @@ class ZScraper:
         val16 = val16_raw >> 1
         val32 = val32_raw >> 1
 
-        if val32 == 0 and val16 > 0 and is_used_16:
+        if (0 < val16 < end_chunk) and is_used_16:
             c = val16  # Start chunk ID
             fmt = f"{self._m_scraper.endianess}H"
             offset_in_chunk = 2
-        elif val16 == 0 and val32 > 0 and is_used_32:
+        elif (0 < val32 < end_chunk) and is_used_32:
             c = val32
             fmt = f"{self._m_scraper.endianess}I"
             offset_in_chunk = 4
