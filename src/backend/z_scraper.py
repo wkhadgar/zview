@@ -885,35 +885,6 @@ class ZScraper:
                         }
                     )
 
-                polled_threads = []
-                for data in polled_raw_data:
-                    cpu_percent = 0.0
-                    if self.has_usage:
-                        if cpu_cycles_delta > 0:
-                            cpu_percent = (data["usage_delta"] / cpu_cycles_delta) * 100
-                        elif data["usage_delta"] > 0:
-                            cpu_percent = (data["usage_delta"] / self.last_cpu_delta) * 100
-                        else:
-                            cpu_percent = -1
-
-                    new_runtime = ThreadRuntime(
-                        cpu=min(cpu_percent, 100),
-                        cpu_normalized=0.0,
-                        active=data["is_active"],
-                        stack_watermark=data["watermark"],
-                        stack_watermark_percent=data["stack_usage_pct"],
-                    )
-
-                    polled_threads.append(
-                        ThreadInfo(
-                            address=data["info"].address,
-                            stack_start=data["info"].stack_start,
-                            stack_size=data["info"].stack_size,
-                            name=data["info"].name,
-                            runtime=new_runtime,
-                        )
-                    )
-
                 idle_thread_data = next(
                     (d for d in polled_raw_data if d["info"].address == self.idle_threads_address),
                     None,
