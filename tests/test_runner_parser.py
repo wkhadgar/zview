@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from backend.z_scraper import RunnerConfig
+from runner_config import RunnerConfig
 
 
 def test_file_not_found():

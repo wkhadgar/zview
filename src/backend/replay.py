@@ -14,8 +14,8 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
+from backend.base import AbstractScraper
 from backend.recording import SCHEMA_VERSION
-from backend.z_scraper import AbstractScraper
 
 
 class ReplayError(Exception):

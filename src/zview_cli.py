@@ -1,14 +1,12 @@
 import argparse
 import curses
 
-from backend.z_scraper import (
-    GDBScraper,
-    JLinkScraper,
-    PyOCDScraper,
-    ZScraper,
-)
+from backend.gdb import GDBScraper
+from backend.jlink import JLinkScraper
+from backend.pyocd import PyOCDScraper
 from frontend.zview_tui import tui_run
 from logging_setup import configure as configure_logging
+from orchestrator import ZScraper
 
 
 def main():

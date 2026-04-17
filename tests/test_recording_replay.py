@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.base import AbstractScraper
 from backend.recording import SCHEMA_VERSION, RecordingScraper
 from backend.replay import (
     ReplayExhausted,
@@ -15,7 +16,6 @@ from backend.replay import (
     ReplayScraper,
     UnsupportedSchema,
 )
-from backend.z_scraper import AbstractScraper
 
 
 class FakeBackend(AbstractScraper):

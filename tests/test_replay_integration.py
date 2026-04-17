@@ -16,8 +16,9 @@ from pathlib import Path
 
 import pytest
 
+from backend.base import HeapInfo, ThreadInfo
 from backend.replay import ReplayScraper
-from backend.z_scraper import HeapInfo, ThreadInfo, ZScraper
+from orchestrator import ZScraper
 
 _FIXTURES_DIR = Path(__file__).parent / "fixtures" / "recordings"
 _ELF_PATH = Path(__file__).parent / "fixtures" / "zephyr.elf"
