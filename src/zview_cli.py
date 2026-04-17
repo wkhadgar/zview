@@ -8,9 +8,12 @@ from backend.z_scraper import (
     ZScraper,
 )
 from frontend.zview_tui import tui_run
+from logging_setup import configure as configure_logging
 
 
 def main():
+    configure_logging()
+
     available_runners = ["gdb", "jlink", "pyocd"]
 
     arg_parser = argparse.ArgumentParser(

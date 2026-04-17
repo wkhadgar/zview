@@ -4,11 +4,13 @@
 
 
 import contextlib
+import logging
 import queue
 import socket
 import struct
 import threading
 import time
+from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +24,32 @@ from pyocd.core.target import Target
 from yaml import safe_load
 
 from backend.elf_inspector import ElfInspector
+
+logger = logging.getLogger("zview.scraper")
+
+
+class ProbeError(Exception):
+    """Base for probe backend errors."""
+
+
+class ProbeConnectFailure(ProbeError):
+    """Probe failed to establish a session with the target."""
+
+
+class ProbeReadFailure(ProbeError):
+    """Probe returned no usable data for a memory read."""
+
+
+class ProbeReadTimeout(ProbeReadFailure):
+    """Probe read did not receive a response before the deadline."""
+
+
+class ProbeReadError(ProbeReadFailure):
+    """Probe returned an error reply to a memory read."""
+
+
+class ProbeReadMalformed(ProbeReadFailure):
+    """Probe returned an undecodable response to a memory read."""
 
 
 class RunnerConfig:
@@ -98,58 +126,53 @@ class HeapInfo:
     chunks: list[dict] | None
 
 
-class AbstractScraper:
+class AbstractScraper(ABC):
+    """Common interface for memory-read backends (JLink, pyOCD, GDB RSP)."""
+
     def __init__(self, target_mcu: str | None):
         self._target_mcu: str | None = target_mcu
         self._is_connected: bool = False
         self.watermark_cache = {}
-        self.endianess: Literal["<", ">"] = "<"  # default to little endian
+        self.endianess: Literal["<", ">"] = "<"
 
     def __enter__(self):
         self.connect()
-
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        del exc_type
-        del exc_val
-        del exc_tb
-
+        del exc_type, exc_val, exc_tb
         self.disconnect()
 
     @property
     def is_connected(self):
         return self._is_connected
 
-    def connect(self):
-        self._is_connected = True
-        print("Connect was called")
+    @abstractmethod
+    def connect(self): ...
 
-    def disconnect(self):
-        self._is_connected = False
-        print("Disconnect was called")
+    @abstractmethod
+    def disconnect(self): ...
 
-    def begin_batch(self):
+    # begin_batch/end_batch are optional hooks: GDB overrides them to halt/resume
+    # the target; JLink and pyOCD inherit the no-op default because their probe
+    # libraries do not require bracketing. Hence empty bodies on purpose.
+    def begin_batch(self):  # noqa: B027
         pass
 
-    def end_batch(self):
+    def end_batch(self):  # noqa: B027
         pass
 
-    def read_bytes(self, at: int, amount: int) -> bytes:
-        print(f"Read {amount} raw bytes from {hex(at)}")
-        return b""
+    @abstractmethod
+    def read_bytes(self, at: int, amount: int) -> bytes: ...
 
-    def read8(self, at: int, amount: int = 1) -> Sequence[int]:
-        print(f"Read {amount} bytes from {hex(at)}")
-        return []
+    @abstractmethod
+    def read8(self, at: int, amount: int = 1) -> Sequence[int]: ...
 
-    def read32(self, at: int, amount: int = 1) -> Sequence[int]:
-        print(f"Read {amount} words from {hex(at)}")
-        return []
+    @abstractmethod
+    def read32(self, at: int, amount: int = 1) -> Sequence[int]: ...
 
-    def read64(self, at: int, amount: int = 1) -> Sequence[int]:
-        print(f"Read {amount} double words from {hex(at)}")
-        return []
+    @abstractmethod
+    def read64(self, at: int, amount: int = 1) -> Sequence[int]: ...
 
     def calculate_dynamic_watermark(
         self,
@@ -236,6 +259,7 @@ class GDBScraper(AbstractScraper):
 
         self._is_connected = True
         print(f"Connected to GDB server at {self.host}:{self.port}")
+        logger.info("Connected to GDB server at %s:%d", self.host, self.port)
 
     def disconnect(self):
         if self.sock is None:
@@ -326,9 +350,8 @@ class GDBScraper(AbstractScraper):
     def _read_mem_raw(self, addr: int, length: int) -> bytes:
         """
         Execute ``m<addr>,<length>`` and return the decoded byte string.
-
-        Returns a zero-padded buffer of exactly ``length`` bytes on any error
-        or short reply, so callers never receive an undersized result.
+        Raises ``ProbeReadTimeout``, ``ProbeReadError``, or ``ProbeReadMalformed``
+        when the reply is missing, rejected, or undecodable.
         """
         if self.sock is None:
             raise ConnectionError("No GDB server connected.")
@@ -337,19 +360,16 @@ class GDBScraper(AbstractScraper):
 
         try:
             resp = self._read_response()
-        except TimeoutError:
-            print(f"Timeout reading {length}B at {hex(addr)}.")
-            return b'\x00' * length
+        except TimeoutError as e:
+            raise ProbeReadTimeout(f"Timeout reading {length}B at {hex(addr)}.") from e
 
         if resp.startswith(b'E'):
-            print(f"GDB error at {hex(addr)}: {resp.decode()}")
-            return b'\x00' * length
+            raise ProbeReadError(f"GDB error at {hex(addr)}: {resp.decode()}")
 
         try:
             raw = bytes.fromhex(resp.decode('ascii'))
-        except ValueError:
-            print(f"Malformed hex response at {hex(addr)}: {resp!r}")
-            return b'\x00' * length
+        except ValueError as e:
+            raise ProbeReadMalformed(f"Malformed hex response at {hex(addr)}: {resp!r}") from e
 
         if len(raw) < length:
             raw += b'\x00' * (length - len(raw))
@@ -384,7 +404,7 @@ class JLinkScraper(AbstractScraper):
         try:
             self.probe.open()
         except JLinkException as e:
-            raise Exception("\nUnable to connect to JLink") from e
+            raise ProbeConnectFailure(f"Unable to open JLink probe: {e}") from e
 
         self.probe.set_tif(JLinkInterfaces.SWD)
 
@@ -392,7 +412,9 @@ class JLinkScraper(AbstractScraper):
             self.probe.connect(self._target_mcu)
         except JLinkException as e:
             self.probe.close()
-            raise Exception(f"\nUnable to connect with [{self._target_mcu}]") from e
+            raise ProbeConnectFailure(
+                f"Unable to connect JLink to [{self._target_mcu}]: {e}"
+            ) from e
         self._is_connected = True
 
     def disconnect(self):
@@ -429,13 +451,15 @@ class PyOCDScraper(AbstractScraper):
             target_override=self._target_mcu, connect_mode="attach"
         )
         if self.session is None:
-            raise Exception("Unable to create a PyOCD session.")
+            raise ProbeConnectFailure("Unable to create a PyOCD session.")
 
         try:
             self.session.open()
             self.target = self.session.target
         except Exception as e:
-            raise Exception(f"\nUnable to connect with MCU [{self._target_mcu}].\n") from e
+            raise ProbeConnectFailure(
+                f"Unable to connect PyOCD to MCU [{self._target_mcu}]: {e}"
+            ) from e
 
         self._is_connected = True
 
@@ -448,25 +472,25 @@ class PyOCDScraper(AbstractScraper):
 
     def read_bytes(self, at: int, amount: int) -> bytes:
         if self.target is None:
-            raise Exception("No target available.")
+            raise ProbeReadFailure("No target available.")
 
         return bytes(self.target.read_memory_block8(at, amount))
 
     def read8(self, at: int, amount: int = 1) -> Sequence[int]:
         if self.target is None:
-            raise Exception("No target available.")
+            raise ProbeReadFailure("No target available.")
 
         return self.target.read_memory_block8(at, amount)
 
     def read32(self, at: int, amount: int = 1) -> Sequence[int]:
         if self.target is None:
-            raise Exception("No target available.")
+            raise ProbeReadFailure("No target available.")
 
         return self.target.read_memory_block32(at, amount)
 
     def read64(self, at: int, amount: int = 1) -> Sequence[int]:
         if self.target is None:
-            raise Exception("No target available.")
+            raise ProbeReadFailure("No target available.")
 
         raw_bytes = bytes(self.target.read_memory_block8(at, amount * 8))
         return struct.unpack(f'{self.endianess}{amount}Q', raw_bytes)
@@ -795,7 +819,7 @@ class ZScraper:
         if self._polling_thread.is_alive():
             self._polling_thread.join(timeout=1.0)
             if self._polling_thread.is_alive():
-                print("Polling thread did not terminate gracefully.")
+                logger.warning("Polling thread did not terminate gracefully.")
 
         self._polling_thread = None
 
