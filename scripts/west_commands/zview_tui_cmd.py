@@ -10,6 +10,7 @@ sys.path.append(str(_zview_base / "src"))
 
 from backend.z_scraper import GDBScraper, JLinkScraper, PyOCDScraper, RunnerConfig, ZScraper
 from frontend.zview_tui import tui_run
+from logging_setup import configure as configure_logging
 
 
 class ZViewCommand(WestCommand):
@@ -53,6 +54,8 @@ class ZViewCommand(WestCommand):
 
     def do_run(self, args, unknown):
         del unknown
+
+        configure_logging()
 
         build_path = Path('build').resolve()
 
