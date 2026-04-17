@@ -6,7 +6,7 @@ import struct
 
 import pytest
 
-from backend.z_scraper import ZScraper
+from orchestrator import ZScraper
 
 
 class FakeScraper:

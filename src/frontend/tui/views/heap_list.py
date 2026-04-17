@@ -4,7 +4,7 @@
 
 import curses
 
-from backend.z_scraper import HeapInfo
+from backend.base import HeapInfo
 from frontend.tui.views.base import Any, BaseStateView, SpecialCode, ZViewState, ZViewTUIAttributes
 from frontend.tui.widgets import TUIHeapInfo
 

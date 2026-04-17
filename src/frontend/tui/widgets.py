@@ -4,7 +4,7 @@
 
 import curses
 
-from backend.z_scraper import HeapInfo, ThreadInfo, ThreadRuntime
+from backend.base import HeapInfo, ThreadInfo, ThreadRuntime
 
 
 def _truncate_str(text: str, max_size: int) -> str:

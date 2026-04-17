@@ -9,7 +9,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backend.z_scraper import GDBScraper, PyOCDScraper, ThreadInfo, ZScraper
+from backend.base import ThreadInfo
+from backend.gdb import GDBScraper
+from backend.pyocd import PyOCDScraper
+from orchestrator import ZScraper
 
 
 def test_gdb_scraper_endianness():

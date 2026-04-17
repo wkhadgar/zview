@@ -16,7 +16,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import IO
 
-from backend.z_scraper import AbstractScraper
+from backend.base import AbstractScraper
 
 SCHEMA_VERSION = "zview-recording/1"
 
