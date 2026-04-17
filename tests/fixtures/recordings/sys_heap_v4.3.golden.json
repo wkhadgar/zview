@@ -1,0 +1,34 @@
+{
+  "schema": "zview-golden/1",
+  "source": "sys_heap_v4.3.ndjson.gz",
+  "frame_count": 20,
+  "threads": [
+    {
+      "name": "stress_id",
+      "stack_start": 536872104,
+      "stack_size": 1024,
+      "stack_watermark": 744
+    },
+    {
+      "name": "idle",
+      "stack_start": 536879344,
+      "stack_size": 256,
+      "stack_watermark": 64
+    },
+    {
+      "name": "main",
+      "stack_start": 536879600,
+      "stack_size": 1024,
+      "stack_watermark": 240
+    }
+  ],
+  "heaps": [
+    {
+      "name": "my_kernel_heap",
+      "address": 536873128,
+      "free_bytes": 992,
+      "allocated_bytes": 1056,
+      "max_allocated_bytes": 2048
+    }
+  ]
+}
