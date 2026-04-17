@@ -8,13 +8,14 @@ import queue
 import threading
 import time
 
-from backend.z_scraper import HeapInfo, ThreadInfo, ZScraper
+from backend.base import HeapInfo, ThreadInfo
 from frontend.tui.views.base import BaseStateView, ZViewState, ZViewTUIAttributes
 from frontend.tui.views.fatal_error import FatalErrorView
 from frontend.tui.views.heap_detail import HeapDetailView
 from frontend.tui.views.heap_list import HeapListView
 from frontend.tui.views.thread_detail import ThreadDetailView
 from frontend.tui.views.thread_list import ThreadListView
+from orchestrator import ZScraper
 
 
 class ZView:

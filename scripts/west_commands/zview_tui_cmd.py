@@ -8,8 +8,12 @@ from west.commands import WestCommand
 _zview_base = Path(__file__).parent.parent.parent
 sys.path.append(str(_zview_base / "src"))
 
-from backend.z_scraper import GDBScraper, JLinkScraper, PyOCDScraper, RunnerConfig, ZScraper
+from backend.gdb import GDBScraper
+from backend.jlink import JLinkScraper
+from backend.pyocd import PyOCDScraper
 from frontend.zview_tui import tui_run
+from orchestrator import ZScraper
+from runner_config import RunnerConfig
 
 
 class ZViewCommand(WestCommand):

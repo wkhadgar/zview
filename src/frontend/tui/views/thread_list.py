@@ -4,7 +4,7 @@
 
 import curses
 
-from backend.z_scraper import ThreadInfo, ThreadRuntime
+from backend.base import ThreadInfo, ThreadRuntime
 from frontend.tui.views.base import Any, BaseStateView, SpecialCode, ZViewState, ZViewTUIAttributes
 from frontend.tui.widgets import TUIThreadInfo
 
