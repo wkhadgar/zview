@@ -59,12 +59,12 @@ class ElfInspector:
         self._little_endian = True
 
         if not self._load_cache():
-            print("Loading ELF. This may take a while...", end="", flush=True)
+            print("Loading ELF. This may take a while...", end="", flush=True, file=sys.stderr)
             self._perform_single_pass_scan()
             self._save_cache()
-            print(" OK.")
+            print(" OK.", file=sys.stderr)
         else:
-            print(f"Loaded cached ELF @ {self._cache_file}")
+            print(f"Loaded cached ELF @ {self._cache_file}", file=sys.stderr)
 
     @staticmethod
     def _resolve_os_cache_dir() -> Path:

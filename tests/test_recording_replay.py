@@ -141,6 +141,20 @@ def test_unsupported_schema_raises(tmp_path):
         ReplayScraper(path).connect()
 
 
+def test_partial_replay_allows_early_disconnect(sample_path, sample_backend):
+    """Stopping replay mid-recording must not raise; disconnect is a lifecycle hint."""
+    _record_session(sample_path, sample_backend)
+
+    replay = ReplayScraper(sample_path)
+    replay.connect()
+    replay.begin_batch()
+    replay.read32(0x1000, 1)
+
+    replay.disconnect()  # early stop; further entries remain unconsumed
+
+    assert not replay.is_connected
+
+
 def test_payload_is_gzipped(sample_path, sample_backend):
     _record_session(sample_path, sample_backend)
 

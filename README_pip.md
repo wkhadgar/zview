@@ -57,6 +57,12 @@ zview -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA
 | `-r, --runner` | Debug runner to use: `jlink`, `pyocd`, or `gdb`. |
 | `-t, --runner-target` | MCU descriptor for the chosen runner (see below). |
 | `--period` | Update period in seconds, can be a float. |
+| `--snapshot` | Record a live session to a `.ndjson.gz` file and exit (no TUI). Requires `--duration` or `--frames`. |
+| `--duration` | Snapshot upper bound, in seconds. |
+| `--frames` | Snapshot upper bound, in data frames. |
+| `--replay` | Replay a previously recorded `.ndjson.gz` file; skips live probe. `-r`/`-t` are not required. |
+| `--once` | Emit a single polling frame and exit (no TUI). |
+| `--json` | With `--once`, emit the frame as JSON on stdout. |
 
 <details>
 <summary><strong>Finding the right value for <code>-t</code></strong></summary>
@@ -90,4 +96,4 @@ zview -e build/zephyr/zephyr.elf -r gdb -t localhost:1234
 
 ---
 
-For navigation, advanced usage, and QEMU/GDB targets, refer to the [main documentation](https://github.com/wkhadgar/zview/blob/main/README.md).
+For navigation, offline recording/replay workflows, advanced usage, and QEMU/GDB targets, refer to the [main documentation](https://github.com/wkhadgar/zview/blob/main/README.md).

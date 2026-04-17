@@ -103,7 +103,17 @@ class ReplayScraper(AbstractScraper):
         self._is_connected = True
 
     def disconnect(self) -> None:
-        self._next("disconnect", {})
+        """
+        Tolerant: consume the recorded ``disconnect`` entry when the cursor
+        is positioned at one (clean end-of-recording shutdown); otherwise
+        just mark the scraper disconnected so the caller may stop mid-stream.
+        """
+        if (
+            self._cursor < len(self._entries)
+            and self._entries[self._cursor]["op"] == "disconnect"
+            and self._entries[self._cursor]["args"] == {}
+        ):
+            self._cursor += 1
         self._is_connected = False
 
     def begin_batch(self) -> None:

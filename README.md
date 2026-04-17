@@ -73,6 +73,12 @@ west zview -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA
 | `-r, --runner` | Debug runner to use: `jlink`, `pyocd`, or `gdb`. |
 | `-t, --runner-target` | MCU descriptor for the chosen runner (see below). |
 | `--period` | Update period in seconds, can be a float. |
+| `--snapshot` | Record a live session to a `.ndjson.gz` file and exit (no TUI). Requires `--duration` or `--frames`. |
+| `--duration` | Snapshot upper bound, in seconds. |
+| `--frames` | Snapshot upper bound, in data frames. |
+| `--replay` | Replay a previously recorded `.ndjson.gz` file; skips live probe. `-r`/`-t` are not required. |
+| `--once` | Emit a single polling frame and exit (no TUI). |
+| `--json` | With `--once`, emit the frame as JSON on stdout. |
 
 <details>
 <summary><strong>Finding the right value for <code>-t</code></strong></summary>
@@ -127,6 +133,42 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
 
 [![TUI heap fragmentation map](https://github.com/wkhadgar/zview/raw/main/docs/assets/heaps_detail_1.png)](https://github.com/wkhadgar/zview/blob/main/docs/assets/heaps_detail_1.png)
 
+
+## Offline workflows
+
+ZView can record a live session to disk, replay it later without a probe, or emit a single frame as JSON for CI.
+
+**Record a live session:**
+
+```
+# 30 s of live polling from a JLink probe, saved to disk
+west zview -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA \
+  --snapshot capture.ndjson.gz --duration 30
+```
+
+Bound the recording by either `--duration` (seconds) or `--frames` (number of data frames).
+
+**Replay it later — no hardware needed:**
+
+```
+# Feed the recording into the TUI
+west zview -e build/zephyr/zephyr.elf --replay capture.ndjson.gz
+```
+
+The ELF is still required: DWARF offsets are resolved at replay time and are not stored in the recording.
+
+**CI-friendly single-frame snapshot:**
+
+```
+# One polling frame, dumped as JSON on stdout
+west zview -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA --once --json \
+  | jq '.threads[] | select(.runtime.stack_watermark_percent > 80)'
+```
+
+Omit `--json` for a human-readable one-shot dump. `--once` also works with `--replay`, which is useful for deterministic regression tests.
+
+> **Note:** Status messages (probe connect, ELF load) are emitted on stderr, so stdout stays clean for piping into `jq` or similar.
+
 ---
 
 ## Advanced
@@ -172,12 +214,5 @@ ZView achieves a minimal footprint by avoiding on-target processing or UART/Shel
 > **Note:** The `idle` thread is implicit and only expresses itself on the used CPU %, when available.
 
 </details>
-
-
-## Roadmap
-
-Based on community feedback, the following features are in development:
-
-* Detailed thread metrics (e.g., context switch counts).
 
 Feel free to open an [issue](https://github.com/wkhadgar/zview/issues) if you feel like this has some potential!

@@ -8,6 +8,7 @@ import contextlib
 import logging
 import socket
 import struct
+import sys
 from collections.abc import Sequence
 
 from backend.base import (
@@ -63,7 +64,7 @@ class GDBScraper(AbstractScraper):
         self._send_packet(b'QStartNoAckMode')
 
         self._is_connected = True
-        print(f"Connected to GDB server at {self.host}:{self.port}")
+        print(f"Connected to GDB server at {self.host}:{self.port}", file=sys.stderr)
         logger.info("Connected to GDB server at %s:%d", self.host, self.port)
 
     def disconnect(self):
