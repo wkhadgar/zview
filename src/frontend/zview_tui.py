@@ -123,6 +123,7 @@ class ZView:
         try:
             self.scraper.update_available_threads()
             self.scraper.reset_thread_pool()
+            self.scraper.reset_runtime_state()
             self.scraper.start_polling_thread(
                 self.data_queue, self.stop_event, self.scraper.inspection_period
             )

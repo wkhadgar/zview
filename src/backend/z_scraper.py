@@ -744,6 +744,26 @@ class ZScraper:
     def reset_thread_pool(self):
         self.thread_pool = list(self.all_threads.values())
 
+    def reset_runtime_state(self):
+        """
+        Drop all per-thread caches and re-baseline CPU cycle counters.
+        Call this whenever the target has been reset or reconnected so that
+        stale watermark assumptions and cycle deltas do not leak across sessions.
+        """
+        self._m_scraper.watermark_cache.clear()
+
+        if not self.has_usage:
+            return
+
+        self.last_thread_cycles.clear()
+        self._m_scraper.begin_batch()
+        try:
+            self.init_cpu_cycles = self._m_scraper.read64(self._cpu_usage_address)[0]
+        finally:
+            self._m_scraper.end_batch()
+        self.last_cpu_cycles = self.init_cpu_cycles
+        self.last_cpu_delta = self.init_cpu_cycles
+
     def start_polling_thread(
         self,
         data_queue: queue.Queue,
