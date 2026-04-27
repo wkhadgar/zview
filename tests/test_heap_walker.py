@@ -25,7 +25,7 @@ class FakeScraper:
 
 
 def _make_walker(scraper: FakeScraper) -> ZScraper:
-    """Bypass ZScraper.__init__ (which requires an ELF) and seed only what the walker reads."""
+    """Bypass ``ZScraper.__init__`` and seed only what the walker reads."""
     from kernel.layout import KernelLayout
 
     walker = object.__new__(ZScraper)

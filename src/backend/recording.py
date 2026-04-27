@@ -2,11 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-RecordingScraper captures every call issued to a live AbstractScraper and
-streams it to a gzip-compressed NDJSON file. The resulting recording can be
-played back offline through ReplayScraper without a probe or target attached.
-"""
+"""RecordingScraper: AbstractScraper wrapper that streams every call to a gzipped NDJSON file."""
 
 import gzip
 import json
@@ -23,10 +19,9 @@ SCHEMA_VERSION = "zview-recording/1"
 
 class RecordingScraper(AbstractScraper):
     """
-    Wraps an AbstractScraper and serializes every call to a gzip-compressed
-    NDJSON stream. The first line is a header (schema version, endianess,
-    creation timestamp); subsequent lines are call entries in issue order.
-    Bulk ``read_bytes`` payloads are hex-encoded; gzip reclaims the bloat.
+    AbstractScraper wrapper that emits each call as one NDJSON line.
+    First line is a header ({schema, endianess, created_at}); ``read_bytes``
+    payloads are hex-encoded.
     """
 
     def __init__(self, wrapped: AbstractScraper, out_path: Path | str):
@@ -38,10 +33,7 @@ class RecordingScraper(AbstractScraper):
         self.endianess = wrapped.endianess
 
     def _open(self) -> None:
-        """
-        Open the gzip stream and write the header line. Idempotent: repeat
-        calls on an already-open recorder are no-ops.
-        """
+        """Open the gzip stream and write the header. Idempotent."""
         if self._fp is not None:
             return
         # File lifetime spans connect()/disconnect(), tracked via ExitStack.
@@ -57,12 +49,7 @@ class RecordingScraper(AbstractScraper):
         self._fp.write(json.dumps(header) + "\n")
 
     def _emit(self, op: str, args: dict, result=None) -> None:
-        """
-        Append one call entry to the stream. Entries are JSON objects with
-        fields ``t`` (wall-clock timestamp), ``op`` (method name), ``args``
-        (keyword arguments dict) and, for read ops, ``result`` (decoded return
-        value; ``bytes`` payloads are stored as hex strings).
-        """
+        """Append one call entry: ``{t, op, args[, result]}``."""
         if self._fp is None:
             return
         entry: dict = {"t": time.time(), "op": op, "args": args}

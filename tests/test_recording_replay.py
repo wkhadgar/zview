@@ -143,7 +143,7 @@ def test_unsupported_schema_raises(tmp_path):
 
 
 def test_begin_batch_at_trailing_disconnect_signals_completion(sample_path, sample_backend):
-    """Starting a new frame after the recording's last op raises ReplayComplete, not drift."""
+    """``begin_batch`` past the trailing ``disconnect`` raises ReplayComplete."""
     _record_session(sample_path, sample_backend)
 
     replay = ReplayScraper(sample_path, honor_timing=False)
@@ -162,7 +162,7 @@ def test_begin_batch_at_trailing_disconnect_signals_completion(sample_path, samp
 
 
 def test_partial_replay_allows_early_disconnect(sample_path, sample_backend):
-    """Stopping replay mid-recording must not raise; disconnect is a lifecycle hint."""
+    """Disconnect mid-recording must not raise."""
     _record_session(sample_path, sample_backend)
 
     replay = ReplayScraper(sample_path)
@@ -213,14 +213,14 @@ def _write_paced_recording(path: Path, deltas_sec: list[float]) -> None:
 
 
 def test_replay_is_not_live(sample_path, sample_backend):
-    """ReplayScraper advertises is_live=False so the TUI can block mutations."""
+    """``ReplayScraper.is_live`` is False."""
     _record_session(sample_path, sample_backend)
     replay = ReplayScraper(sample_path)
     assert replay.is_live is False
 
 
 def test_live_backends_advertise_is_live_by_default():
-    """AbstractScraper default is is_live=True; concrete live backends inherit it."""
+    """``AbstractScraper.is_live`` default is True."""
     from backend.gdb import GDBScraper
 
     scraper = GDBScraper("localhost:1234")
@@ -228,7 +228,7 @@ def test_live_backends_advertise_is_live_by_default():
 
 
 def test_honor_timing_sleeps_to_recorded_wall_clock(tmp_path):
-    """With honor_timing=True, replay paces itself to the recorded inter-op gap."""
+    """``honor_timing=True`` paces calls to the recorded inter-op gap."""
     import time as _time
 
     path = tmp_path / "paced.ndjson.gz"
@@ -247,7 +247,7 @@ def test_honor_timing_sleeps_to_recorded_wall_clock(tmp_path):
 
 
 def test_honor_timing_false_drains_instantly(tmp_path):
-    """With honor_timing=False, the same recording replays without any sleep."""
+    """``honor_timing=False`` drains the recording without sleeping."""
     import time as _time
 
     path = tmp_path / "fast.ndjson.gz"

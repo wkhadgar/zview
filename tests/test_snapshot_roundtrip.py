@@ -2,11 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Covers the headless snapshot module: frame serialization, single-frame dump
-against a ReplayScraper, and Replay→Recording roundtrip yielding a valid
-recording that replays cleanly on its own.
-"""
+"""Coverage for the headless snapshot module."""
 
 import json
 from pathlib import Path
@@ -61,7 +57,7 @@ def test_serialize_frame_produces_json_safe_dict():
 
 
 def test_serialize_frame_keeps_runtime_key_as_none():
-    """JSON consumers rely on a stable schema; runtime stays present as null."""
+    """``runtime`` field stays present as null when no runtime data is set."""
     thread = ThreadInfo(
         address=0x1000,
         stack_start=0x2000,
@@ -92,7 +88,7 @@ def test_dump_single_frame_via_replay():
 
 
 def test_record_session_roundtrip(tmp_path):
-    """ReplayScraper fed into RecordingScraper should emit a replayable recording."""
+    """ReplayScraper → RecordingScraper produces a replayable recording."""
     source = ReplayScraper(_FIXTURE, honor_timing=False)
     out_path = tmp_path / "roundtrip.ndjson.gz"
 
@@ -133,7 +129,7 @@ def test_record_session_duration_bound(tmp_path):
 
 
 def test_record_session_dual_bound_first_to_hit_wins(tmp_path):
-    """With a short duration and a much larger frames target, duration terminates first."""
+    """Duration terminates first when frames is much larger."""
     source = ReplayScraper(_FIXTURE, honor_timing=False)
     out_path = tmp_path / "dual.ndjson.gz"
 
@@ -146,7 +142,7 @@ def test_record_session_dual_bound_first_to_hit_wins(tmp_path):
 
 
 def test_configure_heap_detail_sets_extra_info_address():
-    """Dereferences the heap symbol (via read32) and stores the struct pointer."""
+    """Reads the heap symbol via ``read32`` and stores the struct pointer."""
     from unittest.mock import MagicMock
 
     from orchestrator import ZScraper as _ZScraper
@@ -196,7 +192,7 @@ def test_configure_heap_detail_requires_heap_support():
 
 
 def test_dump_single_frame_propagates_fatal_error(monkeypatch):
-    """A fatal_error emitted by the polling thread surfaces as RuntimeError."""
+    """``fatal_error`` from the polling thread surfaces as ``RuntimeError``."""
 
     def fake_start(self, data_queue, stop_event, period):
         data_queue.put({"fatal_error": "synthetic backend loss"})
@@ -215,7 +211,7 @@ def test_dump_single_frame_rejects_invalid_frame():
 
 
 def test_dump_single_frame_skips_to_requested_frame():
-    """frame=N returns the Nth valid data frame, distinct from the first."""
+    """``frame=N`` returns the Nth valid data frame."""
     backend = ReplayScraper(_FIXTURE, honor_timing=False)
     f1 = dump_single_frame(backend, str(_ELF), period=0.001, frame=1, timeout=3.0)
 
@@ -229,7 +225,7 @@ def test_dump_single_frame_skips_to_requested_frame():
 
 
 def test_dump_single_frame_raises_when_recording_too_short():
-    """frame=N where N exceeds recorded frames surfaces a clear RuntimeError."""
+    """``frame`` past recording exhaustion raises ``RuntimeError``."""
     backend = ReplayScraper(_FIXTURE, honor_timing=False)
     with pytest.raises(RuntimeError, match="out of range"):
         dump_single_frame(backend, str(_ELF), period=0.001, frame=10_000, timeout=3.0)

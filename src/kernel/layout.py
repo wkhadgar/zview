@@ -9,13 +9,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class KernelLayout:
-    """
-    Byte offsets into Zephyr kernel structs, resolved from the ELF's DWARF.
-
-    All fields are simple integer offsets. The owning ``ZScraper`` knows the
-    base addresses (``_kernel_base_address``, per-thread struct address, per
-    heap struct pointer) and adds them to these offsets at read time.
-    """
+    """Byte offsets into Zephyr kernel structs, resolved from DWARF."""
 
     # Mandatory: thread walking
     threads_head: int  # z_kernel.threads

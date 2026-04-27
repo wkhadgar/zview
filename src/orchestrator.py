@@ -2,11 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-ZScraper coordinates an AbstractScraper backend, a DWARF-resolved ElfInspector,
-and the kernel-object walkers, owning the polling thread that produces frames
-of thread + heap state for the TUI.
-"""
+"""ZScraper: backend + ELF + kernel walkers + polling thread."""
 
 import contextlib
 import logging
@@ -61,7 +57,7 @@ class ZScraper:
             self._discover_heap_addresses()
 
     def _resolve_layout(self) -> KernelLayout:
-        """Resolve all DWARF-derived offsets, dropping optional features that don't apply."""
+        """Resolve DWARF-derived offsets. Sets ``has_*`` flags for missing features."""
         elf = self._elf_inspector
         stack_info = elf.get_struct_member_offset("k_thread", "stack_info")
 
@@ -130,7 +126,7 @@ class ZScraper:
             self._cpu_usage_address = self._kernel_base_address + self._layout.cpu_usage
 
     def _baseline_cpu_cycles(self) -> None:
-        """Read the initial CPU cycle counter so the first polling delta has an anchor."""
+        """Read and store the initial CPU cycle counter."""
         self._m_scraper.begin_batch()
         self.init_cpu_cycles = self._m_scraper.read64(self._cpu_usage_address)[0]
         self._m_scraper.end_batch()
@@ -139,7 +135,7 @@ class ZScraper:
         self.last_thread_cycles: dict = {}
 
     def _discover_heap_addresses(self) -> None:
-        """Locate every ``k_heap`` global and store its address(es). Disables heaps if none."""
+        """Populate ``_k_heap_addresses`` from ``k_heap`` globals; clears ``has_heaps`` if none."""
         elf = self._elf_inspector
         names = elf.find_struct_variable_names("k_heap") or []
         if not names:
@@ -202,11 +198,7 @@ class ZScraper:
         self.thread_pool = list(self.all_threads.values())
 
     def reset_runtime_state(self):
-        """
-        Drop all per-thread caches and re-baseline CPU cycle counters.
-        Call this whenever the target has been reset or reconnected so that
-        stale watermark assumptions and cycle deltas do not leak across sessions.
-        """
+        """Clear watermark and CPU-cycle caches, then re-read the initial cycle counter."""
         self._m_scraper.watermark_cache.clear()
 
         if not self.has_usage:
@@ -227,9 +219,7 @@ class ZScraper:
         stop_event: threading.Event,
         inspection_period: float,
     ):
-        """
-        Starts a separate daemon thread to continuously poll data from the MCU.
-        """
+        """Start the polling daemon thread. No-op if one is already running."""
         if self._polling_thread is not None:
             data_queue.put({"error": "Already started..."})
             return
@@ -263,12 +253,7 @@ class ZScraper:
         stop_event: threading.Event,
         inspection_period: float,
     ):
-        """
-        Polling thread entry point. Connects, then loops one frame at a time,
-        delegating per-phase work to the helpers below. Tolerates up to
-        ``_MAX_TOLERATED_ERRORS`` transient read faults before declaring the
-        target lost; ends cleanly when a recording exhausts.
-        """
+        """Polling thread entry point. Tolerates ``_MAX_TOLERATED_ERRORS`` transient faults."""
         try:
             if not self._m_scraper.is_connected:
                 self._m_scraper.connect()
@@ -323,7 +308,7 @@ class ZScraper:
             time.sleep(inspection_period)
 
     def _read_cpu_cycles_delta(self) -> int:
-        """Return the cycles elapsed since the last frame, or -1 when usage tracking is off."""
+        """Cycles elapsed since the last frame; ``-1`` when ``has_usage`` is False."""
         if not self.has_usage:
             return -1
 
@@ -341,11 +326,7 @@ class ZScraper:
         return self.last_cpu_delta
 
     def _poll_threads(self, cpu_cycles_delta: int) -> tuple[list[dict], int]:
-        """
-        Per-thread loop: read usage + watermark, accumulate raw polling state.
-        The idle thread's usage delta is folded back into ``cpu_cycles_delta``,
-        so the second return value may differ from the input.
-        """
+        """Read per-thread usage + watermark. Returns (raw_data, adjusted_cpu_cycles_delta)."""
         if self.thread_pool is None:
             raise RuntimeError("Thread pool is uninitialized.")
 
@@ -396,7 +377,7 @@ class ZScraper:
         return polled, cpu_cycles_delta
 
     def _finalize_threads(self, polled: list[dict], cpu_cycles_delta: int) -> list[ThreadInfo]:
-        """Compute per-thread CPU% / relative load and emit the final ThreadInfo list."""
+        """Build ``ThreadInfo`` objects from raw polling state, computing CPU% and load%."""
         idle = next(
             (d for d in polled if d["info"].address == self.idle_threads_address),
             None,
@@ -435,11 +416,7 @@ class ZScraper:
         return final
 
     def _poll_heaps(self, data_queue: queue.Queue) -> list[HeapInfo]:
-        """
-        Read each k_heap's metadata and emit a HeapInfo list. Per-heap read
-        failures and fragmentation-walk failures are reported as non-fatal
-        ``error`` frames on ``data_queue`` and skip that heap.
-        """
+        """Read all heap metadata. Per-heap read failures emit ``error`` frames and are skipped."""
         heaps: list[HeapInfo] = []
         for heap_name, heap_addresses in self._k_heap_addresses.items():
             for heap_address in heap_addresses:

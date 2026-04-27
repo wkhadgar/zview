@@ -36,7 +36,7 @@ class FakeScraper:
 
 
 class FakeElf:
-    """Minimal ElfInspector stand-in; walk_thread_list only reads struct size."""
+    """Minimal ElfInspector stand-in."""
 
     def __init__(self, struct_size: int = 32):
         self._size = struct_size
@@ -67,7 +67,7 @@ HEAD_ADDR = 0x500
 
 
 def _name_to_words(name: str, slots: int = 4, endian: str = "little") -> tuple[int, ...]:
-    """Pack a NUL-terminated name into ``slots`` 32-bit words in the given endianness."""
+    """Pack ``name`` into ``slots`` 32-bit words, NUL-padded."""
     data = name.encode() + b"\x00" * (slots * 4 - len(name))
     return tuple(int.from_bytes(data[i : i + 4], endian) for i in range(0, slots * 4, 4))
 

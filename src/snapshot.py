@@ -2,10 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Headless recording and single-frame JSON snapshot helpers backing the
-``--snapshot``, ``--replay``, and ``--once --json`` CLI modes.
-"""
+"""Headless recording, replay, and single-frame helpers used by the CLI commands."""
 
 import dataclasses
 import queue
@@ -18,10 +15,7 @@ from orchestrator import ZScraper
 
 
 def serialize_frame(frame: dict) -> dict:
-    """
-    Convert a polling-thread frame dict (carrying ThreadInfo and HeapInfo
-    dataclasses) into a JSON-serializable plain-dict shape.
-    """
+    """Convert a polling frame's dataclasses into a JSON-serializable dict."""
     out: dict = {}
     if "threads" in frame:
         out["threads"] = [dataclasses.asdict(t) for t in frame["threads"]]
@@ -38,12 +32,10 @@ def dump_single_frame(
     timeout: float | None = None,
 ) -> dict:
     """
-    Capture the Nth valid polling frame from ``backend`` (1-indexed). Skips
-    ``frame - 1`` valid data frames before returning. Raises ``ValueError``
-    when ``frame < 1``, ``RuntimeError`` on a fatal scraper error or when the
-    recording exhausts before reaching frame N, and ``TimeoutError`` if no
-    frame arrives within ``timeout`` seconds. ``timeout`` defaults to a value
-    proportional to ``frame * period``.
+    Return the Nth valid polling frame (1-indexed; default 1).
+    Raises ``ValueError`` for ``frame < 1``, ``RuntimeError`` on fatal scraper
+    error or recording exhaustion, ``TimeoutError`` past ``timeout`` seconds.
+    ``timeout`` defaults to ``max(5.0, frame * max(period, 0.1) * 5.0)``.
     """
     if frame < 1:
         raise ValueError("frame must be >= 1")
@@ -83,10 +75,8 @@ def dump_single_frame(
 
 def _configure_heap_detail(scraper: ZScraper, recorder: AbstractScraper, heap_name: str) -> None:
     """
-    Resolve ``heap_name`` to the live heap struct pointer and set
-    ``scraper.extra_info_heap_address`` so every polled frame captures
-    fragmentation data for that heap. Raises ``ValueError`` when the ELF
-    exposes no heap symbols or the requested name is unknown.
+    Set ``scraper.extra_info_heap_address`` from the named ``k_heap`` global.
+    Raises ``ValueError`` when the ELF has no heaps or ``heap_name`` is unknown.
     """
     if not scraper.has_heaps or not getattr(scraper, "_k_heap_addresses", None):
         raise ValueError("This ELF exposes no k_heap symbols; --heap-detail unavailable.")
@@ -114,12 +104,9 @@ def record_session(
     heap_detail: str | None = None,
 ) -> int:
     """
-    Record a polling session to ``out_path``. Bounded by either ``duration``
-    (wall-clock seconds) or ``frames`` (count of valid data frames); at
-    least one must be provided. When ``heap_detail`` names a k_heap symbol
-    resolved from the ELF, the session also captures per-frame
-    fragmentation reads for that heap. Returns the number of data frames
-    captured.
+    Record a polling session to ``out_path``. Requires one of ``duration``
+    (seconds) or ``frames`` (count). ``heap_detail`` names a ``k_heap``
+    global to capture per-frame fragmentation for. Returns frame count.
     """
     if duration is None and frames is None:
         raise ValueError("record_session requires either duration or frames bound")

@@ -21,9 +21,8 @@ def walk_thread_list(
     max_threads: int = 64,
 ) -> dict[str, ThreadInfo]:
     """
-    Walk the kernel thread linked list starting at ``threads_head_address``
-    and return a ``{name: ThreadInfo}`` map. Batches the entire walk via the
-    scraper's ``begin_batch``/``end_batch`` hooks. Raises ``RuntimeError``
+    Walk the kernel thread linked list and return ``{name: ThreadInfo}``.
+    Wrapped in a single ``begin_batch``/``end_batch``. Raises ``RuntimeError``
     when the head pointer cannot be read.
     """
     try:
