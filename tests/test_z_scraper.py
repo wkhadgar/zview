@@ -86,7 +86,9 @@ def test_poll_thread_worker_math_and_queue(elf_path):
     scraper.has_usage = True
     scraper.idle_threads_address = 0x2000
 
-    scraper._offsets = {"thread_info": {"usage": 0x10}}
+    from dataclasses import replace as dc_replace
+
+    scraper._layout = dc_replace(scraper._layout, thread_usage=0x10)
     scraper._cpu_usage_address = 0x1000
     scraper.last_cpu_cycles = 100
     scraper.last_cpu_delta = 100

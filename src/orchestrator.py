@@ -20,6 +20,7 @@ from backend.base import AbstractScraper, HeapInfo, ThreadInfo, ThreadRuntime
 from backend.elf_inspector import ElfInspector
 from backend.replay import ReplayComplete
 from kernel.heaps import walk_heap_fragmentation
+from kernel.layout import KernelLayout
 from kernel.threads import walk_thread_list
 
 logger = logging.getLogger("zview.scraper")
@@ -50,110 +51,102 @@ class ZScraper:
 
         self._MAX_THREADS: int = max_threads
 
-        self._offsets = {
-            "kernel": {
-                "cpu": self._elf_inspector.get_struct_member_offset("z_kernel", "cpus"),
-                "threads": self._elf_inspector.get_struct_member_offset("z_kernel", "threads"),
-            },
-            "k_thread": {
-                "base": self._elf_inspector.get_struct_member_offset("k_thread", "base"),
-                "stack_info": self._elf_inspector.get_struct_member_offset(
-                    "k_thread", "stack_info"
-                ),
-                "next_thread": self._elf_inspector.get_struct_member_offset(
-                    "k_thread", "next_thread"
-                ),
-            },
+        self._layout = self._resolve_layout()
+        self._resolve_addresses()
+
+        if self.has_usage:
+            self._baseline_cpu_cycles()
+
+        if self.has_heaps:
+            self._discover_heap_addresses()
+
+    def _resolve_layout(self) -> KernelLayout:
+        """Resolve all DWARF-derived offsets, dropping optional features that don't apply."""
+        elf = self._elf_inspector
+        stack_info = elf.get_struct_member_offset("k_thread", "stack_info")
+
+        fields: dict = {
+            "threads_head": elf.get_struct_member_offset("z_kernel", "threads"),
+            "thread_next": elf.get_struct_member_offset("k_thread", "next_thread"),
+            "stack_start": stack_info + elf.get_struct_member_offset("_thread_stack_info", "start"),
+            "stack_size": stack_info + elf.get_struct_member_offset("_thread_stack_info", "size"),
         }
 
-        self._offsets["thread_info"] = {
-            "stack_start": self._offsets["k_thread"]["stack_info"]
-            + self._elf_inspector.get_struct_member_offset("_thread_stack_info", "start"),
-            "stack_size": self._offsets["k_thread"]["stack_info"]
-            + self._elf_inspector.get_struct_member_offset("_thread_stack_info", "size"),
-            "stack_delta": self._offsets["k_thread"]["stack_info"]
-            + self._elf_inspector.get_struct_member_offset("_thread_stack_info", "delta"),
-        }
-
-        # Known to be only one (at least, expected)
-        self._kernel_base_address = self._elf_inspector.get_symbol_info("_kernel", info="address")[
-            0
-        ]
-        self._threads_address = self._kernel_base_address + self._offsets["kernel"]["threads"]
-
-        self.idle_threads_address = self._elf_inspector.get_symbol_info(
-            "z_idle_threads", "address"
-        )[0]
-
-        try:
-            self._offsets["k_thread"]["name"] = self._elf_inspector.get_struct_member_offset(
-                "k_thread", "name"
-            )
-        except LookupError:
+        if (extras := self._try_resolve_thread_name()) is not None:
+            fields.update(extras)
+        else:
             self.has_names = False
 
-        try:
-            self._offsets["kernel"]["usage"] = self._elf_inspector.get_struct_member_offset(
-                "z_kernel", "usage"
-            )
-            self._offsets["thread_info"].update(
-                {
-                    "usage_base": self._offsets["k_thread"]["base"]
-                    + self._elf_inspector.get_struct_member_offset("_thread_base", "usage")
-                }
-            )
-            self._cpu_usage_address = self._kernel_base_address + self._offsets["kernel"]["usage"]
-            self._m_scraper.begin_batch()
-            self.init_cpu_cycles = self._m_scraper.read64(self._cpu_usage_address)[0]
-            self._m_scraper.end_batch()
-            self.last_cpu_delta = self.init_cpu_cycles
-            self.last_cpu_cycles = self.init_cpu_cycles
-            self.last_thread_cycles = {}
-        except LookupError:
+        if (extras := self._try_resolve_usage()) is not None:
+            fields.update(extras)
+        else:
             self.has_usage = False
 
-        try:
-            self._offsets["thread_info"]["usage"] = self._offsets["thread_info"][
-                "usage_base"
-            ] + self._elf_inspector.get_struct_member_offset("k_cycle_stats", "total")
-            self._offsets["thread_info"]["longest_window"] = self._offsets["thread_info"][
-                "usage_base"
-            ] + self._elf_inspector.get_struct_member_offset("k_cycle_stats", "longest")
+        if (extras := self._try_resolve_heaps()) is not None:
+            fields.update(extras)
+        else:
+            self.has_heaps = False
 
-            self._offsets["thread_info"]["amount_windows"] = self._offsets["thread_info"][
-                "usage_base"
-            ] + self._elf_inspector.get_struct_member_offset("k_cycle_stats", "num_windows")
+        return KernelLayout(**fields)
+
+    def _try_resolve_thread_name(self) -> dict | None:
+        try:
+            return {"thread_name": self._elf_inspector.get_struct_member_offset("k_thread", "name")}
         except LookupError:
-            self.has_extra_info = False
+            return None
 
+    def _try_resolve_usage(self) -> dict | None:
+        elf = self._elf_inspector
         try:
-            self._offsets["heap_info"] = {
-                "z_heap_base": self._elf_inspector.get_struct_member_offset("k_heap", "heap")
-                + self._elf_inspector.get_struct_member_offset("sys_heap", "heap"),
-                "free_bytes": self._elf_inspector.get_struct_member_offset("z_heap", "free_bytes"),
-                "allocated_bytes": self._elf_inspector.get_struct_member_offset(
-                    "z_heap", "allocated_bytes"
-                ),
-                "max_allocated_bytes": self._elf_inspector.get_struct_member_offset(
+            cpu_usage = elf.get_struct_member_offset("z_kernel", "usage")
+            usage_base = elf.get_struct_member_offset(
+                "k_thread", "base"
+            ) + elf.get_struct_member_offset("_thread_base", "usage")
+            thread_usage = usage_base + elf.get_struct_member_offset("k_cycle_stats", "total")
+        except LookupError:
+            return None
+        return {"cpu_usage": cpu_usage, "thread_usage": thread_usage}
+
+    def _try_resolve_heaps(self) -> dict | None:
+        elf = self._elf_inspector
+        try:
+            return {
+                "heap_free_bytes": elf.get_struct_member_offset("z_heap", "free_bytes"),
+                "heap_allocated_bytes": elf.get_struct_member_offset("z_heap", "allocated_bytes"),
+                "heap_max_allocated_bytes": elf.get_struct_member_offset(
                     "z_heap", "max_allocated_bytes"
                 ),
-                "end_chunk": self._elf_inspector.get_struct_member_offset("z_heap", "end_chunk"),
+                "heap_end_chunk": elf.get_struct_member_offset("z_heap", "end_chunk"),
             }
-
         except LookupError:
+            return None
+
+    def _resolve_addresses(self) -> None:
+        elf = self._elf_inspector
+        self._kernel_base_address = elf.get_symbol_info("_kernel", "address")[0]
+        self._threads_address = self._kernel_base_address + self._layout.threads_head
+        self.idle_threads_address = elf.get_symbol_info("z_idle_threads", "address")[0]
+        if self.has_usage:
+            self._cpu_usage_address = self._kernel_base_address + self._layout.cpu_usage
+
+    def _baseline_cpu_cycles(self) -> None:
+        """Read the initial CPU cycle counter so the first polling delta has an anchor."""
+        self._m_scraper.begin_batch()
+        self.init_cpu_cycles = self._m_scraper.read64(self._cpu_usage_address)[0]
+        self._m_scraper.end_batch()
+        self.last_cpu_delta = self.init_cpu_cycles
+        self.last_cpu_cycles = self.init_cpu_cycles
+        self.last_thread_cycles: dict = {}
+
+    def _discover_heap_addresses(self) -> None:
+        """Locate every ``k_heap`` global and store its address(es). Disables heaps if none."""
+        elf = self._elf_inspector
+        names = elf.find_struct_variable_names("k_heap") or []
+        if not names:
             self.has_heaps = False
             return
-
-        all_heaps = self._elf_inspector.find_struct_variable_names("k_heap")
-
-        if all_heaps is None or len(all_heaps) == 0:
-            self.has_heaps = False
-            return
-
-        self._k_heap_addresses = {}
+        self._k_heap_addresses = {n: elf.get_symbol_info(n, "address") for n in names}
         self.extra_info_heap_address: int | None = None
-        for heap in all_heaps:
-            self._k_heap_addresses[heap] = self._elf_inspector.get_symbol_info(heap, "address")
 
     def __enter__(self):
         self._m_scraper.__enter__()
@@ -190,7 +183,7 @@ class ZScraper:
             self._m_scraper,
             self._elf_inspector,
             self._threads_address,
-            self._offsets,
+            self._layout,
             self._endianess,
             self.has_names,
             self._MAX_THREADS,
@@ -202,7 +195,7 @@ class ZScraper:
         return walk_heap_fragmentation(
             self._m_scraper,
             z_heap_addr,
-            self._offsets["heap_info"]["end_chunk"],
+            self._layout.heap_end_chunk,
         )
 
     def reset_thread_pool(self):
@@ -320,7 +313,7 @@ class ZScraper:
                     if self.has_usage:
                         try:
                             thread_usage = self._m_scraper.read64(
-                                thread_info.address + self._offsets["thread_info"]["usage"]
+                                thread_info.address + self._layout.thread_usage
                             )[0]
                         except Exception as e:
                             raise RuntimeError(
@@ -417,14 +410,13 @@ class ZScraper:
                             try:
                                 heap_address_val = self._m_scraper.read32(heap_address)[0]
                                 free_bytes = self._m_scraper.read32(
-                                    heap_address_val + self._offsets["heap_info"]["free_bytes"]
+                                    heap_address_val + self._layout.heap_free_bytes
                                 )[0]
                                 allocated_bytes = self._m_scraper.read32(
-                                    heap_address_val + self._offsets["heap_info"]["allocated_bytes"]
+                                    heap_address_val + self._layout.heap_allocated_bytes
                                 )[0]
                                 max_allocated_bytes = self._m_scraper.read32(
-                                    heap_address_val
-                                    + self._offsets["heap_info"]["max_allocated_bytes"]
+                                    heap_address_val + self._layout.heap_max_allocated_bytes
                                 )[0]
                             except Exception as e:
                                 data_queue.put(

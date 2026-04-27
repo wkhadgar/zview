@@ -26,9 +26,17 @@ class FakeScraper:
 
 def _make_walker(scraper: FakeScraper) -> ZScraper:
     """Bypass ZScraper.__init__ (which requires an ELF) and seed only what the walker reads."""
+    from kernel.layout import KernelLayout
+
     walker = object.__new__(ZScraper)
     walker._m_scraper = scraper
-    walker._offsets = {"heap_info": {"end_chunk": 0}}
+    walker._layout = KernelLayout(
+        threads_head=0,
+        thread_next=0,
+        stack_start=0,
+        stack_size=0,
+        heap_end_chunk=0,
+    )
     return walker
 
 
