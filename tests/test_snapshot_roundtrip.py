@@ -60,7 +60,8 @@ def test_serialize_frame_produces_json_safe_dict():
     assert restored["heaps"][0]["chunks"] is None
 
 
-def test_serialize_frame_omits_runtime_when_none():
+def test_serialize_frame_keeps_runtime_key_as_none():
+    """JSON consumers rely on a stable schema; runtime stays present as null."""
     thread = ThreadInfo(
         address=0x1000,
         stack_start=0x2000,
@@ -69,7 +70,7 @@ def test_serialize_frame_omits_runtime_when_none():
         runtime=None,
     )
     out = serialize_frame({"threads": [thread]})
-    assert "runtime" not in out["threads"][0]
+    assert out["threads"][0]["runtime"] is None
 
 
 def test_serialize_frame_handles_empty():

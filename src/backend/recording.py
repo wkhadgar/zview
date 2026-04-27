@@ -97,17 +97,16 @@ class RecordingScraper(AbstractScraper):
         self._emit("read_bytes", {"at": at, "amount": amount}, bytes(result).hex())
         return result
 
-    def read8(self, at: int, amount: int = 1) -> Sequence[int]:
-        result = self._wrapped.read8(at, amount)
-        self._emit("read8", {"at": at, "amount": amount}, list(result))
+    def _record_read(self, op: str, fn, at: int, amount: int) -> Sequence[int]:
+        result = fn(at, amount)
+        self._emit(op, {"at": at, "amount": amount}, list(result))
         return result
+
+    def read8(self, at: int, amount: int = 1) -> Sequence[int]:
+        return self._record_read("read8", self._wrapped.read8, at, amount)
 
     def read32(self, at: int, amount: int = 1) -> Sequence[int]:
-        result = self._wrapped.read32(at, amount)
-        self._emit("read32", {"at": at, "amount": amount}, list(result))
-        return result
+        return self._record_read("read32", self._wrapped.read32, at, amount)
 
     def read64(self, at: int, amount: int = 1) -> Sequence[int]:
-        result = self._wrapped.read64(at, amount)
-        self._emit("read64", {"at": at, "amount": amount}, list(result))
-        return result
+        return self._record_read("read64", self._wrapped.read64, at, amount)

@@ -7,47 +7,14 @@ Headless recording and single-frame JSON snapshot helpers backing the
 ``--snapshot``, ``--replay``, and ``--once --json`` CLI modes.
 """
 
+import dataclasses
 import queue
 import threading
 import time
 
-from backend.base import AbstractScraper, HeapInfo, ThreadInfo, ThreadRuntime
+from backend.base import AbstractScraper
 from backend.recording import RecordingScraper
 from orchestrator import ZScraper
-
-
-def _runtime_to_dict(runtime: ThreadRuntime) -> dict:
-    return {
-        "cpu": runtime.cpu,
-        "cpu_normalized": runtime.cpu_normalized,
-        "active": runtime.active,
-        "stack_watermark": runtime.stack_watermark,
-        "stack_watermark_percent": runtime.stack_watermark_percent,
-    }
-
-
-def _thread_to_dict(thread: ThreadInfo) -> dict:
-    out: dict = {
-        "name": thread.name,
-        "address": thread.address,
-        "stack_start": thread.stack_start,
-        "stack_size": thread.stack_size,
-    }
-    if thread.runtime is not None:
-        out["runtime"] = _runtime_to_dict(thread.runtime)
-    return out
-
-
-def _heap_to_dict(heap: HeapInfo) -> dict:
-    return {
-        "name": heap.name,
-        "address": heap.address,
-        "free_bytes": heap.free_bytes,
-        "allocated_bytes": heap.allocated_bytes,
-        "max_allocated_bytes": heap.max_allocated_bytes,
-        "usage_percent": heap.usage_percent,
-        "chunks": heap.chunks,
-    }
 
 
 def serialize_frame(frame: dict) -> dict:
@@ -57,9 +24,9 @@ def serialize_frame(frame: dict) -> dict:
     """
     out: dict = {}
     if "threads" in frame:
-        out["threads"] = [_thread_to_dict(t) for t in frame["threads"]]
+        out["threads"] = [dataclasses.asdict(t) for t in frame["threads"]]
     if "heaps" in frame:
-        out["heaps"] = [_heap_to_dict(h) for h in frame["heaps"]]
+        out["heaps"] = [dataclasses.asdict(h) for h in frame["heaps"]]
     return out
 
 

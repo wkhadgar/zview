@@ -248,7 +248,6 @@ class ZScraper:
             daemon=True,
         )
         self._stop_event = stop_event
-        self._polling_thread.daemon = True
         self._polling_thread.start()
 
     def finish_polling_thread(self):
@@ -307,9 +306,8 @@ class ZScraper:
                     self.last_cpu_cycles = current_cpu_cycles
                     if cpu_cycles_delta > 0:
                         self.last_cpu_delta = cpu_cycles_delta
-                    elif (
-                        cpu_cycles_delta <= 0
-                    ):  # When current_cpu_cycles is 0 due to context resets
+                    else:
+                        # current_cpu_cycles wrapped or reset; keep last positive delta.
                         cpu_cycles_delta = self.last_cpu_delta
                 else:
                     cpu_cycles_delta = -1
