@@ -2,10 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-CLI wiring coverage for zview_cli.main: verb dispatch, default-verb splicing,
-flag validation per verb, and stdout/stderr separation for headless modes.
-"""
+"""CLI wiring coverage for zview_cli.main."""
 
 import json
 import sys
@@ -88,7 +85,7 @@ def test_dump_replay_human_readable(monkeypatch, capsys):
 
 
 def test_dump_frame_arg_skips_to_requested_frame(monkeypatch, capsys):
-    """--frame 3 emits a different frame than --frame 1 (CPU deltas accumulate over replay)."""
+    """--frame 3 emits a different frame than --frame 1."""
     rc1, out1, _ = _invoke(
         monkeypatch,
         capsys,
@@ -234,7 +231,7 @@ def test_record_forwards_heap_flag(monkeypatch, capsys, tmp_path):
 
 
 def test_replay_no_pacing_passes_to_scraper(monkeypatch, capsys):
-    """--no-pacing constructs the ReplayScraper with honor_timing=False."""
+    """--no-pacing → ReplayScraper(honor_timing=False)."""
     captured: dict = {}
     real_cls = zview_cli.ReplayScraper
 

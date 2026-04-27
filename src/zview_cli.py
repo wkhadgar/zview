@@ -17,7 +17,7 @@ KNOWN_COMMANDS = ("live", "record", "replay", "dump")
 
 
 def _normalize_argv(argv: list[str]) -> list[str]:
-    """Splice the implicit ``live`` command when zview is invoked without one."""
+    """Prepend ``live`` when ``argv`` does not start with a known command."""
     if not argv:
         return argv
     first = argv[0]
@@ -26,11 +26,12 @@ def _normalize_argv(argv: list[str]) -> list[str]:
     return ["live", *argv]
 
 
-def _add_elf(parser: argparse.ArgumentParser) -> None:
+def _add_elf(parser: argparse.ArgumentParser, *, required: bool = True) -> None:
     parser.add_argument(
         "-e",
         "--elf-file",
-        required=True,
+        required=required,
+        default=None,
         help="Path to the application's .elf firmware file.",
     )
 
@@ -62,18 +63,20 @@ def _add_period(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _build_parser(
-    prog: str = "zview",
+def register_commands(
+    sub: argparse._SubParsersAction,
+    *,
+    auto_filled: frozenset[str] = frozenset(),
     subcommand_epilogs: dict[str, str] | None = None,
-) -> argparse.ArgumentParser:
+) -> None:
+    """
+    Add the live/record/replay/dump subparsers to ``sub``.
+    Flag names listed in ``auto_filled`` ({"elf", "target"}) are declared
+    non-required. ``subcommand_epilogs`` maps command name → epilog text.
+    """
     epilogs = subcommand_epilogs or {}
-    parser = argparse.ArgumentParser(
-        prog=prog,
-        description="ZView - Zephyr RTOS runtime visualizer over SWD.",
-        epilog=f"Run `{prog} <command> --help` for command-specific options.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    sub = parser.add_subparsers(dest="cmd", metavar="COMMAND", required=True)
+    elf_required = "elf" not in auto_filled
+    target_required = "target" not in auto_filled
 
     def _sub(name: str, summary: str) -> argparse.ArgumentParser:
         return sub.add_parser(
@@ -84,13 +87,13 @@ def _build_parser(
         )
 
     p_live = _sub("live", "Attach to a probe and render the TUI (default).")
-    _add_elf(p_live)
-    _add_live_target(p_live)
+    _add_elf(p_live, required=elf_required)
+    _add_live_target(p_live, required=target_required)
     _add_period(p_live)
 
     p_record = _sub("record", "Capture a live session to a .ndjson.gz recording file.")
-    _add_elf(p_record)
-    _add_live_target(p_record)
+    _add_elf(p_record, required=elf_required)
+    _add_live_target(p_record, required=target_required)
     p_record.add_argument(
         "-o",
         "--output",
@@ -109,7 +112,7 @@ def _build_parser(
     _add_period(p_record)
 
     p_replay = _sub("replay", "Render the TUI from a recording file.")
-    _add_elf(p_replay)
+    _add_elf(p_replay, required=elf_required)
     p_replay.add_argument(
         "-i",
         "--input",
@@ -124,7 +127,8 @@ def _build_parser(
     )
 
     p_dump = _sub("dump", "Capture a single polling frame and exit (no TUI).")
-    _add_elf(p_dump)
+    _add_elf(p_dump, required=elf_required)
+    # Dump's runner/target are always optional (-i is the alternative source).
     _add_live_target(p_dump, required=False)
     p_dump.add_argument(
         "-i",
@@ -145,6 +149,30 @@ def _build_parser(
     )
     _add_period(p_dump)
 
+
+def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Post-parse cross-flag validation. Calls ``parser.error()`` on failure."""
+    if args.cmd == "dump":
+        if args.input and (args.runner or args.runner_target):
+            parser.error("dump: --input is mutually exclusive with --runner/--runner-target.")
+        if not args.input and not (args.runner and args.runner_target):
+            parser.error("dump: requires either --input FILE or both --runner and --runner-target.")
+        if args.frame < 1:
+            parser.error("dump: --frame must be >= 1.")
+
+
+def _build_parser(
+    prog: str = "zview",
+    subcommand_epilogs: dict[str, str] | None = None,
+) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=prog,
+        description="ZView - Zephyr RTOS runtime visualizer over SWD.",
+        epilog=f"Run `{prog} <command> --help` for command-specific options.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub = parser.add_subparsers(dest="cmd", metavar="COMMAND", required=True)
+    register_commands(sub, subcommand_epilogs=subcommand_epilogs)
     return parser
 
 
@@ -155,15 +183,7 @@ def _parse_args(
 ) -> argparse.Namespace:
     parser = _build_parser(prog=prog, subcommand_epilogs=subcommand_epilogs)
     args = parser.parse_args(argv)
-
-    if args.cmd == "dump":
-        if args.input and (args.runner or args.runner_target):
-            parser.error("dump: --input is mutually exclusive with --runner/--runner-target.")
-        if not args.input and not (args.runner and args.runner_target):
-            parser.error("dump: requires either --input FILE or both --runner and --runner-target.")
-        if args.frame < 1:
-            parser.error("dump: --frame must be >= 1.")
-
+    validate_args(parser, args)
     return args
 
 
@@ -248,6 +268,11 @@ _DISPATCH = {
 }
 
 
+def dispatch(args: argparse.Namespace) -> int:
+    """Run the command named by ``args.cmd``."""
+    return _DISPATCH[args.cmd](args)
+
+
 def main(
     argv: list[str] | None = None,
     prog: str = "zview",
@@ -256,7 +281,7 @@ def main(
     configure_logging()
     raw = sys.argv[1:] if argv is None else argv
     args = _parse_args(_normalize_argv(raw), prog=prog, subcommand_epilogs=subcommand_epilogs)
-    return _DISPATCH[args.cmd](args)
+    return dispatch(args)
 
 
 if __name__ == "__main__":
