@@ -1,7 +1,6 @@
 import sys
 from pathlib import Path
 
-from west import log
 from west.commands import WestCommand
 
 _zview_base = Path(__file__).parent.parent.parent
@@ -113,7 +112,7 @@ class ZViewCommand(WestCommand):
 
         elf_path = Path("build").resolve() / "zephyr" / "zephyr.elf"
         if not elf_path.exists():
-            log.die(
+            self.die(
                 f"Could not find firmware at '{elf_path}'. Please specify '-e' or run west build."
             )
         return _insert_after_command(argv, ["-e", str(elf_path)])
@@ -141,8 +140,10 @@ class ZViewCommand(WestCommand):
         try:
             runner_config = RunnerConfig(runners_yaml_path)
         except Exception as e:
-            log.err(e)
-            log.die("Failed to parse runners.yaml. Please specify runner ('-r') and target ('-t').")
+            self.err(e)
+            self.die(
+                "Failed to parse runners.yaml. Please specify runner ('-r') and target ('-t')."
+            )
 
         preferred = None
         for i, a in enumerate(argv):
@@ -156,11 +157,11 @@ class ZViewCommand(WestCommand):
         runner, target_mcu = runner_config.get_config(preferred_runner=preferred)
 
         if runner not in zview_cli.AVAILABLE_RUNNERS:
-            log.wrn(
+            self.wrn(
                 f"'{runner}' is not a valid runner for ZView. Try explicitly passing one of "
                 f"the following: {', '.join(zview_cli.AVAILABLE_RUNNERS)}"
             )
-            log.wrn("Trying to continue with PyOCD as runner...")
+            self.wrn("Trying to continue with PyOCD as runner...")
             runner, target_mcu = runner_config.get_config(preferred_runner="pyocd")
 
         injected: list[str] = []

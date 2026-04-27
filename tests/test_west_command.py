@@ -10,6 +10,7 @@ not importable.
 
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -72,6 +73,14 @@ def test_help_requested_short_long():
 # --- ELF injection ---
 
 
+def _make_cmd() -> ZViewCommand:
+    """ZViewCommand with the minimal config that die/err/wrn need outside a west session."""
+    cmd = ZViewCommand()
+    cmd.config = MagicMock()
+    cmd.config.getboolean.return_value = False
+    return cmd
+
+
 @pytest.fixture
 def fake_build_dir(tmp_path, monkeypatch):
     """tmp_path with a populated build/zephyr/zephyr.elf and runners.yaml."""
@@ -86,7 +95,7 @@ def fake_build_dir(tmp_path, monkeypatch):
 
 
 def test_inject_elf_when_missing_uses_build_path(fake_build_dir):
-    cmd = ZViewCommand()
+    cmd = _make_cmd()
     expected = str(fake_build_dir / "build" / "zephyr" / "zephyr.elf")
 
     out = cmd._inject_elf_if_missing(["live"])
@@ -112,13 +121,13 @@ def test_inject_elf_keeps_command_at_front_with_other_flags(fake_build_dir):
 
 
 def test_inject_elf_skips_when_e_present(fake_build_dir):
-    cmd = ZViewCommand()
+    cmd = _make_cmd()
     out = cmd._inject_elf_if_missing(["live", "-e", "/custom/path.elf"])
     assert out == ["live", "-e", "/custom/path.elf"]
 
 
 def test_inject_elf_skips_when_long_form_present(fake_build_dir):
-    cmd = ZViewCommand()
+    cmd = _make_cmd()
     out = cmd._inject_elf_if_missing(["--elf-file=/x.elf", "live"])
     assert out == ["--elf-file=/x.elf", "live"]
 
@@ -126,7 +135,7 @@ def test_inject_elf_skips_when_long_form_present(fake_build_dir):
 def test_inject_elf_skips_when_help_requested(tmp_path, monkeypatch):
     """No build dir, but --help must still pass through without dying."""
     monkeypatch.chdir(tmp_path)
-    cmd = ZViewCommand()
+    cmd = _make_cmd()
     out = cmd._inject_elf_if_missing(["--help"])
     assert out == ["--help"]
 
@@ -134,7 +143,7 @@ def test_inject_elf_skips_when_help_requested(tmp_path, monkeypatch):
 def test_inject_elf_dies_when_build_missing(tmp_path, monkeypatch):
     """No build dir and no --help → log.die must be invoked."""
     monkeypatch.chdir(tmp_path)
-    cmd = ZViewCommand()
+    cmd = _make_cmd()
     with pytest.raises(SystemExit):
         cmd._inject_elf_if_missing(["live"])
 
@@ -143,13 +152,13 @@ def test_inject_elf_dies_when_build_missing(tmp_path, monkeypatch):
 
 
 def test_inject_runner_for_live(fake_build_dir):
-    cmd = ZViewCommand()
+    cmd = _make_cmd()
     out = cmd._inject_runner_if_missing(["live"])
     assert out == ["live", "-r", "jlink", "-t", "nRF5340_xxAA"]
 
 
 def test_inject_runner_for_record(fake_build_dir):
-    cmd = ZViewCommand()
+    cmd = _make_cmd()
     out = cmd._inject_runner_if_missing(["record", "-o", "x.gz", "--frames", "1"])
     # Verb stays at argv[0]; -r/-t inserted right after.
     assert out[0] == "record"
@@ -167,27 +176,27 @@ def test_inject_runner_keeps_dump_command_at_front(fake_build_dir):
 
 
 def test_inject_runner_skips_replay(fake_build_dir):
-    cmd = ZViewCommand()
+    cmd = _make_cmd()
     argv = ["replay", "-i", "x.gz"]
     out = cmd._inject_runner_if_missing(argv)
     assert out == argv
 
 
 def test_inject_runner_skips_dump_with_input(fake_build_dir):
-    cmd = ZViewCommand()
+    cmd = _make_cmd()
     argv = ["dump", "-i", "x.gz", "--json"]
     out = cmd._inject_runner_if_missing(argv)
     assert out == argv
 
 
 def test_inject_runner_for_dump_without_input(fake_build_dir):
-    cmd = ZViewCommand()
+    cmd = _make_cmd()
     out = cmd._inject_runner_if_missing(["dump", "--json"])
     assert "-r" in out and "-t" in out
 
 
 def test_inject_runner_skips_when_both_present(fake_build_dir):
-    cmd = ZViewCommand()
+    cmd = _make_cmd()
     argv = ["live", "-r", "pyocd", "-t", "stm32h753zitx"]
     out = cmd._inject_runner_if_missing(argv)
     assert out == argv  # no duplication
@@ -195,7 +204,7 @@ def test_inject_runner_skips_when_both_present(fake_build_dir):
 
 def test_inject_runner_fills_only_missing_target(fake_build_dir):
     """Runner explicit, target missing → only -t injected."""
-    cmd = ZViewCommand()
+    cmd = _make_cmd()
     out = cmd._inject_runner_if_missing(["live", "-r", "jlink"])
     # -t injected, -r untouched. The user's explicit "-r jlink" is preserved.
     assert "-t" in out
@@ -203,7 +212,7 @@ def test_inject_runner_fills_only_missing_target(fake_build_dir):
 
 
 def test_inject_runner_skips_when_help_requested(fake_build_dir):
-    cmd = ZViewCommand()
+    cmd = _make_cmd()
     out = cmd._inject_runner_if_missing(["live", "--help"])
     assert out == ["live", "--help"]
     # Specifically: no runners.yaml read attempted.
