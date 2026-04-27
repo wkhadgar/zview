@@ -77,6 +77,12 @@ class HeapInfo:
 class AbstractScraper(ABC):
     """Common interface for memory-read backends (JLink, pyOCD, GDB RSP)."""
 
+    # True for live probe backends; False for synthetic backends (replay) that
+    # cannot accept runtime mutations — no reconnect, no change to the polling
+    # shape (thread pool, heap fragmentation toggle) mid-stream. Subclasses that
+    # cannot absorb such mutations must set this to False.
+    is_live: bool = True
+
     def __init__(self, target_mcu: str | None):
         self._target_mcu: str | None = target_mcu
         self._is_connected: bool = False

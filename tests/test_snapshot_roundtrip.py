@@ -78,7 +78,7 @@ def test_serialize_frame_handles_empty():
 
 
 def test_dump_single_frame_via_replay():
-    backend = ReplayScraper(_FIXTURE)
+    backend = ReplayScraper(_FIXTURE, honor_timing=False)
     frame = dump_single_frame(backend, str(_ELF), period=0.001, timeout=3.0)
 
     assert "threads" in frame
@@ -92,7 +92,7 @@ def test_dump_single_frame_via_replay():
 
 def test_record_session_roundtrip(tmp_path):
     """ReplayScraper fed into RecordingScraper should emit a replayable recording."""
-    source = ReplayScraper(_FIXTURE)
+    source = ReplayScraper(_FIXTURE, honor_timing=False)
     out_path = tmp_path / "roundtrip.ndjson.gz"
 
     captured = record_session(source, str(_ELF), out_path, duration=1.5, period=0.001)
@@ -100,14 +100,14 @@ def test_record_session_roundtrip(tmp_path):
     assert captured >= 1
 
     # Replay the recorded session — it must yield at least one valid frame.
-    replay2 = ReplayScraper(out_path)
+    replay2 = ReplayScraper(out_path, honor_timing=False)
     frame2 = dump_single_frame(replay2, str(_ELF), period=0.001, timeout=3.0)
     assert "threads" in frame2
     assert {t.name for t in frame2["threads"]} == {"stress_id", "idle", "main"}
 
 
 def test_record_session_respects_frames_bound(tmp_path):
-    source = ReplayScraper(_FIXTURE)
+    source = ReplayScraper(_FIXTURE, honor_timing=False)
     out_path = tmp_path / "bounded.ndjson.gz"
 
     captured = record_session(source, str(_ELF), out_path, frames=2, period=0.001)
@@ -115,13 +115,13 @@ def test_record_session_respects_frames_bound(tmp_path):
 
 
 def test_record_session_requires_a_bound(tmp_path):
-    source = ReplayScraper(_FIXTURE)
+    source = ReplayScraper(_FIXTURE, honor_timing=False)
     with pytest.raises(ValueError, match="duration or frames"):
         record_session(source, str(_ELF), tmp_path / "no_bound.ndjson.gz")
 
 
 def test_record_session_duration_bound(tmp_path):
-    source = ReplayScraper(_FIXTURE)
+    source = ReplayScraper(_FIXTURE, honor_timing=False)
     out_path = tmp_path / "duration.ndjson.gz"
 
     # period dominates frame spacing; duration=0.1s / period=0.05s yields ~2 frames.
@@ -133,7 +133,7 @@ def test_record_session_duration_bound(tmp_path):
 
 def test_record_session_dual_bound_first_to_hit_wins(tmp_path):
     """With a short duration and a much larger frames target, duration terminates first."""
-    source = ReplayScraper(_FIXTURE)
+    source = ReplayScraper(_FIXTURE, honor_timing=False)
     out_path = tmp_path / "dual.ndjson.gz"
 
     captured = record_session(source, str(_ELF), out_path, duration=0.1, frames=100, period=0.05)
@@ -144,6 +144,56 @@ def test_record_session_dual_bound_first_to_hit_wins(tmp_path):
     assert captured <= 5
 
 
+def test_configure_heap_detail_sets_extra_info_address():
+    """Dereferences the heap symbol (via read32) and stores the struct pointer."""
+    from unittest.mock import MagicMock
+
+    from orchestrator import ZScraper as _ZScraper
+    from snapshot import _configure_heap_detail
+
+    scraper = _ZScraper.__new__(_ZScraper)
+    scraper.has_heaps = True
+    scraper._k_heap_addresses = {"my_heap": [0x1000]}
+    scraper.extra_info_heap_address = None
+
+    recorder = MagicMock()
+    recorder.read32.return_value = [0x5000]
+
+    _configure_heap_detail(scraper, recorder, "my_heap")
+
+    assert scraper.extra_info_heap_address == 0x5000
+    recorder.begin_batch.assert_called_once()
+    recorder.end_batch.assert_called_once()
+    recorder.read32.assert_called_once_with(0x1000)
+
+
+def test_configure_heap_detail_unknown_heap_raises():
+    from unittest.mock import MagicMock
+
+    from orchestrator import ZScraper as _ZScraper
+    from snapshot import _configure_heap_detail
+
+    scraper = _ZScraper.__new__(_ZScraper)
+    scraper.has_heaps = True
+    scraper._k_heap_addresses = {"my_heap": [0x1000]}
+
+    with pytest.raises(ValueError, match="not found"):
+        _configure_heap_detail(scraper, MagicMock(), "nonexistent")
+
+
+def test_configure_heap_detail_requires_heap_support():
+    from unittest.mock import MagicMock
+
+    from orchestrator import ZScraper as _ZScraper
+    from snapshot import _configure_heap_detail
+
+    scraper = _ZScraper.__new__(_ZScraper)
+    scraper.has_heaps = False
+
+    with pytest.raises(ValueError, match="no k_heap"):
+        _configure_heap_detail(scraper, MagicMock(), "any")
+
+
 def test_dump_single_frame_propagates_fatal_error(monkeypatch):
     """A fatal_error emitted by the polling thread surfaces as RuntimeError."""
 
@@ -152,6 +202,33 @@ def test_dump_single_frame_propagates_fatal_error(monkeypatch):
 
     monkeypatch.setattr("orchestrator.ZScraper.start_polling_thread", fake_start)
 
-    backend = ReplayScraper(_FIXTURE)
+    backend = ReplayScraper(_FIXTURE, honor_timing=False)
     with pytest.raises(RuntimeError, match="synthetic backend loss"):
         dump_single_frame(backend, str(_ELF), period=0.001, timeout=1.0)
+
+
+def test_dump_single_frame_rejects_invalid_frame():
+    backend = ReplayScraper(_FIXTURE, honor_timing=False)
+    with pytest.raises(ValueError, match="frame must be >= 1"):
+        dump_single_frame(backend, str(_ELF), frame=0)
+
+
+def test_dump_single_frame_skips_to_requested_frame():
+    """frame=N returns the Nth valid data frame, distinct from the first."""
+    backend = ReplayScraper(_FIXTURE, honor_timing=False)
+    f1 = dump_single_frame(backend, str(_ELF), period=0.001, frame=1, timeout=3.0)
+
+    backend2 = ReplayScraper(_FIXTURE, honor_timing=False)
+    f3 = dump_single_frame(backend2, str(_ELF), period=0.001, frame=3, timeout=3.0)
+
+    assert {t.name for t in f1["threads"]} == {t.name for t in f3["threads"]}
+    cpu_f1 = sorted(t.runtime.cpu_normalized for t in f1["threads"])
+    cpu_f3 = sorted(t.runtime.cpu_normalized for t in f3["threads"])
+    assert cpu_f1 != cpu_f3
+
+
+def test_dump_single_frame_raises_when_recording_too_short():
+    """frame=N where N exceeds recorded frames surfaces a clear RuntimeError."""
+    backend = ReplayScraper(_FIXTURE, honor_timing=False)
+    with pytest.raises(RuntimeError, match="out of range"):
+        dump_single_frame(backend, str(_ELF), period=0.001, frame=10_000, timeout=3.0)

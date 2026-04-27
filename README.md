@@ -65,20 +65,38 @@ west zview -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA
 ```
 
 
-## Arguments
+## Commands
 
-| Argument | Description |
-| --- | --- |
-| `-e, --elf-file` | Path to the firmware `.elf` file (e.g. `build/zephyr/zephyr.elf`). |
-| `-r, --runner` | Debug runner to use: `jlink`, `pyocd`, or `gdb`. |
-| `-t, --runner-target` | MCU descriptor for the chosen runner (see below). |
-| `--period` | Update period in seconds, can be a float. |
-| `--snapshot` | Record a live session to a `.ndjson.gz` file and exit (no TUI). Requires `--duration` or `--frames`. |
-| `--duration` | Snapshot upper bound, in seconds. |
-| `--frames` | Snapshot upper bound, in data frames. |
-| `--replay` | Replay a previously recorded `.ndjson.gz` file; skips live probe. `-r`/`-t` are not required. |
-| `--once` | Emit a single polling frame and exit (no TUI). |
-| `--json` | With `--once`, emit the frame as JSON on stdout. |
+ZView is invoked through one of four commands. Bare `zview ...` is a shortcut for `zview live ...`.
+
+| Command | Purpose | TUI |
+| --- | --- | --- |
+| `live` | Attach to a probe and render the TUI. Default when no command is given. | yes |
+| `record` | Capture a live session to a `.ndjson.gz` recording file and exit. | no |
+| `replay` | Render the TUI from a previously captured recording. | yes |
+| `dump` | Emit a single polling frame and exit. | no |
+
+### Common arguments
+
+| Argument | Used by | Description |
+| --- | --- | --- |
+| `-e, --elf-file` | all | Path to the firmware `.elf` file (e.g. `build/zephyr/zephyr.elf`). |
+| `-r, --runner` | `live`, `record`, `dump` | Debug runner: `jlink`, `pyocd`, or `gdb`. |
+| `-t, --runner-target` | `live`, `record`, `dump` | MCU descriptor for the chosen runner (see below). |
+| `--period` | `live`, `record`, `dump` | Polling period in seconds (default: `0.10`). |
+
+### Command-specific arguments
+
+| Argument | Command | Description |
+| --- | --- | --- |
+| `-o, --output` | `record` | Recording target path (`.ndjson.gz`). |
+| `--duration` | `record` | Recording upper bound, in seconds. |
+| `--frames` | `record` | Recording upper bound, in data frames. |
+| `--heap` | `record` | Capture per-frame fragmentation for the named `k_heap` variable. |
+| `-i, --input` | `replay`, `dump` | Recording source path (`.ndjson.gz`). |
+| `--no-pacing` | `replay` | Drain the recording as fast as possible instead of honoring its wall-clock cadence. |
+| `--frame` | `dump` | Which polling frame to emit (1-indexed; default: `1`). |
+| `--json` | `dump` | Emit the frame as JSON on stdout. |
 
 <details>
 <summary><strong>Finding the right value for <code>-t</code></strong></summary>
@@ -142,30 +160,39 @@ ZView can record a live session to disk, replay it later without a probe, or emi
 
 ```
 # 30 s of live polling from a JLink probe, saved to disk
-west zview -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA \
-  --snapshot capture.ndjson.gz --duration 30
+west zview record -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA \
+  -o capture.ndjson.gz --duration 30
 ```
 
 Bound the recording by either `--duration` (seconds) or `--frames` (number of data frames).
+
+To also capture the **fragmentation map** for a specific heap, pass `--heap <name>` where `<name>` matches a `k_heap` variable from your firmware (e.g. `my_kernel_heap`):
+
+```
+west zview record -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA \
+  -o capture.ndjson.gz --duration 30 --heap my_kernel_heap
+```
 
 **Replay it later — no hardware needed:**
 
 ```
 # Feed the recording into the TUI
-west zview -e build/zephyr/zephyr.elf --replay capture.ndjson.gz
+west zview replay -e build/zephyr/zephyr.elf -i capture.ndjson.gz
 ```
+
+By default the replay honors the recording's original cadence. Pass `--no-pacing` to drain it as fast as possible.
 
 The ELF is still required: DWARF offsets are resolved at replay time and are not stored in the recording.
 
 **CI-friendly single-frame snapshot:**
 
 ```
-# One polling frame, dumped as JSON on stdout
-west zview -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA --once --json \
+# One polling frame from a live probe, dumped as JSON on stdout
+west zview dump -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA --json \
   | jq '.threads[] | select(.runtime.stack_watermark_percent > 80)'
 ```
 
-Omit `--json` for a human-readable one-shot dump. `--once` also works with `--replay`, which is useful for deterministic regression tests.
+`dump` accepts either a live source (`-r`/`-t`) or a recording (`-i`). Omit `--json` for a human-readable one-shot dump. Use `--frame N` to emit the Nth polling frame instead of the first — useful when the first frame's CPU baseline hasn't settled.
 
 > **Note:** Status messages (probe connect, ELF load) are emitted on stderr, so stdout stays clean for piping into `jq` or similar.
 

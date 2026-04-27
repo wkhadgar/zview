@@ -39,7 +39,7 @@ def _discover_fixtures() -> list[tuple[Path, Path]]:
 
 def _drive_replay(recording: Path) -> list[dict]:
     """Replay a fixture through a full ZScraper polling loop; return captured frames."""
-    replay = ReplayScraper(recording)
+    replay = ReplayScraper(recording, honor_timing=False)
     with replay:
         scraper = ZScraper(replay, str(_ELF_PATH))
         scraper.update_available_threads()

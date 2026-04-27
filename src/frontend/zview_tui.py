@@ -114,6 +114,10 @@ class ZView:
 
     def attempt_reconnect(self):
         """Executes hardware reconnection and data pipeline reset."""
+        if not self.scraper._m_scraper.is_live:
+            self.status_message = "Reconnect is not available in replay mode."
+            return
+
         self.status_message = "Attempting to reconnect..."
         self.scraper.finish_polling_thread()
         self.scraper._m_scraper.disconnect()
@@ -161,9 +165,15 @@ class ZView:
             self.status_message = f"Warning: {new_state.name} is not yet implemented."
             return
 
+        # Replay backends cannot absorb polling-shape mutations without drifting
+        # against the recording. Views still transition; the display filters
+        # from the full frame on its own.
+        live = self.scraper._m_scraper.is_live
+
         match new_state:
             case ZViewState.THREAD_LIST_VIEW:
-                self.scraper.thread_pool = list(self.scraper.all_threads.values())
+                if live:
+                    self.scraper.thread_pool = list(self.scraper.all_threads.values())
                 self.purge_queue()
 
             case ZViewState.THREAD_DETAIL_VIEW:
@@ -171,7 +181,10 @@ class ZView:
                     return
 
                 target_thread = self.scraper.all_threads.get(self.detailing_thread)
-                if target_thread:
+                if target_thread is None:
+                    return
+
+                if live:
                     new_pool = [target_thread]
                     idle_t = next(
                         (
@@ -183,17 +196,19 @@ class ZView:
                     )
                     if idle_t and idle_t.address != new_pool[0].address:
                         new_pool.append(idle_t)
-
                     self.scraper.thread_pool = new_pool
-                    self.purge_queue()
+
+                self.purge_queue()
 
             case ZViewState.HEAP_LIST_VIEW:
-                self.scraper.extra_info_heap_address = None
-                self.scraper.thread_pool = []
+                if live:
+                    self.scraper.extra_info_heap_address = None
+                    self.scraper.thread_pool = []
                 self.purge_queue()
 
             case ZViewState.HEAPS_DETAIL_VIEW:
-                self.scraper.extra_info_heap_address = self.detailing_heap_address
+                if live:
+                    self.scraper.extra_info_heap_address = self.detailing_heap_address
                 self.purge_queue()
 
         self.state = new_state
@@ -211,6 +226,10 @@ class ZView:
         if data.get("fatal_error"):
             self.state = ZViewState.FATAL_ERROR
             self.status_message = f"TARGET LOST\n\n{data['fatal_error']}"
+            return
+
+        if data.get("replay_complete"):
+            self.status_message = "Recording ended — replay complete."
             return
 
         if data.get("error"):

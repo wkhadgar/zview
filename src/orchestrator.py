@@ -18,6 +18,7 @@ from typing import Literal
 
 from backend.base import AbstractScraper, HeapInfo, ThreadInfo, ThreadRuntime
 from backend.elf_inspector import ElfInspector
+from backend.replay import ReplayComplete
 from kernel.heaps import walk_heap_fragmentation
 from kernel.threads import walk_thread_list
 
@@ -473,6 +474,9 @@ class ZScraper:
 
             except queue.Full:
                 pass
+            except ReplayComplete as e:
+                data_queue.put({"replay_complete": str(e)})
+                break
             except Exception as e:
                 consecutive_errors += 1
                 if consecutive_errors >= MAX_TOLERATED_ERRORS:

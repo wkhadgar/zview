@@ -55,3 +55,16 @@ def test_find_variable_by_struct_type(parser):
 def test_struct_not_found(parser):
     with pytest.raises(LookupError):
         parser.get_struct_size("k_struct")
+
+
+def test_find_struct_variable_names_order_is_deterministic(elf_path):
+    """Multiple ElfInspector instances must return identical variable order.
+
+    The underlying dedup must not rely on set() iteration order, which is
+    randomized per-process via PYTHONHASHSEED and would break the
+    record/replay lockstep contract (same ELF, different polling order).
+    """
+    first = ElfInspector(str(elf_path)).find_struct_variable_names("k_thread")
+    second = ElfInspector(str(elf_path)).find_struct_variable_names("k_thread")
+    assert first is not None
+    assert first == second

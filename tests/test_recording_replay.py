@@ -11,6 +11,7 @@ import pytest
 from backend.base import AbstractScraper
 from backend.recording import SCHEMA_VERSION, RecordingScraper
 from backend.replay import (
+    ReplayComplete,
     ReplayExhausted,
     ReplayMismatch,
     ReplayScraper,
@@ -141,6 +142,25 @@ def test_unsupported_schema_raises(tmp_path):
         ReplayScraper(path).connect()
 
 
+def test_begin_batch_at_trailing_disconnect_signals_completion(sample_path, sample_backend):
+    """Starting a new frame after the recording's last op raises ReplayComplete, not drift."""
+    _record_session(sample_path, sample_backend)
+
+    replay = ReplayScraper(sample_path, honor_timing=False)
+    replay.connect()
+    replay.begin_batch()
+    replay.read32(0x1000, 1)
+    replay.read32(0x1004, 4)
+    replay.read64(0x2000)
+    replay.read_bytes(0x3000, 16)
+    replay.end_batch()
+
+    # Cursor is now at the trailing "disconnect" entry. Starting another frame
+    # is a clean end-of-stream rather than a mismatch.
+    with pytest.raises(ReplayComplete):
+        replay.begin_batch()
+
+
 def test_partial_replay_allows_early_disconnect(sample_path, sample_backend):
     """Stopping replay mid-recording must not raise; disconnect is a lifecycle hint."""
     _record_session(sample_path, sample_backend)
@@ -166,3 +186,80 @@ def test_payload_is_gzipped(sample_path, sample_backend):
     with gzip.open(sample_path, "rt", encoding="utf-8") as fp:
         header = json.loads(fp.readline())
     assert header["schema"] == SCHEMA_VERSION
+
+
+def _write_paced_recording(path: Path, deltas_sec: list[float]) -> None:
+    """Write a minimal recording with the given inter-op wall-clock deltas."""
+    import time as _time
+
+    t0 = _time.time()
+    header = {"schema": SCHEMA_VERSION, "endianess": "<", "created_at": t0}
+    entries = [{"t": t0, "op": "connect", "args": {}}]
+    cursor = t0
+    for i, delta in enumerate(deltas_sec):
+        cursor += delta
+        entries.append(
+            {
+                "t": cursor,
+                "op": "read32",
+                "args": {"at": i, "amount": 1},
+                "result": [i],
+            }
+        )
+    with gzip.open(path, "wt", encoding="utf-8") as fp:
+        fp.write(json.dumps(header) + "\n")
+        for entry in entries:
+            fp.write(json.dumps(entry) + "\n")
+
+
+def test_replay_is_not_live(sample_path, sample_backend):
+    """ReplayScraper advertises is_live=False so the TUI can block mutations."""
+    _record_session(sample_path, sample_backend)
+    replay = ReplayScraper(sample_path)
+    assert replay.is_live is False
+
+
+def test_live_backends_advertise_is_live_by_default():
+    """AbstractScraper default is is_live=True; concrete live backends inherit it."""
+    from backend.gdb import GDBScraper
+
+    scraper = GDBScraper("localhost:1234")
+    assert scraper.is_live is True
+
+
+def test_honor_timing_sleeps_to_recorded_wall_clock(tmp_path):
+    """With honor_timing=True, replay paces itself to the recorded inter-op gap."""
+    import time as _time
+
+    path = tmp_path / "paced.ndjson.gz"
+    _write_paced_recording(path, deltas_sec=[0.0, 0.25])
+
+    replay = ReplayScraper(path, honor_timing=True)
+    replay.connect()
+    replay.read32(0, 1)
+
+    start = _time.monotonic()
+    replay.read32(1, 1)
+    elapsed = _time.monotonic() - start
+
+    # Second read is 0.25 s past the first; allow slack for scheduler jitter.
+    assert elapsed >= 0.2
+
+
+def test_honor_timing_false_drains_instantly(tmp_path):
+    """With honor_timing=False, the same recording replays without any sleep."""
+    import time as _time
+
+    path = tmp_path / "fast.ndjson.gz"
+    _write_paced_recording(path, deltas_sec=[1.0, 1.0])
+
+    replay = ReplayScraper(path, honor_timing=False)
+
+    start = _time.monotonic()
+    replay.connect()
+    replay.read32(0, 1)
+    replay.read32(1, 1)
+    elapsed = _time.monotonic() - start
+
+    # Recording spans 2 s; honor_timing=False drains it in a few ms.
+    assert elapsed < 0.1

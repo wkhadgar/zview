@@ -67,13 +67,22 @@ def dump_single_frame(
     backend: AbstractScraper,
     elf_path,
     period: float = 0.1,
-    timeout: float = 5.0,
+    frame: int = 1,
+    timeout: float | None = None,
 ) -> dict:
     """
-    Capture the first valid polling frame from ``backend``. Raises
-    ``RuntimeError`` on a fatal scraper error emitted by the polling thread,
-    and ``TimeoutError`` if no valid frame arrives within ``timeout`` seconds.
+    Capture the Nth valid polling frame from ``backend`` (1-indexed). Skips
+    ``frame - 1`` valid data frames before returning. Raises ``ValueError``
+    when ``frame < 1``, ``RuntimeError`` on a fatal scraper error or when the
+    recording exhausts before reaching frame N, and ``TimeoutError`` if no
+    frame arrives within ``timeout`` seconds. ``timeout`` defaults to a value
+    proportional to ``frame * period``.
     """
+    if frame < 1:
+        raise ValueError("frame must be >= 1")
+    if timeout is None:
+        timeout = max(5.0, frame * max(period, 0.1) * 5.0)
+
     with backend:
         scraper = ZScraper(backend, elf_path)
         scraper.update_available_threads()
@@ -82,20 +91,50 @@ def dump_single_frame(
         stop = threading.Event()
         scraper.start_polling_thread(data_queue, stop, period)
         deadline = time.monotonic() + timeout
+        seen = 0
         try:
             while time.monotonic() < deadline:
                 try:
-                    frame = data_queue.get(timeout=0.1)
+                    frame_data = data_queue.get(timeout=0.1)
                 except queue.Empty:
                     continue
-                if "fatal_error" in frame:
-                    raise RuntimeError(frame["fatal_error"])
-                if "threads" in frame:
-                    return frame
-            raise TimeoutError(f"No valid frame within {timeout} seconds")
+                if "fatal_error" in frame_data:
+                    raise RuntimeError(frame_data["fatal_error"])
+                if "replay_complete" in frame_data:
+                    raise RuntimeError(
+                        f"Recording has only {seen} frames; --frame {frame} out of range."
+                    )
+                if "threads" in frame_data:
+                    seen += 1
+                    if seen >= frame:
+                        return frame_data
+            raise TimeoutError(f"No frame {frame} within {timeout} seconds")
         finally:
             stop.set()
             scraper.finish_polling_thread()
+
+
+def _configure_heap_detail(scraper: ZScraper, recorder: AbstractScraper, heap_name: str) -> None:
+    """
+    Resolve ``heap_name`` to the live heap struct pointer and set
+    ``scraper.extra_info_heap_address`` so every polled frame captures
+    fragmentation data for that heap. Raises ``ValueError`` when the ELF
+    exposes no heap symbols or the requested name is unknown.
+    """
+    if not scraper.has_heaps or not getattr(scraper, "_k_heap_addresses", None):
+        raise ValueError("This ELF exposes no k_heap symbols; --heap-detail unavailable.")
+
+    if heap_name not in scraper._k_heap_addresses:
+        available = ", ".join(sorted(scraper._k_heap_addresses.keys()))
+        raise ValueError(f"Heap {heap_name!r} not found. Available heaps: {available}.")
+
+    symbol_addrs = scraper._k_heap_addresses[heap_name]
+    recorder.begin_batch()
+    try:
+        heap_struct_ptr = recorder.read32(symbol_addrs[0])[0]
+    finally:
+        recorder.end_batch()
+    scraper.extra_info_heap_address = heap_struct_ptr
 
 
 def record_session(
@@ -105,11 +144,15 @@ def record_session(
     duration: float | None = None,
     frames: int | None = None,
     period: float = 0.1,
+    heap_detail: str | None = None,
 ) -> int:
     """
     Record a polling session to ``out_path``. Bounded by either ``duration``
     (wall-clock seconds) or ``frames`` (count of valid data frames); at
-    least one must be provided. Returns the number of data frames captured.
+    least one must be provided. When ``heap_detail`` names a k_heap symbol
+    resolved from the ELF, the session also captures per-frame
+    fragmentation reads for that heap. Returns the number of data frames
+    captured.
     """
     if duration is None and frames is None:
         raise ValueError("record_session requires either duration or frames bound")
@@ -119,6 +162,10 @@ def record_session(
         scraper = ZScraper(recorder, elf_path)
         scraper.update_available_threads()
         scraper.reset_thread_pool()
+
+        if heap_detail is not None:
+            _configure_heap_detail(scraper, recorder, heap_detail)
+
         data_queue: queue.Queue = queue.Queue()
         stop = threading.Event()
         scraper.start_polling_thread(data_queue, stop, period)

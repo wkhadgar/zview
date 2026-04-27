@@ -11,6 +11,7 @@ op or args diverge from the next recorded entry.
 
 import gzip
 import json
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -30,6 +31,10 @@ class ReplayExhausted(ReplayError):
     """Recording ran out of entries before replay completed."""
 
 
+class ReplayComplete(ReplayError):
+    """Caller attempted a new frame past the trailing disconnect — the recording ended cleanly."""
+
+
 class UnsupportedSchema(ReplayError):
     """Recording header advertises a schema this reader does not handle."""
 
@@ -38,15 +43,25 @@ class ReplayScraper(AbstractScraper):
     """
     Replays a recording produced by RecordingScraper. Strict: every call must
     match the next entry's op and args, else ReplayMismatch is raised. Running
-    past the end raises ReplayExhausted.
+    past the end raises ReplayExhausted. When ``honor_timing`` is True (default),
+    each ``_next`` call sleeps until the recorded wall-clock delta has elapsed,
+    reproducing the original session cadence.
     """
 
-    def __init__(self, source_path: Path | str):
+    # A replay cursor can neither rewind nor absorb changes to the polling
+    # shape (thread pool reductions, heap fragmentation toggles, etc.) without
+    # drifting against the recording.
+    is_live = False
+
+    def __init__(self, source_path: Path | str, honor_timing: bool = True):
         super().__init__(target_mcu=None)
         self._source_path = Path(source_path)
         self._entries: list[dict] = []
         self._cursor: int = 0
         self._loaded: bool = False
+        self._honor_timing = honor_timing
+        self._anchor_wall: float | None = None
+        self._anchor_recording: float | None = None
 
     def _load(self) -> None:
         """
@@ -83,19 +98,50 @@ class ReplayScraper(AbstractScraper):
         Advance the cursor by one entry and return its stored result. The
         caller's ``op`` and ``args`` must match the entry exactly; any drift
         raises ReplayMismatch, and advancing past the last entry raises
-        ReplayExhausted.
+        ReplayExhausted. When ``honor_timing`` is enabled, sleeps until the
+        entry's recorded timestamp in wall-clock, anchored on the first call.
         """
         if self._cursor >= len(self._entries):
             raise ReplayExhausted(f"Recording exhausted before op {op}({args}).")
 
         entry = self._entries[self._cursor]
+
+        # A caller starting a new frame while the cursor sits on the trailing
+        # ``disconnect`` entry means the recording has been fully consumed —
+        # that's a clean end-of-stream, not a drift.
+        if op == "begin_batch" and entry["op"] == "disconnect":
+            raise ReplayComplete(f"Recording ended cleanly at index {self._cursor}.")
+
         if entry["op"] != op or entry["args"] != args:
             raise ReplayMismatch(
                 f"Replay drift at index {self._cursor}: "
                 f"expected {entry['op']}({entry['args']}), got {op}({args})."
             )
+
+        if self._honor_timing:
+            self._pace_to(entry.get("t"))
+
         self._cursor += 1
         return entry.get("result")
+
+    def _pace_to(self, recording_t: float | None) -> None:
+        """
+        Sleep until the wall-clock matches the recorded timestamp's position
+        in the session timeline. No-op if the entry lacks a timestamp.
+        """
+        if recording_t is None:
+            return
+
+        now = time.monotonic()
+        if self._anchor_wall is None:
+            self._anchor_wall = now
+            self._anchor_recording = recording_t
+            return
+
+        target = self._anchor_wall + (recording_t - self._anchor_recording)
+        delay = target - now
+        if delay > 0:
+            time.sleep(delay)
 
     def connect(self) -> None:
         self._load()

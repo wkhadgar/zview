@@ -195,6 +195,10 @@ class ThreadListView(BaseStateView):
                 self._invert_sorting = not self._invert_sorting
 
             case SpecialCode.RECONNECT:
+                if not self.controller.scraper._m_scraper.is_live:
+                    self.controller.status_message = "Refresh is not available in replay mode."
+                    return None
+
                 self.controller.status_message = "Refreshing thread list..."
 
                 # Force the scraper to re-read the kernel's thread linked-list

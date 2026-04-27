@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-CLI wiring coverage for zview_cli.main: argparse dispatch, flag validation,
-stdout/stderr separation for headless modes, and --once rendering.
+CLI wiring coverage for zview_cli.main: verb dispatch, default-verb splicing,
+flag validation per verb, and stdout/stderr separation for headless modes.
 """
 
 import json
@@ -29,113 +29,137 @@ def _invoke(monkeypatch, capsys, argv: list[str]):
     return rc, captured.out, captured.err
 
 
-def test_once_json_stdout_is_valid_json(monkeypatch, capsys):
+def test_normalize_argv_splices_live_for_bare_invocation():
+    assert zview_cli._normalize_argv(["-e", "x", "-r", "jlink", "-t", "y"]) == [
+        "live",
+        "-e",
+        "x",
+        "-r",
+        "jlink",
+        "-t",
+        "y",
+    ]
+
+
+def test_normalize_argv_passes_known_commands_through():
+    for cmd in zview_cli.KNOWN_COMMANDS:
+        assert zview_cli._normalize_argv([cmd, "-e", "x"]) == [cmd, "-e", "x"]
+
+
+def test_normalize_argv_passes_help_through():
+    assert zview_cli._normalize_argv(["--help"]) == ["--help"]
+    assert zview_cli._normalize_argv(["-h"]) == ["-h"]
+
+
+def test_dump_replay_json_stdout_is_valid_json(monkeypatch, capsys):
     rc, out, _ = _invoke(
         monkeypatch,
         capsys,
-        ["-e", str(_ELF), "--replay", str(_FIXTURE), "--once", "--json"],
+        ["dump", "-e", str(_ELF), "-i", str(_FIXTURE), "--json"],
     )
     assert rc == 0
     data = json.loads(out)
     assert "threads" in data and len(data["threads"]) >= 1
 
 
-def test_once_json_keeps_stdout_clean_of_status_lines(monkeypatch, capsys):
+def test_dump_replay_json_keeps_stdout_clean(monkeypatch, capsys):
     rc, out, err = _invoke(
         monkeypatch,
         capsys,
-        ["-e", str(_ELF), "--replay", str(_FIXTURE), "--once", "--json"],
+        ["dump", "-e", str(_ELF), "-i", str(_FIXTURE), "--json"],
     )
     assert rc == 0
-    # Stdout must contain ONLY the JSON document; any status line on stdout
-    # would both fail json.loads and leak diagnostic strings.
     stripped = out.strip()
-    assert stripped.startswith("{")
-    assert stripped.endswith("}")
+    assert stripped.startswith("{") and stripped.endswith("}")
     assert "Loaded cached ELF" not in out
-    assert "Connected to GDB" not in out
-    # Diagnostic that DID fire must be on stderr.
     assert "Loaded cached ELF" in err or "Loading ELF" in err
 
 
-def test_once_human_readable_lists_threads(monkeypatch, capsys):
+def test_dump_replay_human_readable(monkeypatch, capsys):
     rc, out, _ = _invoke(
         monkeypatch,
         capsys,
-        ["-e", str(_ELF), "--replay", str(_FIXTURE), "--once"],
+        ["dump", "-e", str(_ELF), "-i", str(_FIXTURE)],
     )
     assert rc == 0
-    for expected_thread in ("stress_id", "idle", "main"):
-        assert expected_thread in out
-    assert "stack=" in out
-    assert "watermark=" in out
+    for thread in ("stress_id", "idle", "main"):
+        assert thread in out
+    assert "stack=" in out and "watermark=" in out
 
 
-def test_requires_runner_without_replay(monkeypatch, capsys):
+def test_dump_frame_arg_skips_to_requested_frame(monkeypatch, capsys):
+    """--frame 3 emits a different frame than --frame 1 (CPU deltas accumulate over replay)."""
+    rc1, out1, _ = _invoke(
+        monkeypatch,
+        capsys,
+        ["dump", "-e", str(_ELF), "-i", str(_FIXTURE), "--json", "--frame", "1"],
+    )
+    rc3, out3, _ = _invoke(
+        monkeypatch,
+        capsys,
+        ["dump", "-e", str(_ELF), "-i", str(_FIXTURE), "--json", "--frame", "3"],
+    )
+    assert rc1 == 0 and rc3 == 0
+    f1 = json.loads(out1)
+    f3 = json.loads(out3)
+    # Same threads, different runtime state across frames.
+    assert {t["name"] for t in f1["threads"]} == {t["name"] for t in f3["threads"]}
+    cpu1 = sorted(t["runtime"]["cpu_normalized"] for t in f1["threads"])
+    cpu3 = sorted(t["runtime"]["cpu_normalized"] for t in f3["threads"])
+    assert cpu1 != cpu3
+
+
+def test_dump_rejects_zero_or_negative_frame(monkeypatch, capsys):
+    rc, _, err = _invoke(
+        monkeypatch,
+        capsys,
+        ["dump", "-e", str(_ELF), "-i", str(_FIXTURE), "--frame", "0"],
+    )
+    assert rc == 2
+    assert "--frame" in err
+
+
+def test_dump_requires_input_or_runner_target(monkeypatch, capsys):
+    rc, _, err = _invoke(monkeypatch, capsys, ["dump", "-e", str(_ELF)])
+    assert rc == 2
+    assert "--input" in err
+
+
+def test_dump_input_and_runner_are_mutually_exclusive(monkeypatch, capsys):
+    rc, _, err = _invoke(
+        monkeypatch,
+        capsys,
+        ["dump", "-e", str(_ELF), "-i", str(_FIXTURE), "-r", "gdb", "-t", "localhost:1"],
+    )
+    assert rc == 2
+    assert "mutually exclusive" in err
+
+
+def test_live_requires_runner(monkeypatch, capsys):
     rc, _, err = _invoke(monkeypatch, capsys, ["-e", str(_ELF)])
     assert rc == 2
     assert "--runner" in err
 
 
-def test_requires_runner_target_without_replay(monkeypatch, capsys):
+def test_live_requires_runner_target(monkeypatch, capsys):
     rc, _, err = _invoke(monkeypatch, capsys, ["-e", str(_ELF), "-r", "gdb"])
     assert rc == 2
     assert "--runner-target" in err
 
 
-def test_snapshot_and_replay_are_mutually_exclusive(monkeypatch, capsys, tmp_path):
+def test_record_requires_duration_or_frames(monkeypatch, capsys, tmp_path):
     rc, _, err = _invoke(
         monkeypatch,
         capsys,
         [
-            "-e",
-            str(_ELF),
-            "--replay",
-            str(_FIXTURE),
-            "--snapshot",
-            str(tmp_path / "x.ndjson.gz"),
-            "--frames",
-            "1",
-        ],
-    )
-    assert rc == 2
-    assert "mutually exclusive" in err
-
-
-def test_snapshot_and_once_are_mutually_exclusive(monkeypatch, capsys, tmp_path):
-    rc, _, err = _invoke(
-        monkeypatch,
-        capsys,
-        [
+            "record",
             "-e",
             str(_ELF),
             "-r",
             "gdb",
             "-t",
             "localhost:1",
-            "--snapshot",
-            str(tmp_path / "x.ndjson.gz"),
-            "--once",
-            "--frames",
-            "1",
-        ],
-    )
-    assert rc == 2
-    assert "mutually exclusive" in err
-
-
-def test_snapshot_requires_duration_or_frames(monkeypatch, capsys, tmp_path):
-    rc, _, err = _invoke(
-        monkeypatch,
-        capsys,
-        [
-            "-e",
-            str(_ELF),
-            "-r",
-            "gdb",
-            "-t",
-            "localhost:1",
-            "--snapshot",
+            "-o",
             str(tmp_path / "x.ndjson.gz"),
         ],
     )
@@ -143,29 +167,11 @@ def test_snapshot_requires_duration_or_frames(monkeypatch, capsys, tmp_path):
     assert "--duration" in err or "--frames" in err
 
 
-def test_json_requires_once(monkeypatch, capsys):
-    rc, _, err = _invoke(
-        monkeypatch,
-        capsys,
-        ["-e", str(_ELF), "--replay", str(_FIXTURE), "--json"],
-    )
-    assert rc == 2
-    assert "--once" in err
+def test_record_dispatches_with_frames_bound(monkeypatch, capsys, tmp_path):
+    recorded: list[dict] = []
 
-
-def test_snapshot_dispatches_with_bound(monkeypatch, capsys, tmp_path):
-    """main() forwards --frames to record_session and reports the captured count."""
-    recorded_calls: list[dict] = []
-
-    def fake_record(backend, elf_path, out_path, duration=None, frames=None, period=0.1):
-        recorded_calls.append(
-            {
-                "out_path": str(out_path),
-                "duration": duration,
-                "frames": frames,
-                "period": period,
-            }
-        )
+    def fake_record(backend, elf_path, out_path, **kwargs):
+        recorded.append({"out_path": str(out_path), **kwargs})
         return 7
 
     monkeypatch.setattr(zview_cli, "record_session", fake_record)
@@ -175,21 +181,76 @@ def test_snapshot_dispatches_with_bound(monkeypatch, capsys, tmp_path):
         monkeypatch,
         capsys,
         [
+            "record",
             "-e",
             str(_ELF),
             "-r",
             "gdb",
             "-t",
             "localhost:1",
-            "--snapshot",
+            "-o",
             str(out_file),
             "--frames",
             "5",
         ],
     )
-
     assert rc == 0
-    assert len(recorded_calls) == 1
-    assert recorded_calls[0]["frames"] == 5
-    assert recorded_calls[0]["duration"] is None
+    assert len(recorded) == 1
+    assert recorded[0]["frames"] == 5
+    assert recorded[0]["duration"] is None
     assert f"Recorded 7 frames to {out_file}" in out
+
+
+def test_record_forwards_heap_flag(monkeypatch, capsys, tmp_path):
+    recorded: list[dict] = []
+
+    def fake_record(backend, elf_path, out_path, **kwargs):
+        recorded.append(kwargs)
+        return 0
+
+    monkeypatch.setattr(zview_cli, "record_session", fake_record)
+
+    rc, _, _ = _invoke(
+        monkeypatch,
+        capsys,
+        [
+            "record",
+            "-e",
+            str(_ELF),
+            "-r",
+            "gdb",
+            "-t",
+            "localhost:1",
+            "-o",
+            str(tmp_path / "x.ndjson.gz"),
+            "--frames",
+            "1",
+            "--heap",
+            "my_kernel_heap",
+        ],
+    )
+    assert rc == 0
+    assert recorded[0]["heap_detail"] == "my_kernel_heap"
+
+
+def test_replay_no_pacing_passes_to_scraper(monkeypatch, capsys):
+    """--no-pacing constructs the ReplayScraper with honor_timing=False."""
+    captured: dict = {}
+    real_cls = zview_cli.ReplayScraper
+
+    class SpyReplay(real_cls):
+        def __init__(self, *args, **kwargs):
+            captured["honor_timing"] = kwargs.get("honor_timing", True)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(zview_cli, "ReplayScraper", SpyReplay)
+    monkeypatch.setattr(zview_cli, "tui_run", lambda *a, **kw: None)
+    monkeypatch.setattr(zview_cli.curses, "wrapper", lambda fn, *a, **kw: fn(None, *a, **kw))
+
+    rc, _, _ = _invoke(
+        monkeypatch,
+        capsys,
+        ["replay", "-e", str(_ELF), "-i", str(_FIXTURE), "--no-pacing"],
+    )
+    assert rc == 0
+    assert captured["honor_timing"] is False
