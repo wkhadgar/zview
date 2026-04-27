@@ -49,14 +49,38 @@ zview -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA
 ```
 
 
-## Arguments
+## Commands
 
-| Argument | Description |
-| --- | --- |
-| `-e, --elf-file` | Path to the firmware `.elf` file (e.g. `build/zephyr/zephyr.elf`). |
-| `-r, --runner` | Debug runner to use: `jlink`, `pyocd`, or `gdb`. |
-| `-t, --runner-target` | MCU descriptor for the chosen runner (see below). |
-| `--period` | Update period in seconds, can be a float. |
+ZView is invoked through one of four commands. Bare `zview ...` is a shortcut for `zview live ...`.
+
+| Command | Purpose | TUI |
+| --- | --- | --- |
+| `live` | Attach to a probe and render the TUI. Default when no command is given. | yes |
+| `record` | Capture a live session to a `.ndjson.gz` recording file and exit. | no |
+| `replay` | Render the TUI from a previously captured recording. | yes |
+| `dump` | Emit a single polling frame and exit. | no |
+
+### Common arguments
+
+| Argument | Used by | Description |
+| --- | --- | --- |
+| `-e, --elf-file` | all | Path to the firmware `.elf` file. |
+| `-r, --runner` | `live`, `record`, `dump` | Debug runner: `jlink`, `pyocd`, or `gdb`. |
+| `-t, --runner-target` | `live`, `record`, `dump` | MCU descriptor for the chosen runner (see below). |
+| `--period` | `live`, `record`, `dump` | Polling period in seconds (default: `0.10`). |
+
+### Command-specific arguments
+
+| Argument | Command | Description |
+| --- | --- | --- |
+| `-o, --output` | `record` | Recording target path (`.ndjson.gz`). |
+| `--duration` | `record` | Recording upper bound, in seconds. |
+| `--frames` | `record` | Recording upper bound, in data frames. |
+| `--heap` | `record` | Capture per-frame fragmentation for the named `k_heap` variable. |
+| `-i, --input` | `replay`, `dump` | Recording source path (`.ndjson.gz`). |
+| `--no-pacing` | `replay` | Drain the recording as fast as possible instead of honoring its wall-clock cadence. |
+| `--frame` | `dump` | Which polling frame to emit (1-indexed; default: `1`). |
+| `--json` | `dump` | Emit the frame as JSON on stdout. |
 
 <details>
 <summary><strong>Finding the right value for <code>-t</code></strong></summary>
@@ -90,4 +114,4 @@ zview -e build/zephyr/zephyr.elf -r gdb -t localhost:1234
 
 ---
 
-For navigation, advanced usage, and QEMU/GDB targets, refer to the [main documentation](https://github.com/wkhadgar/zview/blob/main/README.md).
+For navigation, offline recording/replay workflows, advanced usage, and QEMU/GDB targets, refer to the [main documentation](https://github.com/wkhadgar/zview/blob/main/README.md).

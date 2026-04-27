@@ -36,7 +36,7 @@ class FakeScraper:
 
 
 class FakeElf:
-    """Minimal ElfInspector stand-in; walk_thread_list only reads struct size."""
+    """Minimal ElfInspector stand-in."""
 
     def __init__(self, struct_size: int = 32):
         self._size = struct_size
@@ -54,15 +54,20 @@ class FakeElf:
 #   2: stack_size
 #   3: next_thread
 #   4-7: name (16 bytes)
-OFFSETS = {
-    "k_thread": {"next_thread": 12, "name": 16},
-    "thread_info": {"stack_start": 4, "stack_size": 8},
-}
+from kernel.layout import KernelLayout  # noqa: E402
+
+LAYOUT = KernelLayout(
+    threads_head=0,  # unused by walker (head address comes as arg)
+    thread_next=12,
+    stack_start=4,
+    stack_size=8,
+    thread_name=16,
+)
 HEAD_ADDR = 0x500
 
 
 def _name_to_words(name: str, slots: int = 4, endian: str = "little") -> tuple[int, ...]:
-    """Pack a NUL-terminated name into ``slots`` 32-bit words in the given endianness."""
+    """Pack ``name`` into ``slots`` 32-bit words, NUL-padded."""
     data = name.encode() + b"\x00" * (slots * 4 - len(name))
     return tuple(int.from_bytes(data[i : i + 4], endian) for i in range(0, slots * 4, 4))
 
@@ -79,14 +84,14 @@ def _make_thread(
 
 def test_zero_head_address_returns_empty():
     scraper = FakeScraper({})
-    threads = walk_thread_list(scraper, FakeElf(), 0, OFFSETS, "little", has_names=True)
+    threads = walk_thread_list(scraper, FakeElf(), 0, LAYOUT, "little", has_names=True)
     assert threads == {}
     assert scraper.batch_count == 1
 
 
 def test_zero_head_pointer_returns_empty():
     scraper = FakeScraper({HEAD_ADDR: (0,)})
-    threads = walk_thread_list(scraper, FakeElf(), HEAD_ADDR, OFFSETS, "little", has_names=True)
+    threads = walk_thread_list(scraper, FakeElf(), HEAD_ADDR, LAYOUT, "little", has_names=True)
     assert threads == {}
 
 
@@ -99,7 +104,7 @@ def test_single_thread_walk():
         }
     )
 
-    threads = walk_thread_list(scraper, FakeElf(), HEAD_ADDR, OFFSETS, "little", has_names=True)
+    threads = walk_thread_list(scraper, FakeElf(), HEAD_ADDR, LAYOUT, "little", has_names=True)
 
     assert list(threads) == ["main"]
     t = threads["main"]
@@ -121,7 +126,7 @@ def test_linked_list_multiple_threads():
         }
     )
 
-    threads = walk_thread_list(scraper, FakeElf(), HEAD_ADDR, OFFSETS, "little", has_names=True)
+    threads = walk_thread_list(scraper, FakeElf(), HEAD_ADDR, LAYOUT, "little", has_names=True)
 
     assert set(threads) == {"main", "idle", "worker"}
     assert threads["main"].stack_size == 512
@@ -139,7 +144,7 @@ def test_no_names_uses_address_fallback():
         }
     )
 
-    threads = walk_thread_list(scraper, FakeElf(), HEAD_ADDR, OFFSETS, "little", has_names=False)
+    threads = walk_thread_list(scraper, FakeElf(), HEAD_ADDR, LAYOUT, "little", has_names=False)
 
     assert list(threads) == [f"thread @ 0x{t1:X}"]
 
@@ -154,7 +159,7 @@ def test_max_threads_caps_walk():
 
     scraper = FakeScraper(memory)
     threads = walk_thread_list(
-        scraper, FakeElf(), HEAD_ADDR, OFFSETS, "little", has_names=True, max_threads=3
+        scraper, FakeElf(), HEAD_ADDR, LAYOUT, "little", has_names=True, max_threads=3
     )
 
     assert set(threads) == {"t0", "t1", "t2"}
@@ -164,7 +169,7 @@ def test_head_read_failure_raises_runtime_error():
     # HEAD_ADDR absent from memory -> read32 raises AssertionError from FakeScraper.
     scraper = FakeScraper({})
     with pytest.raises(RuntimeError, match="Unable to read kernel thread list"):
-        walk_thread_list(scraper, FakeElf(), HEAD_ADDR, OFFSETS, "little", has_names=True)
+        walk_thread_list(scraper, FakeElf(), HEAD_ADDR, LAYOUT, "little", has_names=True)
 
 
 def test_mid_walk_read_failure_raises():
@@ -172,7 +177,7 @@ def test_mid_walk_read_failure_raises():
     t1 = 0x1000
     scraper = FakeScraper({HEAD_ADDR: (t1,)})
     with pytest.raises(Exception, match="Error reading thread struct at 0x1000"):
-        walk_thread_list(scraper, FakeElf(), HEAD_ADDR, OFFSETS, "little", has_names=True)
+        walk_thread_list(scraper, FakeElf(), HEAD_ADDR, LAYOUT, "little", has_names=True)
 
 
 def test_big_endian_name_decoding():
@@ -185,6 +190,6 @@ def test_big_endian_name_decoding():
         endianess=">",
     )
 
-    threads = walk_thread_list(scraper, FakeElf(), HEAD_ADDR, OFFSETS, "big", has_names=True)
+    threads = walk_thread_list(scraper, FakeElf(), HEAD_ADDR, LAYOUT, "big", has_names=True)
 
     assert "main" in threads

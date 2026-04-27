@@ -15,12 +15,9 @@ def walk_heap_fragmentation(
     end_chunk_offset: int,
 ) -> list[dict]:
     """
-    Enumerate a Zephyr sys_heap's chunks via a single bulk memory read.
-    Each chunk is returned as ``{"used": bool, "size": int}`` in byte units.
-    Returns an empty list when ``z_heap_addr`` is null or the heap's chunk
-    count is zero. Raises ``ValueError`` when the heap header cannot be
-    decoded or exceeds 32 MB, and ``RuntimeError`` on a zero-size chunk
-    (infinite-loop guard).
+    Enumerate a sys_heap's chunks. Returns ``[{"used": bool, "size": int}]``
+    in byte units, or ``[]`` when the heap is null/empty. Raises ``ValueError``
+    on a corrupted header or sizes >32 MB, ``RuntimeError`` on a zero-size chunk.
     """
     if z_heap_addr == 0:
         return []

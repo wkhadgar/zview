@@ -2,11 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-RecordingScraper captures every call issued to a live AbstractScraper and
-streams it to a gzip-compressed NDJSON file. The resulting recording can be
-played back offline through ReplayScraper without a probe or target attached.
-"""
+"""RecordingScraper: AbstractScraper wrapper that streams every call to a gzipped NDJSON file."""
 
 import gzip
 import json
@@ -23,10 +19,9 @@ SCHEMA_VERSION = "zview-recording/1"
 
 class RecordingScraper(AbstractScraper):
     """
-    Wraps an AbstractScraper and serializes every call to a gzip-compressed
-    NDJSON stream. The first line is a header (schema version, endianess,
-    creation timestamp); subsequent lines are call entries in issue order.
-    Bulk ``read_bytes`` payloads are hex-encoded; gzip reclaims the bloat.
+    AbstractScraper wrapper that emits each call as one NDJSON line.
+    First line is a header ({schema, endianess, created_at}); ``read_bytes``
+    payloads are hex-encoded.
     """
 
     def __init__(self, wrapped: AbstractScraper, out_path: Path | str):
@@ -38,10 +33,7 @@ class RecordingScraper(AbstractScraper):
         self.endianess = wrapped.endianess
 
     def _open(self) -> None:
-        """
-        Open the gzip stream and write the header line. Idempotent: repeat
-        calls on an already-open recorder are no-ops.
-        """
+        """Open the gzip stream and write the header. Idempotent."""
         if self._fp is not None:
             return
         # File lifetime spans connect()/disconnect(), tracked via ExitStack.
@@ -57,12 +49,7 @@ class RecordingScraper(AbstractScraper):
         self._fp.write(json.dumps(header) + "\n")
 
     def _emit(self, op: str, args: dict, result=None) -> None:
-        """
-        Append one call entry to the stream. Entries are JSON objects with
-        fields ``t`` (wall-clock timestamp), ``op`` (method name), ``args``
-        (keyword arguments dict) and, for read ops, ``result`` (decoded return
-        value; ``bytes`` payloads are stored as hex strings).
-        """
+        """Append one call entry: ``{t, op, args[, result]}``."""
         if self._fp is None:
             return
         entry: dict = {"t": time.time(), "op": op, "args": args}
@@ -97,17 +84,16 @@ class RecordingScraper(AbstractScraper):
         self._emit("read_bytes", {"at": at, "amount": amount}, bytes(result).hex())
         return result
 
-    def read8(self, at: int, amount: int = 1) -> Sequence[int]:
-        result = self._wrapped.read8(at, amount)
-        self._emit("read8", {"at": at, "amount": amount}, list(result))
+    def _record_read(self, op: str, fn, at: int, amount: int) -> Sequence[int]:
+        result = fn(at, amount)
+        self._emit(op, {"at": at, "amount": amount}, list(result))
         return result
+
+    def read8(self, at: int, amount: int = 1) -> Sequence[int]:
+        return self._record_read("read8", self._wrapped.read8, at, amount)
 
     def read32(self, at: int, amount: int = 1) -> Sequence[int]:
-        result = self._wrapped.read32(at, amount)
-        self._emit("read32", {"at": at, "amount": amount}, list(result))
-        return result
+        return self._record_read("read32", self._wrapped.read32, at, amount)
 
     def read64(self, at: int, amount: int = 1) -> Sequence[int]:
-        result = self._wrapped.read64(at, amount)
-        self._emit("read64", {"at": at, "amount": amount}, list(result))
-        return result
+        return self._record_read("read64", self._wrapped.read64, at, amount)

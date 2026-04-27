@@ -65,14 +65,38 @@ west zview -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA
 ```
 
 
-## Arguments
+## Commands
 
-| Argument | Description |
-| --- | --- |
-| `-e, --elf-file` | Path to the firmware `.elf` file (e.g. `build/zephyr/zephyr.elf`). |
-| `-r, --runner` | Debug runner to use: `jlink`, `pyocd`, or `gdb`. |
-| `-t, --runner-target` | MCU descriptor for the chosen runner (see below). |
-| `--period` | Update period in seconds, can be a float. |
+ZView is invoked through one of four commands. Bare `zview ...` is a shortcut for `zview live ...`.
+
+| Command | Purpose | TUI |
+| --- | --- | --- |
+| `live` | Attach to a probe and render the TUI. Default when no command is given. | yes |
+| `record` | Capture a live session to a `.ndjson.gz` recording file and exit. | no |
+| `replay` | Render the TUI from a previously captured recording. | yes |
+| `dump` | Emit a single polling frame and exit. | no |
+
+### Common arguments
+
+| Argument | Used by | Description |
+| --- | --- | --- |
+| `-e, --elf-file` | all | Path to the firmware `.elf` file (e.g. `build/zephyr/zephyr.elf`). |
+| `-r, --runner` | `live`, `record`, `dump` | Debug runner: `jlink`, `pyocd`, or `gdb`. |
+| `-t, --runner-target` | `live`, `record`, `dump` | MCU descriptor for the chosen runner (see below). |
+| `--period` | `live`, `record`, `dump` | Polling period in seconds (default: `0.10`). |
+
+### Command-specific arguments
+
+| Argument | Command | Description |
+| --- | --- | --- |
+| `-o, --output` | `record` | Recording target path (`.ndjson.gz`). |
+| `--duration` | `record` | Recording upper bound, in seconds. |
+| `--frames` | `record` | Recording upper bound, in data frames. |
+| `--heap` | `record` | Capture per-frame fragmentation for the named `k_heap` variable. |
+| `-i, --input` | `replay`, `dump` | Recording source path (`.ndjson.gz`). |
+| `--no-pacing` | `replay` | Drain the recording as fast as possible instead of honoring its wall-clock cadence. |
+| `--frame` | `dump` | Which polling frame to emit (1-indexed; default: `1`). |
+| `--json` | `dump` | Emit the frame as JSON on stdout. |
 
 <details>
 <summary><strong>Finding the right value for <code>-t</code></strong></summary>
@@ -127,6 +151,51 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
 
 [![TUI heap fragmentation map](https://github.com/wkhadgar/zview/raw/main/docs/assets/heaps_detail_1.png)](https://github.com/wkhadgar/zview/blob/main/docs/assets/heaps_detail_1.png)
 
+
+## Offline workflows
+
+ZView can record a live session to disk, replay it later without a probe, or emit a single frame as JSON for CI.
+
+**Record a live session:**
+
+```
+# 30 s of live polling from a JLink probe, saved to disk
+west zview record -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA \
+  -o capture.ndjson.gz --duration 30
+```
+
+Bound the recording by either `--duration` (seconds) or `--frames` (number of data frames).
+
+To also capture the **fragmentation map** for a specific heap, pass `--heap <name>` where `<name>` matches a `k_heap` variable from your firmware (e.g. `my_kernel_heap`):
+
+```
+west zview record -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA \
+  -o capture.ndjson.gz --duration 30 --heap my_kernel_heap
+```
+
+**Replay it later — no hardware needed:**
+
+```
+# Feed the recording into the TUI
+west zview replay -e build/zephyr/zephyr.elf -i capture.ndjson.gz
+```
+
+By default the replay honors the recording's original cadence. Pass `--no-pacing` to drain it as fast as possible.
+
+The ELF is still required: DWARF offsets are resolved at replay time and are not stored in the recording.
+
+**CI-friendly single-frame snapshot:**
+
+```
+# One polling frame from a live probe, dumped as JSON on stdout
+west zview dump -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA --json \
+  | jq '.threads[] | select(.runtime.stack_watermark_percent > 80)'
+```
+
+`dump` accepts either a live source (`-r`/`-t`) or a recording (`-i`). Omit `--json` for a human-readable one-shot dump. Use `--frame N` to emit the Nth polling frame instead of the first — useful when the first frame's CPU baseline hasn't settled.
+
+> **Note:** Status messages (probe connect, ELF load) are emitted on stderr, so stdout stays clean for piping into `jq` or similar.
+
 ---
 
 ## Advanced
@@ -172,12 +241,5 @@ ZView achieves a minimal footprint by avoiding on-target processing or UART/Shel
 > **Note:** The `idle` thread is implicit and only expresses itself on the used CPU %, when available.
 
 </details>
-
-
-## Roadmap
-
-Based on community feedback, the following features are in development:
-
-* Detailed thread metrics (e.g., context switch counts).
 
 Feel free to open an [issue](https://github.com/wkhadgar/zview/issues) if you feel like this has some potential!

@@ -16,7 +16,7 @@ from orchestrator import ZScraper
 
 
 def test_gdb_scraper_endianness():
-    """Validates that GDBScraper correctly applies endianness to struct unpacking."""
+    """``GDBScraper`` applies endianness to struct unpacking."""
     scraper = GDBScraper("localhost:1234")
     scraper._read_mem_raw = MagicMock()
 
@@ -38,7 +38,7 @@ def test_gdb_scraper_endianness():
 
 
 def test_pyocd_scraper_read64_endianness():
-    """Validates the struct unpacking of 64-bit words in PyOCDScraper."""
+    """``PyOCDScraper.read64`` unpacks with endianness."""
     scraper = PyOCDScraper(None)
     scraper.target = MagicMock()
 
@@ -76,7 +76,7 @@ def elf_path():
 
 
 def test_poll_thread_worker_math_and_queue(elf_path):
-    """Validates CPU normalization and watermark percentage calculation via queue emission."""
+    """CPU normalization and watermark percentage propagate to the emitted frame."""
 
     mock_meta_scraper = MagicMock()
     mock_meta_scraper.is_connected = True
@@ -86,7 +86,9 @@ def test_poll_thread_worker_math_and_queue(elf_path):
     scraper.has_usage = True
     scraper.idle_threads_address = 0x2000
 
-    scraper._offsets = {"thread_info": {"usage": 0x10}}
+    from dataclasses import replace as dc_replace
+
+    scraper._layout = dc_replace(scraper._layout, thread_usage=0x10)
     scraper._cpu_usage_address = 0x1000
     scraper.last_cpu_cycles = 100
     scraper.last_cpu_delta = 100
@@ -144,7 +146,7 @@ def test_poll_thread_worker_math_and_queue(elf_path):
 
 
 def _make_strike_scraper(elf_path):
-    """ZScraper shim with has_usage/has_heaps disabled; exercises the read path cleanly."""
+    """``ZScraper`` shim with ``has_usage``/``has_heaps`` disabled."""
     mock = MagicMock()
     mock.is_connected = True
     scraper = ZScraper(mock, elf_path=elf_path, max_threads=2)
@@ -158,7 +160,7 @@ def _make_strike_scraper(elf_path):
 
 
 def test_single_strike_emits_transient_error(elf_path):
-    """A single read failure emits a transient error and does not stop the loop."""
+    """One read failure emits a transient error; loop continues."""
     scraper, mock = _make_strike_scraper(elf_path)
     mock.calculate_dynamic_watermark.side_effect = RuntimeError("read fail")
 
@@ -175,7 +177,7 @@ def test_single_strike_emits_transient_error(elf_path):
 
 
 def test_three_strikes_emit_fatal_and_break(elf_path):
-    """Three consecutive failures emit a fatal_error and terminate the loop."""
+    """Three consecutive failures emit ``fatal_error`` and terminate the loop."""
     scraper, mock = _make_strike_scraper(elf_path)
     mock.calculate_dynamic_watermark.side_effect = RuntimeError("persistent fail")
 
@@ -198,7 +200,7 @@ def test_three_strikes_emit_fatal_and_break(elf_path):
 
 
 def test_strike_counter_resets_on_success(elf_path):
-    """Two failures followed by success reset the counter; no fatal_error emitted."""
+    """Two failures + one success resets the counter; no ``fatal_error``."""
     scraper, mock = _make_strike_scraper(elf_path)
     mock.calculate_dynamic_watermark.side_effect = [
         RuntimeError("fail-1"),
@@ -231,7 +233,7 @@ def test_strike_counter_resets_on_success(elf_path):
 
 
 def test_queue_full_is_not_counted_as_strike(elf_path):
-    """queue.Full on put is silently swallowed; no strike is recorded."""
+    """``queue.Full`` is swallowed; not counted as a strike."""
     scraper, mock = _make_strike_scraper(elf_path)
     mock.calculate_dynamic_watermark.return_value = 250
 
@@ -261,7 +263,7 @@ def test_queue_full_is_not_counted_as_strike(elf_path):
 
 
 def test_reset_runtime_state_clears_caches_and_rebaselines(elf_path):
-    """Wipes watermark_cache + last_thread_cycles and re-reads init_cpu_cycles."""
+    """Clears ``watermark_cache``/``last_thread_cycles``; re-reads ``init_cpu_cycles``."""
     scraper = ZScraper.__new__(ZScraper)
     mock = MagicMock()
     mock.watermark_cache = {0x1000: 100, 0x2000: 200}
@@ -287,7 +289,7 @@ def test_reset_runtime_state_clears_caches_and_rebaselines(elf_path):
 
 
 def test_reset_runtime_state_without_usage_only_clears_watermark(elf_path):
-    """With has_usage=False, reset_runtime_state clears watermark_cache and returns early."""
+    """``has_usage=False``: ``reset_runtime_state`` clears watermark only and exits early."""
     scraper = ZScraper.__new__(ZScraper)
     mock = MagicMock()
     mock.watermark_cache = {0x1000: 100}

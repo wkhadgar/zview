@@ -59,12 +59,12 @@ class ElfInspector:
         self._little_endian = True
 
         if not self._load_cache():
-            print("Loading ELF. This may take a while...", end="", flush=True)
+            print("Loading ELF. This may take a while...", end="", flush=True, file=sys.stderr)
             self._perform_single_pass_scan()
             self._save_cache()
-            print(" OK.")
+            print(" OK.", file=sys.stderr)
         else:
-            print(f"Loaded cached ELF @ {self._cache_file}")
+            print(f"Loaded cached ELF @ {self._cache_file}", file=sys.stderr)
 
     @staticmethod
     def _resolve_os_cache_dir() -> Path:
@@ -300,9 +300,12 @@ class ElfInspector:
         Returns all global variable names whose type is the named struct,
         or None if no such variables were found in the DWARF info.
 
-        The returned list is deduplicated — a symbol appearing in multiple
-        compilation units is reported only once.
+        The returned list is deduplicated (a symbol appearing in multiple
+        compilation units is reported only once) and preserves DWARF
+        discovery order — critical for downstream consumers (ZScraper's
+        polling loop, recording/replay lockstep) that depend on a stable
+        iteration order across processes.
         """
         if struct_name not in self._struct_variables:
             return None
-        return list(set(self._struct_variables[struct_name]))
+        return list(dict.fromkeys(self._struct_variables[struct_name]))

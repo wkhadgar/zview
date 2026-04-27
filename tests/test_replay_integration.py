@@ -2,11 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-End-to-end replay integration: feed a recorded .ndjson.gz through ReplayScraper
-and a real ZScraper; verify the polling pipeline produces the state captured
-in the matching golden JSON.
-"""
+"""End-to-end replay integration against a recorded fixture and its golden JSON."""
 
 import json
 import queue
@@ -39,7 +35,7 @@ def _discover_fixtures() -> list[tuple[Path, Path]]:
 
 def _drive_replay(recording: Path) -> list[dict]:
     """Replay a fixture through a full ZScraper polling loop; return captured frames."""
-    replay = ReplayScraper(recording)
+    replay = ReplayScraper(recording, honor_timing=False)
     with replay:
         scraper = ZScraper(replay, str(_ELF_PATH))
         scraper.update_available_threads()
@@ -74,14 +70,14 @@ def _last_valid_frame(frames: list[dict]) -> dict:
 
 
 def test_replay_produces_frames(replay_run):
-    """Shape: replay drains the recording into one or more valid data frames."""
+    """Replay drains the recording into one or more valid data frames."""
     frames, _ = replay_run
     valid = [f for f in frames if "threads" in f]
     assert valid, "Replay produced no valid frames"
 
 
 def test_thread_shape(replay_run):
-    """Shape: every emitted thread carries a non-empty name and a positive stack size."""
+    """Every emitted thread has a non-empty name and a positive stack size."""
     frames, _ = replay_run
     last = _last_valid_frame(frames)
     threads: list[ThreadInfo] = last["threads"]
@@ -95,7 +91,7 @@ def test_thread_shape(replay_run):
 
 
 def test_heap_shape(replay_run):
-    """Shape: emitted heaps report non-negative sizes consistent with each other."""
+    """Emitted heaps report non-negative sizes; max ≥ allocated."""
     frames, _ = replay_run
     last = _last_valid_frame(frames)
     heaps: list[HeapInfo] = last.get("heaps", [])
@@ -107,7 +103,7 @@ def test_heap_shape(replay_run):
 
 
 def test_snapshot_thread_set_matches_golden(replay_run):
-    """Snapshot: thread names, stack starts, and stack sizes match the golden file exactly."""
+    """Thread names + stack starts + stack sizes equal the golden."""
     frames, golden = replay_run
     last = _last_valid_frame(frames)
     captured = {(t.name, t.stack_start, t.stack_size) for t in last["threads"]}
@@ -116,7 +112,7 @@ def test_snapshot_thread_set_matches_golden(replay_run):
 
 
 def test_snapshot_watermarks_match_golden(replay_run):
-    """Snapshot: per-thread watermark matches the golden exactly (replay is deterministic)."""
+    """Per-thread watermark equals the golden."""
     frames, golden = replay_run
     last = _last_valid_frame(frames)
     captured = {t.name: t.runtime.stack_watermark for t in last["threads"] if t.runtime}
@@ -129,7 +125,7 @@ def test_snapshot_watermarks_match_golden(replay_run):
 
 
 def test_snapshot_heaps_match_golden(replay_run):
-    """Snapshot: heap identity and byte counters match the golden exactly."""
+    """Heap identity + byte counters equal the golden."""
     frames, golden = replay_run
     last = _last_valid_frame(frames)
     captured = [

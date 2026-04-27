@@ -8,21 +8,21 @@ from typing import Literal
 
 from backend.base import AbstractScraper, ThreadInfo
 from backend.elf_inspector import ElfInspector
+from kernel.layout import KernelLayout
 
 
 def walk_thread_list(
     scraper: AbstractScraper,
     elf: ElfInspector,
     threads_head_address: int,
-    offsets: dict,
+    layout: KernelLayout,
     endianess: Literal["little", "big"],
     has_names: bool,
     max_threads: int = 64,
 ) -> dict[str, ThreadInfo]:
     """
-    Walk the kernel thread linked list starting at ``threads_head_address``
-    and return a ``{name: ThreadInfo}`` map. Batches the entire walk via the
-    scraper's ``begin_batch``/``end_batch`` hooks. Raises ``RuntimeError``
+    Walk the kernel thread linked list and return ``{name: ThreadInfo}``.
+    Wrapped in a single ``begin_batch``/``end_batch``. Raises ``RuntimeError``
     when the head pointer cannot be read.
     """
     try:
@@ -37,10 +37,12 @@ def walk_thread_list(
 
     stack_struct_size = elf.get_struct_size("k_thread")
     words_to_read = stack_struct_size // 4
-    next_ptr_word_idx = offsets["k_thread"]["next_thread"] // 4
-    stack_start_word_idx = offsets["thread_info"]["stack_start"] // 4
-    name_word_idx = offsets["k_thread"]["name"] // 4 if has_names else 0
-    stack_size_word_idx = offsets["thread_info"]["stack_size"] // 4
+    next_ptr_word_idx = layout.thread_next // 4
+    stack_start_word_idx = layout.stack_start // 4
+    stack_size_word_idx = layout.stack_size // 4
+    name_word_idx = (
+        (layout.thread_name // 4) if (has_names and layout.thread_name is not None) else 0
+    )
 
     threads: dict[str, ThreadInfo] = {}
     for _ in range(max_threads):

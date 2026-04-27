@@ -2,15 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-ReplayScraper reads an NDJSON-over-gzip recording produced by RecordingScraper
-and satisfies the AbstractScraper interface by returning each recorded result
-in sequence. Strict drift detection raises ReplayMismatch when the caller's
-op or args diverge from the next recorded entry.
-"""
+"""ReplayScraper: AbstractScraper backed by a RecordingScraper output file."""
 
 import gzip
 import json
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -30,30 +26,39 @@ class ReplayExhausted(ReplayError):
     """Recording ran out of entries before replay completed."""
 
 
+class ReplayComplete(ReplayError):
+    """Caller attempted a new frame past the trailing disconnect — the recording ended cleanly."""
+
+
 class UnsupportedSchema(ReplayError):
     """Recording header advertises a schema this reader does not handle."""
 
 
 class ReplayScraper(AbstractScraper):
     """
-    Replays a recording produced by RecordingScraper. Strict: every call must
-    match the next entry's op and args, else ReplayMismatch is raised. Running
-    past the end raises ReplayExhausted.
+    Replays a RecordingScraper file. Strict: every call's op and args must
+    match the next recorded entry, else raises ReplayMismatch. Past the end
+    raises ReplayExhausted. ``honor_timing=True`` paces calls to the recorded
+    timestamps.
     """
 
-    def __init__(self, source_path: Path | str):
+    # A replay cursor can neither rewind nor absorb changes to the polling
+    # shape (thread pool reductions, heap fragmentation toggles, etc.) without
+    # drifting against the recording.
+    is_live = False
+
+    def __init__(self, source_path: Path | str, honor_timing: bool = True):
         super().__init__(target_mcu=None)
         self._source_path = Path(source_path)
         self._entries: list[dict] = []
         self._cursor: int = 0
         self._loaded: bool = False
+        self._honor_timing = honor_timing
+        self._anchor_wall: float | None = None
+        self._anchor_recording: float | None = None
 
     def _load(self) -> None:
-        """
-        Parse the header and eagerly buffer every entry. Idempotent: subsequent
-        calls are no-ops. Raises UnsupportedSchema if the header is missing or
-        advertises a schema this reader does not understand.
-        """
+        """Parse header and buffer all entries. Idempotent. Raises UnsupportedSchema."""
         if self._loaded:
             return
 
@@ -80,22 +85,48 @@ class ReplayScraper(AbstractScraper):
 
     def _next(self, op: str, args: dict):
         """
-        Advance the cursor by one entry and return its stored result. The
-        caller's ``op`` and ``args`` must match the entry exactly; any drift
-        raises ReplayMismatch, and advancing past the last entry raises
-        ReplayExhausted.
+        Advance cursor and return the entry's stored result.
+        Raises ReplayMismatch on op/args drift, ReplayExhausted past end,
+        ReplayComplete when ``op == 'begin_batch'`` lands on a trailing ``disconnect``.
         """
         if self._cursor >= len(self._entries):
             raise ReplayExhausted(f"Recording exhausted before op {op}({args}).")
 
         entry = self._entries[self._cursor]
+
+        # A caller starting a new frame while the cursor sits on the trailing
+        # ``disconnect`` entry means the recording has been fully consumed —
+        # that's a clean end-of-stream, not a drift.
+        if op == "begin_batch" and entry["op"] == "disconnect":
+            raise ReplayComplete(f"Recording ended cleanly at index {self._cursor}.")
+
         if entry["op"] != op or entry["args"] != args:
             raise ReplayMismatch(
                 f"Replay drift at index {self._cursor}: "
                 f"expected {entry['op']}({entry['args']}), got {op}({args})."
             )
+
+        if self._honor_timing:
+            self._pace_to(entry.get("t"))
+
         self._cursor += 1
         return entry.get("result")
+
+    def _pace_to(self, recording_t: float | None) -> None:
+        """Sleep until the wall-clock matches ``recording_t`` (anchored on first call)."""
+        if recording_t is None:
+            return
+
+        now = time.monotonic()
+        if self._anchor_wall is None:
+            self._anchor_wall = now
+            self._anchor_recording = recording_t
+            return
+
+        target = self._anchor_wall + (recording_t - self._anchor_recording)
+        delay = target - now
+        if delay > 0:
+            time.sleep(delay)
 
     def connect(self) -> None:
         self._load()
@@ -103,7 +134,13 @@ class ReplayScraper(AbstractScraper):
         self._is_connected = True
 
     def disconnect(self) -> None:
-        self._next("disconnect", {})
+        """Consume a trailing ``disconnect`` entry if present; mark disconnected."""
+        if (
+            self._cursor < len(self._entries)
+            and self._entries[self._cursor]["op"] == "disconnect"
+            and self._entries[self._cursor]["args"] == {}
+        ):
+            self._cursor += 1
         self._is_connected = False
 
     def begin_batch(self) -> None:

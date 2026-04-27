@@ -22,7 +22,6 @@ def parser(elf_path):
 
 
 def test_symbol_address_lookup(parser):
-    """Test retrieving the address of the kernel object."""
     addr = parser.get_symbol_info("_kernel", "address")
     assert len(addr) == 1
     assert isinstance(addr[0], int)
@@ -30,7 +29,6 @@ def test_symbol_address_lookup(parser):
 
 
 def test_struct_member_offsets(parser):
-    """Test parsing structure offsets (padding logic check)."""
     ts_offset = parser.get_struct_member_offset("k_thread", "base")
     assert ts_offset == 0
 
@@ -39,13 +37,11 @@ def test_struct_member_offsets(parser):
 
 
 def test_struct_size(parser):
-    """Test reading the total size of the struct."""
     size = parser.get_struct_size("k_thread")
     assert size == 192
 
 
 def test_find_variable_by_struct_type(parser):
-    """Test finding variables that are instances of a specific struct."""
     vars_found = parser.find_struct_variable_names("k_thread")
 
     assert vars_found is not None
@@ -55,3 +51,11 @@ def test_find_variable_by_struct_type(parser):
 def test_struct_not_found(parser):
     with pytest.raises(LookupError):
         parser.get_struct_size("k_struct")
+
+
+def test_find_struct_variable_names_order_is_deterministic(elf_path):
+    """Two fresh ``ElfInspector`` instances on the same ELF return identical order."""
+    first = ElfInspector(str(elf_path)).find_struct_variable_names("k_thread")
+    second = ElfInspector(str(elf_path)).find_struct_variable_names("k_thread")
+    assert first is not None
+    assert first == second
