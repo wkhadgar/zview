@@ -14,7 +14,7 @@ from typing import IO
 
 from backend.base import AbstractScraper
 
-SCHEMA_VERSION = "zview-recording/1"
+SCHEMA_VERSION = "zview-recording/2"
 
 
 class RecordingScraper(AbstractScraper):
