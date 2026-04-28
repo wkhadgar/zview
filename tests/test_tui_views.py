@@ -29,44 +29,54 @@ def controller() -> MagicMock:
 
 
 def test_thread_list_footer_truncates_at_max_with_ellipsis(controller, theme):
-    """5 view bindings + ``Help: ?`` -> top 4 shown, ``...`` then ``Help: ?``."""
+    """5 view bindings -> ``Help: ?`` prepended, top 3 shown, trailing ``…``."""
     view = ThreadListView(controller, theme)
     hint = view._footer_hint().rstrip()
     parts = [p.strip() for p in hint.split("|")]
-    assert parts[:4] == ["Detail: <Enter>", "Sort: s", "Heaps: h", "Invert: i"]
-    assert parts[-2:] == ["...", "Help: ?"]
+    assert parts[0] == "Help: ?"
+    assert parts[1:4] == ["Detail: <Enter>", "Heaps: h", "Refresh: r"]
+    assert parts[-1] == "…"
 
 
-def test_thread_list_footer_no_ellipsis_when_no_heaps(controller, theme):
-    """Without heaps the binding count drops to 4; no ``...`` should appear."""
-    controller.scraper.has_heaps = False
-    view = ThreadListView(controller, theme)
-    hint = view._footer_hint()
-    assert "..." not in hint
-
-
-def test_heap_list_footer_at_cap_no_ellipsis(controller, theme):
-    """4 view bindings exactly fill the cap — no overflow."""
+def test_heap_list_footer_overflow(controller, theme):
+    """4 view bindings overflow the cap of 3 -> trailing ``…``."""
     view = HeapListView(controller, theme)
-    hint = view._footer_hint()
-    assert "..." not in hint
-    assert hint.endswith("Help: ? ")
+    hint = view._footer_hint().rstrip()
+    parts = [p.strip() for p in hint.split("|")]
+    assert parts[0] == "Help: ?"
+    assert parts[-1] == "…"
 
 
 def test_thread_detail_footer_minimal(controller, theme):
     view = ThreadDetailView(controller, theme)
-    assert view._footer_hint() == "Back: <Enter> | Help: ? "
+    assert view._footer_hint() == "Help: ? | Back: <Enter> "
 
 
 def test_heap_detail_footer_minimal(controller, theme):
     view = HeapDetailView(controller, theme)
-    assert view._footer_hint() == "Back: <Enter> | Help: ? "
+    assert view._footer_hint() == "Help: ? | Back: <Enter> "
 
 
 def test_fatal_error_footer_is_help_gateway_only(controller, theme):
     """A view with zero bindings still advertises the help gateway."""
     view = FatalErrorView(controller, theme)
     assert view._footer_hint() == "Help: ? "
+
+
+def test_fit_str_pads_when_shorter():
+    from frontend.tui.widgets import _fit_str
+
+    assert _fit_str("ab", 6) == "  ab  "
+    assert _fit_str("ab", 6, align="<") == "ab    "
+    assert _fit_str("ab", 6, align=">") == "    ab"
+
+
+def test_fit_str_truncates_when_longer():
+    """Hard-clip the formatted string at exactly ``width`` — never spill over."""
+    from frontend.tui.widgets import _fit_str
+
+    assert _fit_str("1234567890", 4) == "1234"
+    assert len(_fit_str("9999999 / 99999999", 8)) == 8
 
 
 def test_footer_hint_uses_label_for_compactness():

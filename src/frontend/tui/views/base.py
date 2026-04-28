@@ -18,6 +18,28 @@ class Keybind(NamedTuple):
     help_text: str
 
 
+def compute_flex_widths(
+    schema_widths: list[int],
+    terminal_width: int,
+    items: list,
+    name_idx: int = 0,
+    bar_idx: int = 3,
+) -> list[int]:
+    """Schema widths are floor; extra goes to name (only as needed) then bar."""
+    base = list(schema_widths)
+    floor = sum(base) + len(base) - 1
+    # Reserve one terminal column (curses errors when the cursor advances off-screen).
+    extra = terminal_width - floor - 1
+    if extra <= 0:
+        return base
+    max_name = max((len(item.name) for item in items), default=0)
+    name_grow = min(extra, max(0, max_name - base[name_idx]))
+    base[name_idx] += name_grow
+    extra -= name_grow
+    base[bar_idx] += extra
+    return base
+
+
 @dataclass
 class ZViewTUIAttributes:
     ACTIVE: int

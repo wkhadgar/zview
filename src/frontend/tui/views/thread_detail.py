@@ -11,6 +11,7 @@ from frontend.tui.views.base import (
     SpecialCode,
     ZViewState,
     ZViewTUIAttributes,
+    compute_flex_widths,
 )
 from frontend.tui.views.thread_list import ThreadListView
 from frontend.tui.widgets import TUIGraph, TUIThreadInfo
@@ -46,8 +47,13 @@ class ThreadDetailView(BaseStateView):
 
         self._render_frame(stdscr, self._footer_hint(), height, width)
 
+        widths = compute_flex_widths(
+            list(self._scheme.values()), width, self.controller.threads_data
+        )
+        self._tui_thread_info.set_field_widths(*widths)
+
         curr_x = 0
-        for col_header, h_width in self._scheme.items():
+        for col_header, h_width in zip(self._scheme.keys(), widths, strict=True):
             if curr_x >= width:
                 break
 

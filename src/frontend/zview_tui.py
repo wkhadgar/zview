@@ -46,7 +46,7 @@ class ZView:
         Args:
             stdscr: The main curses window object provided by curses.wrapper.
         """
-        self.min_dimensions = (14, 86)
+        self.min_dimensions = (14, 85)
         self.stdscr: curses.window = stdscr
         self.scraper: ZScraper = scraper
         self.running = True

@@ -12,17 +12,18 @@ from frontend.tui.views.base import (
     SpecialCode,
     ZViewState,
     ZViewTUIAttributes,
+    compute_flex_widths,
 )
 from frontend.tui.widgets import TUIHeapInfo
 
 
 class HeapListView(BaseStateView):
     SCHEMA = {
-        "Heap": 30,
-        "Free B": 8,
-        "Used B": 8,
-        "Heap Usage %": 32,
-        "Watermark Bytes": 18,
+        "Heap": 25,
+        "Free B": 7,
+        "Used B": 7,
+        "Heap Usage %": 27,
+        "Watermark Bytes": 14,
     }
     COLLUMS: list[str] = list(SCHEMA.keys())
     COLLUM_WIDTHS: list[int] = list(SCHEMA.values())
@@ -57,6 +58,11 @@ class HeapListView(BaseStateView):
             self.COLLUM_WIDTHS[4],
         )
 
+    def _compute_widths(self, terminal_width: int) -> list[int]:
+        return compute_flex_widths(
+            list(self.SCHEMA.values()), terminal_width, self.controller.heaps_data
+        )
+
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         """
         Draws the heap data table and its aggregate information.
@@ -65,11 +71,14 @@ class HeapListView(BaseStateView):
 
         self._render_frame(stdscr, self._footer_hint(), height, width)
 
+        widths = self._compute_widths(width)
+        self._tui_heap_info.set_field_widths(*widths)
+
         max_table_rows = height - 6
         total_heaps = len(self.controller.heaps_data)
         start_num = self.top_line + 1 if total_heaps > 0 else 0
         end_num = min(self.top_line + max_table_rows, total_heaps)
-        heap_column_width = self.COLLUM_WIDTHS[0]
+        heap_column_width = widths[0]
 
         self.cursor = max(min(total_heaps - 1, self.cursor), 0)
         if self.cursor >= self.top_line + max_table_rows:
@@ -78,10 +87,10 @@ class HeapListView(BaseStateView):
             self.top_line = self.cursor
 
         order_symbol = " ▼" if self._invert_sorting else " ▲"
-        sorting_header = self.COLLUM_WIDTHS[self._current_sort_idx]
+        sorting_header = self.COLLUMS[self._current_sort_idx]
 
         curr_x = 0
-        for col_header, h_width in self.SCHEMA.items():
+        for col_header, h_width in zip(self.SCHEMA.keys(), widths, strict=True):
             if curr_x >= width:
                 break
 
