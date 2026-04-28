@@ -4,7 +4,14 @@
 
 import curses
 
-from frontend.tui.views.base import Any, BaseStateView, SpecialCode, ZViewState, ZViewTUIAttributes
+from frontend.tui.views.base import (
+    Any,
+    BaseStateView,
+    Keybind,
+    SpecialCode,
+    ZViewState,
+    ZViewTUIAttributes,
+)
 from frontend.tui.views.heap_list import HeapListView
 from frontend.tui.widgets import TUIBox, TUIHeapInfo
 
@@ -104,7 +111,7 @@ class HeapDetailView(BaseStateView):
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()
 
-        self._render_frame(stdscr, "Quit: q | All heaps: <Enter> ", height, width)
+        self._render_frame(stdscr, self._footer_hint(), height, width)
 
         curr_x = 0
         for col_header, h_width in self._scheme.items():
@@ -156,6 +163,9 @@ class HeapDetailView(BaseStateView):
         self._render_status(stdscr, width, height - 2)
 
         stdscr.refresh()
+
+    def keybindings(self) -> list[Keybind]:
+        return [Keybind("<Enter>", "Back", "Return to the heap list")]
 
     def handle_input(self, key: int) -> ZViewState | None:
         if key in (curses.KEY_ENTER, SpecialCode.NEWLINE, SpecialCode.RETURN):

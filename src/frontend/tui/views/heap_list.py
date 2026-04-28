@@ -5,7 +5,14 @@
 import curses
 
 from backend.base import HeapInfo
-from frontend.tui.views.base import Any, BaseStateView, SpecialCode, ZViewState, ZViewTUIAttributes
+from frontend.tui.views.base import (
+    Any,
+    BaseStateView,
+    Keybind,
+    SpecialCode,
+    ZViewState,
+    ZViewTUIAttributes,
+)
 from frontend.tui.widgets import TUIHeapInfo
 
 
@@ -56,7 +63,7 @@ class HeapListView(BaseStateView):
         """
         stdscr.erase()
 
-        self._render_frame(stdscr, "Quit: q | Threads: h | Details: <Enter> ", height, width)
+        self._render_frame(stdscr, self._footer_hint(), height, width)
 
         max_table_rows = height - 6
         total_heaps = len(self.controller.heaps_data)
@@ -135,6 +142,14 @@ class HeapListView(BaseStateView):
         self._render_status(stdscr, width, height - 2)
 
         stdscr.refresh()
+
+    def keybindings(self) -> list[Keybind]:
+        return [
+            Keybind("<Enter>", "Detail", "Open detail view for the selected heap"),
+            Keybind("h", "Threads", "Switch to the threads view"),
+            Keybind("s", "Sort", "Cycle through sort keys"),
+            Keybind("i", "Invert", "Reverse the current sort order"),
+        ]
 
     def handle_input(self, key: int) -> ZViewState | None:
         match key:

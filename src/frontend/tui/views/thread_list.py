@@ -5,7 +5,14 @@
 import curses
 
 from backend.base import ThreadInfo, ThreadRuntime
-from frontend.tui.views.base import Any, BaseStateView, SpecialCode, ZViewState, ZViewTUIAttributes
+from frontend.tui.views.base import (
+    Any,
+    BaseStateView,
+    Keybind,
+    SpecialCode,
+    ZViewState,
+    ZViewTUIAttributes,
+)
 from frontend.tui.widgets import TUIThreadInfo
 
 
@@ -54,13 +61,7 @@ class ThreadListView(BaseStateView):
 
         stdscr.erase()
 
-        self._render_frame(
-            stdscr,
-            "Quit: q | Sort: s | Invert: i | Refresh: r | Details: <Enter> "
-            + ("| Heaps: h " if self.controller.scraper.has_heaps else ""),
-            height,
-            width,
-        )
+        self._render_frame(stdscr, self._footer_hint(), height, width)
 
         max_table_rows = height - 6
         total_threads = len(self.controller.threads_data)
@@ -169,6 +170,17 @@ class ThreadListView(BaseStateView):
 
         stdscr.refresh()
 
+    def keybindings(self) -> list[Keybind]:
+        bindings = [
+            Keybind("<Enter>", "Detail", "Open detail view for the selected thread"),
+            Keybind("r", "Refresh", "Re-walk the kernel thread list and resync baselines"),
+            Keybind("s", "Sort", "Cycle through sort keys"),
+            Keybind("i", "Invert", "Reverse the current sort order"),
+        ]
+        if self.controller.scraper.has_heaps:
+            bindings.insert(1, Keybind("h", "Heaps", "Switch to the heaps view"))
+        return bindings
+
     def handle_input(self, key: int) -> ZViewState | None:
         match key:
             case curses.KEY_DOWN:
@@ -194,14 +206,13 @@ class ThreadListView(BaseStateView):
             case SpecialCode.INVERSE:
                 self._invert_sorting = not self._invert_sorting
 
-            case SpecialCode.RECONNECT:
+            case SpecialCode.REFRESH:
                 if not self.controller.scraper._m_scraper.is_live:
                     self.controller.status_message = "Refresh is not available in replay mode."
                     return None
 
                 self.controller.status_message = "Refreshing thread list..."
 
-                # Force the scraper to re-read the kernel's thread linked-list
                 try:
                     self.controller.scraper.update_available_threads()
                     self.controller.scraper.reset_thread_pool()
@@ -210,7 +221,7 @@ class ThreadListView(BaseStateView):
                 except Exception as e:
                     self.controller.status_message = f"Error refreshing threads: {e}"
 
-                return None  # Stay in the list view
+                return None
 
             case SpecialCode.HEAPS:
                 if not self.controller.scraper.has_heaps:
