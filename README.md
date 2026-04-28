@@ -135,9 +135,12 @@ west zview -e build/zephyr/zephyr.elf -r gdb -t localhost:1234
 
 ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default view:
 
+* **?**: Open the contextual help overlay listing every binding active in the current view.
 * **ENTER**: Get details for a specific thread/heap (hit ENTER again to return).
 * **S / I**: Sort the data and invert the sorting order.
 * **H**: Access the **Heap Runtime** visualization (hit H again to return).
+* **r**: Soft refresh — re-walks the kernel thread list and clears runtime baselines.
+* **R**: Full reconnect — tears down the polling thread, disconnects the probe, reconnects, and resumes.
 
 [![TUI navigation](https://github.com/wkhadgar/zview/raw/main/docs/assets/default_view_1.png)](https://github.com/wkhadgar/zview/blob/main/docs/assets/default_view_1.png)
 
