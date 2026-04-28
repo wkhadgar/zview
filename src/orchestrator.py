@@ -22,7 +22,15 @@ from kernel.threads import walk_thread_list
 logger = logging.getLogger("zview.scraper")
 
 
+class _BrokenFrame(Exception):
+    """Raised when a poll cycle observes a counter regression."""
+
+
 class ZScraper:
+    last_cpu_cycles: int | None
+    last_cpu_delta: int
+    last_thread_cycles: dict[int, int]
+
     def __init__(
         self,
         meta_scraper: AbstractScraper,
@@ -50,11 +58,10 @@ class ZScraper:
         self._layout = self._resolve_layout()
         self._resolve_addresses()
 
-        if self.has_usage:
-            self._baseline_cpu_cycles()
-
         if self.has_heaps:
             self._discover_heap_addresses()
+
+        self.reset_runtime_state()
 
     def _resolve_layout(self) -> KernelLayout:
         """Resolve DWARF-derived offsets. Sets ``has_*`` flags for missing features."""
@@ -125,15 +132,6 @@ class ZScraper:
         if self.has_usage:
             self._cpu_usage_address = self._kernel_base_address + self._layout.cpu_usage
 
-    def _baseline_cpu_cycles(self) -> None:
-        """Read and store the initial CPU cycle counter."""
-        self._m_scraper.begin_batch()
-        self.init_cpu_cycles = self._m_scraper.read64(self._cpu_usage_address)[0]
-        self._m_scraper.end_batch()
-        self.last_cpu_delta = self.init_cpu_cycles
-        self.last_cpu_cycles = self.init_cpu_cycles
-        self.last_thread_cycles: dict = {}
-
     def _discover_heap_addresses(self) -> None:
         """Populate ``_k_heap_addresses`` from ``k_heap`` globals; clears ``has_heaps`` if none."""
         elf = self._elf_inspector
@@ -197,21 +195,12 @@ class ZScraper:
     def reset_thread_pool(self):
         self.thread_pool = list(self.all_threads.values())
 
-    def reset_runtime_state(self):
-        """Clear watermark and CPU-cycle caches, then re-read the initial cycle counter."""
+    def reset_runtime_state(self) -> None:
+        """Clear watermark/cycle caches; baselines are re-seeded by the next poll."""
         self._m_scraper.watermark_cache.clear()
-
-        if not self.has_usage:
-            return
-
-        self.last_thread_cycles.clear()
-        self._m_scraper.begin_batch()
-        try:
-            self.init_cpu_cycles = self._m_scraper.read64(self._cpu_usage_address)[0]
-        finally:
-            self._m_scraper.end_batch()
-        self.last_cpu_cycles = self.init_cpu_cycles
-        self.last_cpu_delta = self.init_cpu_cycles
+        self.last_cpu_cycles = None
+        self.last_cpu_delta = 0
+        self.last_thread_cycles = {}
 
     def start_polling_thread(
         self,
@@ -283,6 +272,9 @@ class ZScraper:
             except ReplayComplete as e:
                 data_queue.put({"replay_complete": str(e)})
                 break
+            except _BrokenFrame as e:
+                logger.warning("Broken frame captured (%s); resyncing baselines.", e)
+                self.reset_runtime_state()
             except Exception as e:
                 consecutive_errors += 1
                 if consecutive_errors >= self._MAX_TOLERATED_ERRORS:
@@ -317,13 +309,16 @@ class ZScraper:
         except Exception as e:
             raise RuntimeError(f"Error reading global CPU cycles: {e}") from e
 
+        if self.last_cpu_cycles is None:
+            self.last_cpu_cycles = current
+            return 0
+
         delta = current - self.last_cpu_cycles
         self.last_cpu_cycles = current
-        if delta > 0:
-            self.last_cpu_delta = delta
-            return delta
-        # current_cpu_cycles wrapped or reset; keep last positive delta.
-        return self.last_cpu_delta
+        if delta < 0:
+            raise _BrokenFrame("global CPU cycle counter regressed")
+        self.last_cpu_delta = delta
+        return delta
 
     def _poll_threads(self, cpu_cycles_delta: int) -> tuple[list[dict], int]:
         """Read per-thread usage + watermark. Returns (raw_data, adjusted_cpu_cycles_delta)."""
@@ -340,13 +335,19 @@ class ZScraper:
                 except Exception as e:
                     raise RuntimeError(f"Error polling thread usage {thread.name}: {e}") from e
 
-                usage_delta = thread_usage - self.last_thread_cycles.get(thread.address, 0)
+                prev = self.last_thread_cycles.get(thread.address)
                 self.last_thread_cycles[thread.address] = thread_usage
 
-                if thread.address == self.idle_threads_address:
-                    cpu_cycles_delta += usage_delta
-
-                is_active = usage_delta > 0
+                if prev is None:
+                    usage_delta = 0
+                    is_active = False
+                else:
+                    usage_delta = thread_usage - prev
+                    if usage_delta < 0:
+                        raise _BrokenFrame(f"thread {thread.name} usage counter regressed")
+                    if thread.address == self.idle_threads_address:
+                        cpu_cycles_delta += usage_delta
+                    is_active = usage_delta > 0
             else:
                 usage_delta = 0
                 is_active = False
