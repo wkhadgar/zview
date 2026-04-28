@@ -7,7 +7,37 @@ import curses
 import enum
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NamedTuple
+
+
+class Keybind(NamedTuple):
+    """One keybinding entry; ``label`` is footer-sized, ``help_text`` is overlay-sized."""
+
+    key: str
+    label: str
+    help_text: str
+
+
+def compute_flex_widths(
+    schema_widths: list[int],
+    terminal_width: int,
+    items: list,
+    name_idx: int = 0,
+    bar_idx: int = 3,
+) -> list[int]:
+    """Schema widths are floor; extra goes to name (only as needed) then bar."""
+    base = list(schema_widths)
+    floor = sum(base) + len(base) - 1
+    # Reserve one terminal column (curses errors when the cursor advances off-screen).
+    extra = terminal_width - floor - 1
+    if extra <= 0:
+        return base
+    max_name = max((len(item.name) for item in items), default=0)
+    name_grow = min(extra, max(0, max_name - base[name_idx]))
+    base[name_idx] += name_grow
+    extra -= name_grow
+    base[bar_idx] += extra
+    return base
 
 
 @dataclass
@@ -36,7 +66,9 @@ class SpecialCode:
     SORT = ord("s")
     INVERSE = ord("i")
     HEAPS = ord("h")
-    RECONNECT = ord("r")
+    REFRESH = ord("r")
+    RECONNECT = ord("R")
+    HELP = ord("?")
 
 
 class ZViewState(enum.Enum):
@@ -48,6 +80,8 @@ class ZViewState(enum.Enum):
 
 
 class BaseStateView:
+    _MAX_FOOTER_HINTS = 3
+
     def __init__(self, controller: Any, theme: ZViewTUIAttributes):
         """
         The controller reference allows the view to access global state
@@ -95,21 +129,25 @@ class BaseStateView:
             # position, wich is outside the terminal, we safely ignore this.
             stdscr.addstr(footer_row, 0, f"{footer_hint:>{width}}", self._frame_attr)
 
+    def keybindings(self) -> list[Keybind]:
+        """View-specific bindings, ordered most-important first."""
+        return []
+
+    def _footer_hint(self) -> str:
+        """View bindings (up to ``_MAX_FOOTER_HINTS``, ``...`` if truncated) + ``Help: ?``."""
+        bindings = self.keybindings()
+        parts = [f"{b.label}: {b.key}" for b in bindings[: self._MAX_FOOTER_HINTS]]
+        if len(bindings) > self._MAX_FOOTER_HINTS:
+            parts.append("…")
+        parts.insert(0, "Help: ?")
+        return " | ".join(parts) + " "
+
     @abstractmethod
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
-        """
-        Draw the state to the provided curses window.
-        Must be implemented by all subclasses.
-        """
+        """Draw the state to the provided curses window."""
         pass
 
     @abstractmethod
     def handle_input(self, key: int) -> ZViewState | None:
-        """
-        Process navigation and state-specific inputs.
-
-        Returns:
-            A state enum (e.g., ZViewState.THREAD_DETAIL) to request a
-            context switch from the Router, or None if the state remains unchanged.
-        """
+        """Process navigation and state-specific inputs; returns a target state or ``None``."""
         pass

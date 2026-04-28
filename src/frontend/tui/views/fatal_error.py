@@ -14,7 +14,7 @@ class FatalErrorView(BaseStateView):
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()
 
-        self._render_frame(stdscr, "Quit: q | Reconnect: r ", height, width)
+        self._render_frame(stdscr, self._footer_hint(), height, width)
 
         stdscr.attron(self._error_attr)
         msg_lines = self.controller.status_message.split('\n')
@@ -32,8 +32,5 @@ class FatalErrorView(BaseStateView):
     def handle_input(self, key: int) -> ZViewState | None:
         if key == SpecialCode.QUIT:
             self.controller.running = False
-
-        elif key == SpecialCode.RECONNECT:
-            self.controller.attempt_reconnect()
 
         return None

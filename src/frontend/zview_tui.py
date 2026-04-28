@@ -9,13 +9,26 @@ import threading
 import time
 
 from backend.base import HeapInfo, ThreadInfo
-from frontend.tui.views.base import BaseStateView, ZViewState, ZViewTUIAttributes
+from frontend.tui.views.base import (
+    BaseStateView,
+    Keybind,
+    SpecialCode,
+    ZViewState,
+    ZViewTUIAttributes,
+)
 from frontend.tui.views.fatal_error import FatalErrorView
 from frontend.tui.views.heap_detail import HeapDetailView
 from frontend.tui.views.heap_list import HeapListView
 from frontend.tui.views.thread_detail import ThreadDetailView
 from frontend.tui.views.thread_list import ThreadListView
+from frontend.tui.widgets import TUITooltip
 from orchestrator import ZScraper
+
+_GLOBAL_KEYBINDINGS: list[Keybind] = [
+    Keybind("?", "Help", "Toggle this help overlay"),
+    Keybind("R", "Reconnect", "Disconnect probe and reattach (full cycle)"),
+    Keybind("q", "Quit", "Exit ZView"),
+]
 
 
 class ZView:
@@ -33,7 +46,7 @@ class ZView:
         Args:
             stdscr: The main curses window object provided by curses.wrapper.
         """
-        self.min_dimensions = (14, 86)
+        self.min_dimensions = (14, 85)
         self.stdscr: curses.window = stdscr
         self.scraper: ZScraper = scraper
         self.running = True
@@ -49,8 +62,10 @@ class ZView:
         self.detailing_thread: str | None = None
         self.detailing_heap_address: int | None = None
         self.idle_thread: ThreadInfo | None = None
+        self._help_open: bool = False
 
         theme = self._init_curses()
+        self._theme = theme
 
         self.views: dict[ZViewState, BaseStateView] = {
             ZViewState.FATAL_ERROR: FatalErrorView(self, theme),
@@ -159,6 +174,17 @@ class ZView:
 
         self.views[self.state].render(self.stdscr, height, width)
 
+        if self._help_open:
+            sections: list[tuple[str, list[tuple[str, str]]]] = [
+                ("Global", [(b.key, b.help_text) for b in _GLOBAL_KEYBINDINGS]),
+            ]
+            view_bindings = self.views[self.state].keybindings()
+            if view_bindings:
+                sections.append(
+                    ("This view", [(b.key, b.help_text) for b in view_bindings]),
+                )
+            TUITooltip(sections, self._theme.HEADER_FOOTER).draw(self.stdscr, height, width)
+
     def transition_to(self, new_state: ZViewState):
         """Centralized state transition and data pipeline management."""
         if new_state not in self.views:
@@ -216,6 +242,19 @@ class ZView:
     def process_events(self):
         key = self.stdscr.getch()
         if key == -1:
+            return
+
+        if self._help_open:
+            self._help_open = False
+            self.stdscr.clear()
+            return
+
+        if key == SpecialCode.HELP:
+            self._help_open = True
+            return
+
+        if key == SpecialCode.RECONNECT:
+            self.attempt_reconnect()
             return
 
         new_state = self.views[self.state].handle_input(key)

@@ -2,13 +2,39 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import curses
 
 from backend.base import HeapInfo, ThreadInfo, ThreadRuntime
 
 
 def _truncate_str(text: str, max_size: int) -> str:
-    return text if len(text) < max_size else text[: max_size - 3] + "..."
+    return text if len(text) <= max_size else text[: max_size - 3] + "..."
+
+
+def _fit_str(text: str, width: int, align: str = "^") -> str:
+    """Pad ``text`` to ``width`` (``align`` ∈ ``^<>``), then hard-clip to ``width``."""
+    return f"{text:{align}{width}}"[:width]
+
+
+def _addstr_clipped(
+    stdscr: curses.window,
+    y: int,
+    x: int,
+    text: str,
+    screen_w: int,
+    attr: int | None = None,
+) -> None:
+    """``addstr`` that hard-clips to ``screen_w - x`` so writes never wrap."""
+    available = screen_w - x
+    if available <= 0:
+        return
+    text = text[:available]
+    with contextlib.suppress(curses.error):
+        if attr is None:
+            stdscr.addstr(y, x, text)
+        else:
+            stdscr.addstr(y, x, text, attr)
 
 
 class TUIProgressBar:
@@ -19,8 +45,8 @@ class TUIProgressBar:
         medium_threshold: tuple[float, int],
         high_threshold: tuple[float, int],
     ):
-        self.width = width
-        self._bar_width = self.width - 2
+        self._width = width
+        self._bar_width = width - 2
 
         self._low_threshold_attr: int = std_attribute
 
@@ -29,6 +55,15 @@ class TUIProgressBar:
 
         self._high_threshold: float = high_threshold[0]
         self._high_threshold_attr: int = high_threshold[1]
+
+    @property
+    def width(self) -> int:
+        return self._width
+
+    @width.setter
+    def width(self, new: int) -> None:
+        self._width = new
+        self._bar_width = new - 2
 
     def draw(
         self,
@@ -102,6 +137,68 @@ class TUIBox:
         stdscr.addstr(y + height - 1, x, bottom_str)
 
         stdscr.attroff(self._attr)
+
+
+class TUITooltip:
+    """Centered, filled, bordered popup listing keybinding sections."""
+
+    _BORDER_THICKNESS = 2  # top + bottom
+    _PADDING_ROWS = 2  # blank row above + below content
+    _PADDING_COLS = 4  # left + right inner padding (2 each side)
+    _KEY_DESC_GAP = 2  # spaces between key column and description column
+    _MIN_BOX_WIDTH = 30
+
+    def __init__(self, sections: list[tuple[str, list[tuple[str, str]]]], attr: int):
+        """``sections`` is ``[(section_title, [(key, description), ...]), ...]``."""
+        self._sections = sections
+        self._attr = attr
+
+    def _build_rows(self) -> list[tuple[str, str] | None]:
+        """Layout rows; ``None`` is a blank separator between sections."""
+        rows: list[tuple[str, str] | None] = []
+        for idx, (title, bindings) in enumerate(self._sections):
+            if idx > 0:
+                rows.append(None)
+            rows.append((title, ""))
+            rows.extend((f"  {key}", desc) for key, desc in bindings)
+        return rows
+
+    def draw(self, stdscr: curses.window, height: int, width: int) -> None:
+        rows = self._build_rows()
+        visible = [r for r in rows if r is not None]
+        key_w = max((len(k) for k, _ in visible), default=0)
+        desc_w = max((len(d) for _, d in visible), default=0)
+
+        inner_w = key_w + self._KEY_DESC_GAP + desc_w
+        box_w = max(inner_w + self._PADDING_COLS, self._MIN_BOX_WIDTH)
+        box_h = len(rows) + self._BORDER_THICKNESS + self._PADDING_ROWS
+
+        if box_h > height or box_w > width:
+            return
+
+        y0 = (height - box_h) // 2
+        x0 = (width - box_w) // 2
+
+        blank = " " * box_w
+        for row_offset in range(box_h):
+            with contextlib.suppress(curses.error):
+                stdscr.addstr(y0 + row_offset, x0, blank, self._attr)
+
+        TUIBox(" Help ", " Press any key to dismiss ", self._attr).draw(
+            stdscr, y0, x0, box_h, box_w
+        )
+
+        for i, row in enumerate(rows):
+            line_y = y0 + 2 + i
+            if row is None:
+                continue
+            key, desc = row
+            with contextlib.suppress(curses.error):
+                if not desc:
+                    stdscr.addstr(line_y, x0 + 2, key, self._attr | curses.A_BOLD)
+                else:
+                    stdscr.addstr(line_y, x0 + 2, key.ljust(key_w), self._attr)
+                    stdscr.addstr(line_y, x0 + 2 + key_w + self._KEY_DESC_GAP, desc, self._attr)
 
 
 class TUIGraph(TUIBox):
@@ -214,6 +311,7 @@ class TUIThreadInfo:
         self, stdscr: curses.window, y: int, x: int, thread_info: ThreadInfo, selected: bool = False
     ):
         col_pos = x
+        _, screen_w = stdscr.getmaxyx()
 
         runtime = thread_info.runtime or ThreadRuntime(
             cpu=-1.0,
@@ -229,25 +327,30 @@ class TUIThreadInfo:
             if selected
             else (self._active_attribute if runtime.active else self._inactive_attribute)
         )
-        stdscr.addstr(
-            y, col_pos, _truncate_str(thread_info.name, self._thread_name_width), thread_name_attr
+        _addstr_clipped(
+            stdscr,
+            y,
+            col_pos,
+            _truncate_str(thread_info.name, self._thread_name_width),
+            screen_w,
+            thread_name_attr,
         )
         col_pos += self._thread_name_width + 1
 
         # Thread CPUs
         if runtime.cpu >= 0:
-            cpu_display = f"{runtime.cpu_normalized:.2f}%".center(self._cpu_usage_width)
+            cpu_display = _fit_str(f"{runtime.cpu_normalized:.2f}%", self._cpu_usage_width)
         else:
-            cpu_display = f"{'-':^{self._cpu_usage_width}}"
-        stdscr.addstr(y, col_pos, cpu_display)
+            cpu_display = _fit_str("-", self._cpu_usage_width)
+        _addstr_clipped(stdscr, y, col_pos, cpu_display, screen_w)
         col_pos += self._cpu_usage_width + 1
 
         # Thread Loads
         if runtime.cpu >= 0:
-            load_display = f"{runtime.cpu:.1f}%".center(self._load_usage_width)
+            load_display = _fit_str(f"{runtime.cpu:.1f}%", self._load_usage_width)
         else:
-            load_display = f"{'-':^{self._load_usage_width}}"
-        stdscr.addstr(y, col_pos, load_display)
+            load_display = _fit_str("-", self._load_usage_width)
+        _addstr_clipped(stdscr, y, col_pos, load_display, screen_w)
         col_pos += self._load_usage_width + 1
 
         # Thread Watermark Progress Bar
@@ -255,10 +358,10 @@ class TUIThreadInfo:
         col_pos += self.watermark_bar.width + 1
 
         # Thread Watermark Bytes
-        watermark_bytes_display = f"{runtime.stack_watermark} / {thread_info.stack_size}".center(
-            self._stack_bytes_width
+        watermark_bytes_display = _fit_str(
+            f"{runtime.stack_watermark} / {thread_info.stack_size}", self._stack_bytes_width
         )
-        stdscr.addstr(y, col_pos, watermark_bytes_display)
+        _addstr_clipped(stdscr, y, col_pos, watermark_bytes_display, screen_w)
 
 
 class TUIHeapInfo:
@@ -298,21 +401,24 @@ class TUIHeapInfo:
         self, stdscr: curses.window, y: int, x: int, heap_info: HeapInfo, selected: bool = False
     ):
         col_pos = x
+        _, screen_w = stdscr.getmaxyx()
 
         # Heap name
         heap_name_display = _truncate_str(heap_info.name, self._heap_name_width)
         heap_name_attr = self._selected_attribute if selected else self._default_attribute
-        stdscr.addstr(y, col_pos, heap_name_display, heap_name_attr)
+        _addstr_clipped(stdscr, y, col_pos, heap_name_display, screen_w, heap_name_attr)
         col_pos += self._heap_name_width + 1
 
         # Free bytes
-        free_bytes_display = f"{heap_info.free_bytes:^{self._free_bytes_width}}"
-        stdscr.addstr(y, col_pos, free_bytes_display)
+        free_bytes_display = _fit_str(str(heap_info.free_bytes), self._free_bytes_width)
+        _addstr_clipped(stdscr, y, col_pos, free_bytes_display, screen_w)
         col_pos += self._free_bytes_width + 1
 
         # Allocated bytes
-        allocated_bytes_display = f"{heap_info.allocated_bytes:^{self._allocated_bytes_width}}"
-        stdscr.addstr(y, col_pos, allocated_bytes_display)
+        allocated_bytes_display = _fit_str(
+            str(heap_info.allocated_bytes), self._allocated_bytes_width
+        )
+        _addstr_clipped(stdscr, y, col_pos, allocated_bytes_display, screen_w)
         col_pos += self._allocated_bytes_width + 1
 
         # Heap Usage Progress Bar
@@ -321,7 +427,8 @@ class TUIHeapInfo:
         col_pos += self.usage_bar.width + 1
 
         # Heap Watermark Bytes
-        watermark_bytes_display = f"{heap_info.max_allocated_bytes} / {heap_size}".ljust(
-            self._watermark_width
+        watermark_bytes_display = _fit_str(
+            f"{heap_info.max_allocated_bytes} / {heap_size}",
+            self._watermark_width,
         )
-        stdscr.addstr(y, col_pos, watermark_bytes_display)
+        _addstr_clipped(stdscr, y, col_pos, watermark_bytes_display, screen_w)

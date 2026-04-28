@@ -262,46 +262,65 @@ def test_queue_full_is_not_counted_as_strike(elf_path):
     assert q.empty()
 
 
-def test_reset_runtime_state_clears_caches_and_rebaselines(elf_path):
-    """Clears ``watermark_cache``/``last_thread_cycles``; re-reads ``init_cpu_cycles``."""
+def test_reset_runtime_state_clears_caches_and_invalidates_baseline(elf_path):
+    """Clears watermark/cycle caches and marks the CPU baseline invalid."""
     scraper = ZScraper.__new__(ZScraper)
     mock = MagicMock()
     mock.watermark_cache = {0x1000: 100, 0x2000: 200}
     scraper._m_scraper = mock
     scraper.has_usage = True
     scraper.last_thread_cycles = {0x1000: 50, 0x2000: 75}
-    scraper._cpu_usage_address = 0x7000
-    scraper.init_cpu_cycles = 1
-    scraper.last_cpu_cycles = 1
-    scraper.last_cpu_delta = 1
-    mock.read64.return_value = [42]
+    scraper.last_cpu_cycles = 1234
+    scraper.last_cpu_delta = 1234
 
     scraper.reset_runtime_state()
 
     assert mock.watermark_cache == {}
     assert scraper.last_thread_cycles == {}
-    assert scraper.init_cpu_cycles == 42
-    assert scraper.last_cpu_cycles == 42
-    assert scraper.last_cpu_delta == 42
-    mock.begin_batch.assert_called_once()
-    mock.end_batch.assert_called_once()
-    mock.read64.assert_called_once_with(0x7000)
-
-
-def test_reset_runtime_state_without_usage_only_clears_watermark(elf_path):
-    """``has_usage=False``: ``reset_runtime_state`` clears watermark only and exits early."""
-    scraper = ZScraper.__new__(ZScraper)
-    mock = MagicMock()
-    mock.watermark_cache = {0x1000: 100}
-    scraper._m_scraper = mock
-    scraper.has_usage = False
-
-    scraper.reset_runtime_state()
-
-    assert mock.watermark_cache == {}
-    mock.begin_batch.assert_not_called()
-    mock.end_batch.assert_not_called()
+    assert scraper.last_cpu_cycles is None
+    assert scraper.last_cpu_delta == 0
     mock.read64.assert_not_called()
+
+
+def test_broken_frame_resyncs_and_skips_emission(elf_path):
+    """Counter regression triggers resync; no frame is emitted, no error counted."""
+    mock_meta_scraper = MagicMock()
+    mock_meta_scraper.is_connected = True
+    mock_meta_scraper.watermark_cache = {0x1000: 100}
+
+    scraper = ZScraper(mock_meta_scraper, elf_path=elf_path, max_threads=2)
+    scraper.has_heaps = False
+    scraper.has_usage = True
+    scraper.idle_threads_address = 0x2000
+    scraper._cpu_usage_address = 0x1000
+    scraper.thread_pool = [
+        ThreadInfo(address=0x1000, stack_start=0x0, stack_size=1000, name="main", runtime=None),
+    ]
+
+    # Seed a stale baseline; current read goes backwards -> _BrokenFrame.
+    scraper.last_cpu_cycles = 5_000
+    scraper.last_thread_cycles = {0x1000: 1_000}
+    mock_meta_scraper.read32.return_value = [100]
+    mock_meta_scraper.read64.return_value = [0]
+
+    q: queue.Queue = queue.Queue()
+    stop_event = threading.Event()
+    iters = [0]
+
+    def fake_sleep(_):
+        iters[0] += 1
+        if iters[0] >= 1:
+            stop_event.set()
+
+    with patch("time.sleep", side_effect=fake_sleep):
+        scraper._poll_thread_worker(q, stop_event, 0)
+
+    # Nothing was emitted (no frame, no error, no fatal_error).
+    assert q.empty()
+    # State was wiped: next poll will re-baseline cleanly.
+    assert scraper.last_cpu_cycles is None
+    assert scraper.last_thread_cycles == {}
+    assert mock_meta_scraper.watermark_cache == {}
 
 
 def _make_gdb_with_mock_sock() -> GDBScraper:

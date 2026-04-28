@@ -5,17 +5,25 @@
 import curses
 
 from backend.base import ThreadInfo, ThreadRuntime
-from frontend.tui.views.base import Any, BaseStateView, SpecialCode, ZViewState, ZViewTUIAttributes
+from frontend.tui.views.base import (
+    Any,
+    BaseStateView,
+    Keybind,
+    SpecialCode,
+    ZViewState,
+    ZViewTUIAttributes,
+    compute_flex_widths,
+)
 from frontend.tui.widgets import TUIThreadInfo
 
 
 class ThreadListView(BaseStateView):
     SCHEMA: dict[str, int] = {
-        "Thread": 30,
-        "CPU %": 8,
-        "Load %": 8,
-        "Stack Usage % (Watermark)": 32,
-        "Watermark Bytes": 18,
+        "Thread": 25,
+        "CPU %": 7,
+        "Load %": 7,
+        "Stack Usage % (Watermark)": 27,
+        "Watermark Bytes": 14,
     }
     COLLUMS: list[str] = list(SCHEMA.keys())
     COLLUM_WIDTHS: list[int] = list(SCHEMA.values())
@@ -47,6 +55,11 @@ class ThreadListView(BaseStateView):
             self.COLLUM_WIDTHS[4],
         )
 
+    def _compute_widths(self, terminal_width: int) -> list[int]:
+        return compute_flex_widths(
+            list(self.SCHEMA.values()), terminal_width, self.controller.threads_data
+        )
+
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         """
         Draws the thread data table and its general informations.
@@ -54,19 +67,16 @@ class ThreadListView(BaseStateView):
 
         stdscr.erase()
 
-        self._render_frame(
-            stdscr,
-            "Quit: q | Sort: s | Invert: i | Refresh: r | Details: <Enter> "
-            + ("| Heaps: h " if self.controller.scraper.has_heaps else ""),
-            height,
-            width,
-        )
+        self._render_frame(stdscr, self._footer_hint(), height, width)
+
+        widths = self._compute_widths(width)
+        self._tui_thread_info.set_field_widths(*widths)
 
         max_table_rows = height - 6
         total_threads = len(self.controller.threads_data)
         start_num = self.top_line + 1 if total_threads > 0 else 0
         end_num = min(self.top_line + max_table_rows, total_threads)
-        thread_column_width = self.COLLUM_WIDTHS[0]
+        thread_column_width = widths[0]
 
         self.cursor = max(min(total_threads - 1, self.cursor), 0)
         if self.cursor >= self.top_line + max_table_rows:
@@ -78,7 +88,7 @@ class ThreadListView(BaseStateView):
         sorting_header = self.COLLUMS[self._current_sort_idx]
 
         curr_x = 0
-        for col_header, h_width in self.SCHEMA.items():
+        for col_header, h_width in zip(self.SCHEMA.keys(), widths, strict=True):
             if curr_x >= width:
                 break
 
@@ -169,6 +179,17 @@ class ThreadListView(BaseStateView):
 
         stdscr.refresh()
 
+    def keybindings(self) -> list[Keybind]:
+        bindings = [
+            Keybind("<Enter>", "Detail", "Open detail view for the selected thread"),
+            Keybind("r", "Refresh", "Re-walk the kernel thread list and resync baselines"),
+            Keybind("s", "Sort", "Cycle through sort keys"),
+            Keybind("i", "Invert", "Reverse the current sort order"),
+        ]
+        if self.controller.scraper.has_heaps:
+            bindings.insert(1, Keybind("h", "Heaps", "Switch to the heaps view"))
+        return bindings
+
     def handle_input(self, key: int) -> ZViewState | None:
         match key:
             case curses.KEY_DOWN:
@@ -194,14 +215,13 @@ class ThreadListView(BaseStateView):
             case SpecialCode.INVERSE:
                 self._invert_sorting = not self._invert_sorting
 
-            case SpecialCode.RECONNECT:
+            case SpecialCode.REFRESH:
                 if not self.controller.scraper._m_scraper.is_live:
                     self.controller.status_message = "Refresh is not available in replay mode."
                     return None
 
                 self.controller.status_message = "Refreshing thread list..."
 
-                # Force the scraper to re-read the kernel's thread linked-list
                 try:
                     self.controller.scraper.update_available_threads()
                     self.controller.scraper.reset_thread_pool()
@@ -210,7 +230,7 @@ class ThreadListView(BaseStateView):
                 except Exception as e:
                     self.controller.status_message = f"Error refreshing threads: {e}"
 
-                return None  # Stay in the list view
+                return None
 
             case SpecialCode.HEAPS:
                 if not self.controller.scraper.has_heaps:
