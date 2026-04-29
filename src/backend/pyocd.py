@@ -70,4 +70,4 @@ class PyOCDScraper(AbstractScraper):
             raise ProbeReadFailure("No target available.")
 
         raw_bytes = bytes(self.target.read_memory_block8(at, amount * 8))
-        return struct.unpack(f'{self.endianess}{amount}Q', raw_bytes)
+        return struct.unpack(f"{self.endianess}{amount}Q", raw_bytes)

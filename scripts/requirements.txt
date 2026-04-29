@@ -1,4 +1,4 @@
-PyYAML
-pyelftools
-pyocd
-pylink-square
+PyYAML>=6.0.3
+pyelftools>=0.32
+pyocd>=0.38.0
+pylink-square>=1.7.0
