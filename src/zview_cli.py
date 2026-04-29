@@ -72,7 +72,7 @@ def register_commands(
     """
     Add the live/record/replay/dump subparsers to ``sub``.
     Flag names listed in ``auto_filled`` ({"elf", "target"}) are declared
-    non-required. ``subcommand_epilogs`` maps command name → epilog text.
+    non-required. ``subcommand_epilogs`` maps command name -> epilog text.
     """
     epilogs = subcommand_epilogs or {}
     elf_required = "elf" not in auto_filled

@@ -91,7 +91,7 @@ def test_thread_shape(replay_run):
 
 
 def test_heap_shape(replay_run):
-    """Emitted heaps report non-negative sizes; max ≥ allocated."""
+    """Emitted heaps report non-negative sizes; max >= allocated."""
     frames, _ = replay_run
     last = _last_valid_frame(frames)
     heaps: list[HeapInfo] = last.get("heaps", [])

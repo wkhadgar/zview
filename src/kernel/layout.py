@@ -22,7 +22,13 @@ class KernelLayout:
 
     # Optional: per-thread CPU usage (CONFIG_THREAD_RUNTIME_STATS)
     cpu_usage: int | None = None  # z_kernel.usage
-    thread_usage: int | None = None  # k_thread → k_cycle_stats.total
+    thread_usage: int | None = None  # k_thread -> k_cycle_stats.total
+
+    # Optional: thread metadata mirroring `kernel threads list` shell output.
+    thread_priority: int | None = None  # k_thread.base.prio (signed 8-bit)
+    thread_state: int | None = None  # k_thread.base.thread_state (8-bit bitfield)
+    thread_user_options: int | None = None  # k_thread.base.user_options
+    thread_entry: int | None = None  # k_thread.entry.pEntry (function pointer)
 
     # Optional: heap stats (CONFIG_SYS_HEAP_RUNTIME_STATS)
     heap_free_bytes: int | None = None

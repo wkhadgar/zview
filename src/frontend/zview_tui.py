@@ -268,7 +268,7 @@ class ZView:
             return
 
         if data.get("replay_complete"):
-            self.status_message = "Recording ended — replay complete."
+            self.status_message = "Recording ended; replay complete."
             return
 
         if data.get("error"):

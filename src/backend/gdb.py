@@ -124,8 +124,8 @@ class GDBScraper(AbstractScraper):
         """
         Receive one RSP response packet and return its payload.
 
-        Strips leading ``+`` ack bytes and the ``$…#cc`` framing. Raises
-        ``socket.timeout`` on receive deadline — callers that treat a missing
+        Strips leading ``+`` ack bytes and the ``$...#cc`` framing. Raises
+        ``socket.timeout`` on receive deadline; callers that treat a missing
         reply as non-fatal should catch it explicitly.
         """
         if self.sock is None:

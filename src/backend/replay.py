@@ -27,7 +27,7 @@ class ReplayExhausted(ReplayError):
 
 
 class ReplayComplete(ReplayError):
-    """Caller attempted a new frame past the trailing disconnect — the recording ended cleanly."""
+    """Caller attempted a new frame past the trailing disconnect: the recording ended cleanly."""
 
 
 class UnsupportedSchema(ReplayError):
@@ -95,7 +95,7 @@ class ReplayScraper(AbstractScraper):
         entry = self._entries[self._cursor]
 
         # A caller starting a new frame while the cursor sits on the trailing
-        # ``disconnect`` entry means the recording has been fully consumed —
+        # ``disconnect`` entry means the recording has been fully consumed:
         # that's a clean end-of-stream, not a drift.
         if op == "begin_batch" and entry["op"] == "disconnect":
             raise ReplayComplete(f"Recording ended cleanly at index {self._cursor}.")

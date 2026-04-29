@@ -231,7 +231,7 @@ def test_record_forwards_heap_flag(monkeypatch, capsys, tmp_path):
 
 
 def test_replay_no_pacing_passes_to_scraper(monkeypatch, capsys):
-    """--no-pacing → ReplayScraper(honor_timing=False)."""
+    """--no-pacing -> ReplayScraper(honor_timing=False)."""
     captured: dict = {}
     real_cls = zview_cli.ReplayScraper
 
