@@ -4,7 +4,7 @@
 
 import curses
 
-from backend.base import ThreadInfo, decode_thread_state
+from backend.base import ThreadInfo
 from frontend.tui.views.base import (
     Any,
     BaseStateView,
@@ -15,28 +15,36 @@ from frontend.tui.views.base import (
     compute_flex_widths,
 )
 from frontend.tui.views.thread_list import ThreadListView
-from frontend.tui.widgets import TUIGraph, TUIThreadInfo
+from frontend.tui.widgets import TUIBox, TUIGraph, TUIThreadInfo
 
 
-def _format_thread_meta(thread: ThreadInfo) -> str:
-    """One-line shell-style metadata: ``prio | state | options | entry``."""
-    parts: list[str] = []
-    if thread.priority is not None:
-        parts.append(f"prio: {thread.priority}")
-    state_label = decode_thread_state(thread.state)
-    if state_label is not None:
-        parts.append(f"state: {state_label}")
-    if thread.user_options is not None:
-        parts.append(f"options: 0x{thread.user_options:02x}")
-    if thread.entry_point:
-        if thread.entry_symbol:
-            parts.append(f"entry: {thread.entry_symbol} (0x{thread.entry_point:08x})")
-        else:
-            parts.append(f"entry: 0x{thread.entry_point:08x}")
-    return " | ".join(parts)
+def _format_priority(thread: ThreadInfo) -> str:
+    return str(thread.priority) if thread.priority is not None else "-"
+
+
+def _format_options(thread: ThreadInfo) -> str:
+    return f"0x{thread.user_options:02x}" if thread.user_options is not None else "-"
+
+
+def _format_entry(thread: ThreadInfo) -> str:
+    if not thread.entry_point:
+        return "-"
+    if thread.entry_symbol:
+        return f"{thread.entry_symbol} (0x{thread.entry_point:08x})"
+    return f"0x{thread.entry_point:08x}"
 
 
 class ThreadDetailView(BaseStateView):
+    _INFO_BOX_HEIGHT = 3
+
+    # ``(title, weight, formatter)``: weight is the relative horizontal share
+    # used when laying the boxes side-by-side; entry needs the most room.
+    _INFO_BOXES: tuple[tuple[str, int, Any], ...] = (
+        ("Priority", 1, _format_priority),
+        ("Options", 1, _format_options),
+        ("Entry", 3, _format_entry),
+    )
+
     def __init__(self, controller: Any, theme: ZViewTUIAttributes):
         super().__init__(controller, theme)
         self._cpu_graph: TUIGraph = TUIGraph(
@@ -45,6 +53,9 @@ class ThreadDetailView(BaseStateView):
         self._load_graph: TUIGraph = TUIGraph(
             "Load %", "Thread cycles / Non-idle cycles", (0, 100), theme.GRAPH_A
         )
+        self._info_widgets: list[TUIBox] = [
+            TUIBox(title, "", theme.GRAPH_B) for title, _, _ in self._INFO_BOXES
+        ]
 
         self._scheme: dict[str, int] = ThreadListView.SCHEMA
         bar_theme = (theme.PROGRESS_BAR_LOW, theme.PROGRESS_BAR_MEDIUM, theme.PROGRESS_BAR_HIGH)
@@ -60,6 +71,27 @@ class ThreadDetailView(BaseStateView):
         )
         self._current_thread_name: str | None = None
         self._usages: dict[str, list[int]] = {"cpu": [], "load": []}
+
+    def _draw_info_boxes(
+        self, stdscr: curses.window, y: int, width: int, thread: ThreadInfo
+    ) -> None:
+        """Lay the identity boxes side-by-side, sized by their relative weights."""
+        weights = [w for _, w, _ in self._INFO_BOXES]
+        total_weight = sum(weights)
+        x = 0
+        for idx, ((title, weight, fmt), box) in enumerate(
+            zip(self._INFO_BOXES, self._info_widgets, strict=True)
+        ):
+            del title  # unused here; widgets carry their own titles
+            # The last box takes any rounding remainder so the row ends flush at ``width``.
+            is_last = idx == len(self._INFO_BOXES) - 1
+            box_w = (width - x) if is_last else (width * weight) // total_weight
+            box.draw(stdscr, y, x, self._INFO_BOX_HEIGHT, box_w)
+            value = fmt(thread)
+            inner_w = box_w - 4  # 2 border cells + 2 padding cells
+            if inner_w > 0:
+                stdscr.addstr(y + 1, x + 2, value.ljust(inner_w)[:inner_w])
+            x += box_w
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()
@@ -96,15 +128,16 @@ class ThreadDetailView(BaseStateView):
 
         self._tui_thread_info.draw(stdscr, 2, 0, thread)
 
-        meta_line = _format_thread_meta(thread)
-        if meta_line:
-            stdscr.addstr(3, 0, meta_line[: width - 1])
+        info_top = 3
+        self._draw_info_boxes(stdscr, info_top, width, thread)
 
         self._usages["cpu"].append(int(thread.runtime.cpu_normalized))
         self._usages["load"].append(int(thread.runtime.cpu))
 
-        graph_top = 5 if meta_line else 4
-        graph_height = max(self.controller.min_dimensions[0] - 6, height - 3 - graph_top)
+        graph_top = info_top + self._INFO_BOX_HEIGHT
+        graph_height = max(
+            self.controller.min_dimensions[0] - 5 - self._INFO_BOX_HEIGHT, height - 3 - graph_top
+        )
         graph_width = width // 2
 
         if len(self._usages["load"]) > graph_width - 2:

@@ -130,7 +130,14 @@ class ZScraper:
                 out[layout_field] = base + elf.get_struct_member_offset("_thread_base", member)
         with contextlib.suppress(LookupError):
             entry = elf.get_struct_member_offset("k_thread", "entry")
-            out["thread_entry"] = entry + elf.get_struct_member_offset("_thread_entry", "pEntry")
+            # Struct name is ``__thread_entry`` in current Zephyr; some older
+            # vendor trees may have used a single underscore.
+            for entry_struct in ("__thread_entry", "_thread_entry"):
+                with contextlib.suppress(LookupError):
+                    out["thread_entry"] = entry + elf.get_struct_member_offset(
+                        entry_struct, "pEntry"
+                    )
+                    break
         return out or None
 
     def _try_resolve_heaps(self) -> dict | None:
