@@ -90,6 +90,9 @@ class ZScraper:
         else:
             self.has_heaps = False
 
+        if (extras := self._try_resolve_thread_meta()) is not None:
+            fields.update(extras)
+
         return KernelLayout(**fields)
 
     def _try_resolve_thread_name(self) -> dict | None:
@@ -109,6 +112,26 @@ class ZScraper:
         except LookupError:
             return None
         return {"cpu_usage": cpu_usage, "thread_usage": thread_usage}
+
+    def _try_resolve_thread_meta(self) -> dict | None:
+        """Resolve ``k_thread`` metadata mirroring ``kernel threads list`` shell output."""
+        elf = self._elf_inspector
+        try:
+            base = elf.get_struct_member_offset("k_thread", "base")
+        except LookupError:
+            return None
+        out: dict = {}
+        for layout_field, member in (
+            ("thread_priority", "prio"),
+            ("thread_state", "thread_state"),
+            ("thread_user_options", "user_options"),
+        ):
+            with contextlib.suppress(LookupError):
+                out[layout_field] = base + elf.get_struct_member_offset("_thread_base", member)
+        with contextlib.suppress(LookupError):
+            entry = elf.get_struct_member_offset("k_thread", "entry")
+            out["thread_entry"] = entry + elf.get_struct_member_offset("_thread_entry", "pEntry")
+        return out or None
 
     def _try_resolve_heaps(self) -> dict | None:
         elf = self._elf_inspector
@@ -365,6 +388,8 @@ class ZScraper:
                 (watermark / thread.stack_size * 100) if thread.stack_size > 0 else 0.0
             )
 
+            meta = self._read_thread_meta(thread)
+
             polled.append(
                 {
                     "info": thread,
@@ -372,10 +397,56 @@ class ZScraper:
                     "is_active": is_active,
                     "watermark": watermark,
                     "stack_usage_pct": stack_usage_pct,
+                    "meta": meta,
                 }
             )
 
         return polled, cpu_cycles_delta
+
+    def _read_thread_meta(self, thread: ThreadInfo) -> dict:
+        """Read priority/state/options/entry for a thread; missing offsets yield ``None``."""
+        meta: dict = {
+            "priority": None,
+            "state": None,
+            "user_options": None,
+            "entry_point": None,
+            "entry_symbol": None,
+        }
+        layout = self._layout
+        scraper = self._m_scraper
+        try:
+            if layout.thread_priority is not None:
+                raw = scraper.read8(thread.address + layout.thread_priority)[0]
+                meta["priority"] = raw - 256 if raw >= 0x80 else raw  # signed 8-bit
+            if layout.thread_state is not None:
+                meta["state"] = scraper.read8(thread.address + layout.thread_state)[0]
+            if layout.thread_user_options is not None:
+                meta["user_options"] = scraper.read8(thread.address + layout.thread_user_options)[0]
+            if layout.thread_entry is not None:
+                entry = scraper.read32(thread.address + layout.thread_entry)[0]
+                meta["entry_point"] = entry
+                meta["entry_symbol"] = self._resolve_entry_symbol(entry)
+        except Exception:
+            # Per-frame read fault on metadata is non-fatal: leave fields ``None``.
+            pass
+        return meta
+
+    def _resolve_entry_symbol(self, addr: int) -> str | None:
+        """Cache-backed reverse symbol lookup for a function pointer."""
+        if addr == 0:
+            return None
+        cache = getattr(self, "_entry_symbol_cache", None)
+        if cache is None:
+            self._entry_symbol_cache = cache = {}
+        if addr in cache:
+            return cache[addr]
+        # Thumb code pointers have bit 0 set; mask before lookup.
+        try:
+            sym = self._elf_inspector.get_symbol_name_at(addr & ~1)
+        except Exception:
+            sym = None
+        cache[addr] = sym
+        return sym
 
     def _finalize_threads(self, polled: list[dict], cpu_cycles_delta: int) -> list[ThreadInfo]:
         """Build ``ThreadInfo`` objects from raw polling state, computing CPU% and load%."""
@@ -405,6 +476,7 @@ class ZScraper:
                 stack_watermark=data["watermark"],
                 stack_watermark_percent=data["stack_usage_pct"],
             )
+            meta = data.get("meta") or {}
             final.append(
                 ThreadInfo(
                     address=data["info"].address,
@@ -412,6 +484,11 @@ class ZScraper:
                     stack_size=data["info"].stack_size,
                     name=data["info"].name,
                     runtime=runtime,
+                    priority=meta.get("priority"),
+                    state=meta.get("state"),
+                    user_options=meta.get("user_options"),
+                    entry_point=meta.get("entry_point"),
+                    entry_symbol=meta.get("entry_symbol"),
                 )
             )
         return final

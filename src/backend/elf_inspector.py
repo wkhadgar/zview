@@ -21,8 +21,8 @@ from typing import Literal
 from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import SymbolTableSection
 
-# HMAC key derived from the user's home directory — machine-specific,
-# makes tampered cache files detectable across machines.
+# HMAC key derived from the user's home directory: machine-specific, makes
+# tampered cache files detectable across machines.
 _CACHE_HMAC_KEY = hashlib.sha256(str(Path.home()).encode()).digest()
 _HMAC_SIZE = 32  # SHA-256 digest length in bytes
 
@@ -273,6 +273,17 @@ class ElfInspector:
         else:
             raise ValueError(f"Invalid info type: {info}")
 
+    def get_symbol_name_at(self, addr: int) -> str | None:
+        """Reverse symbol lookup. Returns the symbol whose address matches ``addr``."""
+        cache = getattr(self, "_address_to_symbol", None)
+        if cache is None:
+            cache = {}
+            for name, addrs in self._symbols_address.items():
+                for a in addrs:
+                    cache.setdefault(a, name)
+            self._address_to_symbol = cache
+        return cache.get(addr)
+
     def get_struct_member_offset(self, struct_name: str, member_name: str) -> int:
         """
         Returns the byte offset of a named member within a named struct.
@@ -302,7 +313,7 @@ class ElfInspector:
 
         The returned list is deduplicated (a symbol appearing in multiple
         compilation units is reported only once) and preserves DWARF
-        discovery order — critical for downstream consumers (ZScraper's
+        discovery order: critical for downstream consumers (ZScraper's
         polling loop, recording/replay lockstep) that depend on a stable
         iteration order across processes.
         """

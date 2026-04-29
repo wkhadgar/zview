@@ -4,6 +4,7 @@
 
 import curses
 
+from backend.base import ThreadInfo, decode_thread_state
 from frontend.tui.views.base import (
     Any,
     BaseStateView,
@@ -15,6 +16,24 @@ from frontend.tui.views.base import (
 )
 from frontend.tui.views.thread_list import ThreadListView
 from frontend.tui.widgets import TUIGraph, TUIThreadInfo
+
+
+def _format_thread_meta(thread: ThreadInfo) -> str:
+    """One-line shell-style metadata: ``prio | state | options | entry``."""
+    parts: list[str] = []
+    if thread.priority is not None:
+        parts.append(f"prio: {thread.priority}")
+    state_label = decode_thread_state(thread.state)
+    if state_label is not None:
+        parts.append(f"state: {state_label}")
+    if thread.user_options is not None:
+        parts.append(f"options: 0x{thread.user_options:02x}")
+    if thread.entry_point:
+        if thread.entry_symbol:
+            parts.append(f"entry: {thread.entry_symbol} (0x{thread.entry_point:08x})")
+        else:
+            parts.append(f"entry: 0x{thread.entry_point:08x}")
+    return " | ".join(parts)
 
 
 class ThreadDetailView(BaseStateView):
@@ -77,21 +96,24 @@ class ThreadDetailView(BaseStateView):
 
         self._tui_thread_info.draw(stdscr, 2, 0, thread)
 
+        meta_line = _format_thread_meta(thread)
+        if meta_line:
+            stdscr.addstr(3, 0, meta_line[: width - 1])
+
         self._usages["cpu"].append(int(thread.runtime.cpu_normalized))
         self._usages["load"].append(int(thread.runtime.cpu))
 
-        graph_height = max(self.controller.min_dimensions[0] - 6, height - 7)
+        graph_top = 5 if meta_line else 4
+        graph_height = max(self.controller.min_dimensions[0] - 6, height - 3 - graph_top)
         graph_width = width // 2
 
         if len(self._usages["load"]) > graph_width - 2:
             self._usages["load"].pop(0)
             self._usages["cpu"].pop(0)
 
-        y = 4
-
         self._cpu_graph.draw(
             stdscr,
-            y,
+            graph_top,
             0,
             graph_height,
             graph_width,
@@ -100,7 +122,7 @@ class ThreadDetailView(BaseStateView):
 
         self._load_graph.draw(
             stdscr,
-            y,
+            graph_top,
             graph_width,
             graph_height,
             graph_width,

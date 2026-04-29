@@ -50,6 +50,32 @@ class ThreadRuntime:
     stack_watermark_percent: float
 
 
+# Zephyr ``_THREAD_*`` state bit constants from ``include/zephyr/kernel.h``;
+# stable across versions. Decoding is "first match wins" against this priority
+# list so the most informative state is reported when bits overlap.
+_THREAD_STATE_BITS: tuple[tuple[int, str], ...] = (
+    (0x01, "dummy"),
+    (0x08, "dead"),
+    (0x20, "aborting"),
+    (0x10, "suspended"),
+    (0x02, "pending"),
+    (0x04, "prestart"),
+    (0x80, "queued"),
+)
+
+
+def decode_thread_state(state: int | None) -> str | None:
+    """Map a ``thread_state`` bitfield to the most informative single-word label."""
+    if state is None:
+        return None
+    if state == 0:
+        return "running"
+    for bit, label in _THREAD_STATE_BITS:
+        if state & bit:
+            return label
+    return f"unknown(0x{state:02x})"
+
+
 @dataclass(frozen=True)
 class ThreadInfo:
     """Static identity and stack geometry of a Zephyr thread plus its latest runtime."""
@@ -59,6 +85,11 @@ class ThreadInfo:
     stack_size: int
     name: str
     runtime: ThreadRuntime | None
+    priority: int | None = None
+    state: int | None = None
+    user_options: int | None = None
+    entry_point: int | None = None
+    entry_symbol: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,7 +109,7 @@ class AbstractScraper(ABC):
     """Common interface for memory-read backends (JLink, pyOCD, GDB RSP)."""
 
     # True for live probe backends; False for synthetic backends (replay) that
-    # cannot accept runtime mutations — no reconnect, no change to the polling
+    # cannot accept runtime mutations - no reconnect, no change to the polling
     # shape (thread pool, heap fragmentation toggle) mid-stream. Subclasses that
     # cannot absorb such mutations must set this to False.
     is_live: bool = True
