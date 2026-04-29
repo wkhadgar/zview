@@ -29,7 +29,7 @@ def controller() -> MagicMock:
 
 
 def test_thread_list_footer_truncates_at_max_with_ellipsis(controller, theme):
-    """5 view bindings -> ``Help: ?`` prepended, top 3 shown, trailing ``…``."""
+    """5 view bindings -> ``Help: ?`` prepended, top 3 shown, trailing overflow indicator."""
     view = ThreadListView(controller, theme)
     hint = view._footer_hint().rstrip()
     parts = [p.strip() for p in hint.split("|")]
@@ -39,7 +39,7 @@ def test_thread_list_footer_truncates_at_max_with_ellipsis(controller, theme):
 
 
 def test_heap_list_footer_overflow(controller, theme):
-    """4 view bindings overflow the cap of 3 -> trailing ``…``."""
+    """4 view bindings overflow the cap of 3 -> trailing overflow indicator."""
     view = HeapListView(controller, theme)
     hint = view._footer_hint().rstrip()
     parts = [p.strip() for p in hint.split("|")]
@@ -72,7 +72,7 @@ def test_fit_str_pads_when_shorter():
 
 
 def test_fit_str_truncates_when_longer():
-    """Hard-clip the formatted string at exactly ``width`` — never spill over."""
+    """Hard-clip the formatted string at exactly ``width``; never spill over."""
     from frontend.tui.widgets import _fit_str
 
     assert _fit_str("1234567890", 4) == "1234"
@@ -137,7 +137,7 @@ def test_compute_flex_widths_grows_name_only_as_needed():
 
 
 def test_compute_flex_widths_caps_name_at_actual_need():
-    """Once name is satisfied, leftover goes to bar — name never exceeds longest item."""
+    """Once name is satisfied, leftover goes to bar; name never exceeds longest item."""
     from frontend.tui.views.base import compute_flex_widths
 
     items = [_Named("x" * 36)]

@@ -59,6 +59,11 @@ class ThreadInfo:
     stack_size: int
     name: str
     runtime: ThreadRuntime | None
+    priority: int | None = None
+    state: int | None = None
+    user_options: int | None = None
+    entry_point: int | None = None
+    entry_symbol: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,7 +83,7 @@ class AbstractScraper(ABC):
     """Common interface for memory-read backends (JLink, pyOCD, GDB RSP)."""
 
     # True for live probe backends; False for synthetic backends (replay) that
-    # cannot accept runtime mutations — no reconnect, no change to the polling
+    # cannot accept runtime mutations - no reconnect, no change to the polling
     # shape (thread pool, heap fragmentation toggle) mid-stream. Subclasses that
     # cannot absorb such mutations must set this to False.
     is_live: bool = True

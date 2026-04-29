@@ -23,7 +23,7 @@ def test_sparsity_map_zero_total_bytes_returns_empty():
 
 
 def test_sparsity_map_all_used_renders_full_blocks():
-    """Single fully-used chunk must produce only ``█``."""
+    """Single fully-used chunk must produce only the full-block glyph."""
     chunks = [{"size": 100, "used": True}]
     rows = HeapDetailView.get_sparsity_map(chunks, 10, 1)
     assert rows == ["█" * 10]

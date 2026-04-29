@@ -88,7 +88,7 @@ def test_dump_single_frame_via_replay():
 
 
 def test_record_session_roundtrip(tmp_path):
-    """ReplayScraper → RecordingScraper produces a replayable recording."""
+    """ReplayScraper -> RecordingScraper produces a replayable recording."""
     source = ReplayScraper(_FIXTURE, honor_timing=False)
     out_path = tmp_path / "roundtrip.ndjson.gz"
 
@@ -96,7 +96,7 @@ def test_record_session_roundtrip(tmp_path):
     assert out_path.exists()
     assert captured >= 1
 
-    # Replay the recorded session — it must yield at least one valid frame.
+    # Replay the recorded session: it must yield at least one valid frame.
     replay2 = ReplayScraper(out_path, honor_timing=False)
     frame2 = dump_single_frame(replay2, str(_ELF), period=0.001, timeout=3.0)
     assert "threads" in frame2

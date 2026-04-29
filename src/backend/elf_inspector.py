@@ -21,10 +21,12 @@ from typing import Literal
 from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import SymbolTableSection
 
-# HMAC key derived from the user's home directory — machine-specific,
-# makes tampered cache files detectable across machines.
+# HMAC key derived from the user's home directory: machine-specific, makes
+# tampered cache files detectable across machines.
 _CACHE_HMAC_KEY = hashlib.sha256(str(Path.home()).encode()).digest()
 _HMAC_SIZE = 32  # SHA-256 digest length in bytes
+
+_CACHE_SCHEMA_VERSION = 2
 
 
 class ElfInspector:
@@ -85,7 +87,7 @@ class ElfInspector:
         Any change to the ELF or the interpreter invalidates the cache.
         """
         stats = self._path.stat()
-        return (stats.st_mtime, stats.st_size, sys.hexversion)
+        return (stats.st_mtime, stats.st_size, sys.hexversion, _CACHE_SCHEMA_VERSION)
 
     def _load_cache(self) -> bool:
         """
@@ -178,6 +180,43 @@ class ElfInspector:
         except OSError:
             tmp.unlink(missing_ok=True)
 
+    def _collect_members(self, parent_die, struct_name: str, base_offset: int) -> None:
+        """Walk ``parent_die`` recording each ``DW_TAG_member``.
+
+        Anonymous members whose type is itself a struct or union are flattened:
+        their inner members are folded into ``struct_name`` at the parent's
+        offset. This is what makes ``_thread_base.prio`` resolvable when ``prio``
+        sits inside an anonymous union+struct in Zephyr's headers.
+        """
+        for child in parent_die.iter_children():
+            if child.tag != "DW_TAG_member":
+                continue
+            loc_attr = child.attributes.get("DW_AT_data_member_location")
+            if loc_attr is None:
+                # Union members elide the location attribute (offset is 0).
+                child_loc = 0
+            else:
+                child_loc = (
+                    loc_attr.value[1] if loc_attr.form == "DW_FORM_exprloc" else loc_attr.value
+                )
+            full_loc = base_offset + child_loc
+
+            m_name_attr = child.attributes.get("DW_AT_name")
+            if m_name_attr:
+                m_name = m_name_attr.value.decode(errors="ignore")
+                self._struct_members[struct_name][m_name] = full_loc
+                continue
+
+            # Anonymous member: descend into its type if it's a struct/union.
+            if "DW_AT_type" not in child.attributes:
+                continue
+            try:
+                type_die = child.get_DIE_from_attribute("DW_AT_type")
+            except Exception:
+                continue
+            if type_die.tag in ("DW_TAG_structure_type", "DW_TAG_union_type"):
+                self._collect_members(type_die, struct_name, full_loc)
+
     def _perform_single_pass_scan(self):
         """
         Executes a sweep of the ELF and DWARF tree.
@@ -224,19 +263,7 @@ class ElfInspector:
                             self._struct_sizes[struct_name] = size_attr.value
 
                         self._struct_members.setdefault(struct_name, {})
-
-                        for child in die.iter_children():
-                            if child.tag == "DW_TAG_member":
-                                m_name_attr = child.attributes.get("DW_AT_name")
-                                loc_attr = child.attributes.get("DW_AT_data_member_location")
-                                if m_name_attr and loc_attr:
-                                    m_name = m_name_attr.value.decode(errors="ignore")
-                                    loc = (
-                                        loc_attr.value[1]
-                                        if loc_attr.form == "DW_FORM_exprloc"
-                                        else loc_attr.value
-                                    )
-                                    self._struct_members[struct_name][m_name] = loc
+                        self._collect_members(die, struct_name, base_offset=0)
 
                     elif die.tag == "DW_TAG_variable":
                         name_attr = die.attributes.get("DW_AT_name")
@@ -273,6 +300,25 @@ class ElfInspector:
         else:
             raise ValueError(f"Invalid info type: {info}")
 
+    def get_symbol_name_at(self, addr: int) -> str | None:
+        """Reverse symbol lookup. Returns the symbol whose address matches ``addr``.
+
+        Keys are stored with the Thumb bit cleared (Cortex-M function symbols
+        carry an odd ``st_value`` which would otherwise miss every lookup).
+        ARM mapping symbols (``$t``/``$a``/``$d``/``$x``) are skipped so they
+        don't shadow real function symbols at the same address.
+        """
+        cache = getattr(self, "_address_to_symbol", None)
+        if cache is None:
+            cache = {}
+            for name, addrs in self._symbols_address.items():
+                if name.startswith("$"):
+                    continue
+                for a in addrs:
+                    cache.setdefault(a & ~1, name)
+            self._address_to_symbol = cache
+        return cache.get(addr & ~1)
+
     def get_struct_member_offset(self, struct_name: str, member_name: str) -> int:
         """
         Returns the byte offset of a named member within a named struct.
@@ -302,7 +348,7 @@ class ElfInspector:
 
         The returned list is deduplicated (a symbol appearing in multiple
         compilation units is reported only once) and preserves DWARF
-        discovery order — critical for downstream consumers (ZScraper's
+        discovery order: critical for downstream consumers (ZScraper's
         polling loop, recording/replay lockstep) that depend on a stable
         iteration order across processes.
         """

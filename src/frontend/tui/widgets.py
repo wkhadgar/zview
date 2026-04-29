@@ -13,7 +13,7 @@ def _truncate_str(text: str, max_size: int) -> str:
 
 
 def _fit_str(text: str, width: int, align: str = "^") -> str:
-    """Pad ``text`` to ``width`` (``align`` ∈ ``^<>``), then hard-clip to ``width``."""
+    """Pad ``text`` to ``width`` (``align`` is one of ``^<>``), then hard-clip to ``width``."""
     return f"{text:{align}{width}}"[:width]
 
 

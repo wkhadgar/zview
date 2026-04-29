@@ -244,7 +244,7 @@ def test_queue_full_is_not_counted_as_strike(elf_path):
     stop_event = threading.Event()
 
     # Run a single frame; time.sleep stops the loop. If queue.Full were a strike,
-    # a transient error message would be appended here — but the queue is full so
+    # a transient error message would be appended here, but the queue is full so
     # nothing gets appended regardless. The real assertion is that no fatal_error
     # fires even across many iterations.
     iterations = [0]
@@ -257,7 +257,7 @@ def test_queue_full_is_not_counted_as_strike(elf_path):
     with patch("time.sleep", side_effect=fake_sleep):
         scraper._poll_thread_worker(q, stop_event, 0)
 
-    # Queue still holds only the sentinel — no transient or fatal_error emitted.
+    # Queue still holds only the sentinel: no transient or fatal_error emitted.
     assert q.get_nowait() == {"sentinel": True}
     assert q.empty()
 
