@@ -92,7 +92,6 @@ ZView is invoked through one of four commands. Bare `zview ...` is a shortcut fo
 | `-o, --output` | `record` | Recording target path (`.ndjson.gz`). |
 | `--duration` | `record` | Recording upper bound, in seconds. |
 | `--frames` | `record` | Recording upper bound, in data frames. |
-| `--heap` | `record` | Capture per-frame fragmentation for the named `k_heap` variable. |
 | `-i, --input` | `replay`, `dump` | Recording source path (`.ndjson.gz`). |
 | `--no-pacing` | `replay` | Drain the recording as fast as possible instead of honoring its wall-clock cadence. |
 | `--frame` | `dump` | Which polling frame to emit (1-indexed; default: `1`). |
@@ -167,22 +166,19 @@ ZView can record a live session to disk, replay it later without a probe, or emi
 
 **Record a live session:**
 
+![Record a session](docs/assets/record_session.gif)
+
 ```
 # 30 s of live polling from a JLink probe, saved to disk
 west zview record -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA \
   -o capture.ndjson.gz --duration 30
 ```
 
-Bound the recording by either `--duration` (seconds) or `--frames` (number of data frames).
+Bound the recording by either `--duration` (seconds) or `--frames` (number of data frames). Fragmentation maps for every heap are captured automatically; replay can navigate into any heap's detail view.
 
-To also capture the **fragmentation map** for a specific heap, pass `--heap <name>` where `<name>` matches a `k_heap` variable from your firmware (e.g. `my_kernel_heap`):
+**Replay it later, no hardware needed:**
 
-```
-west zview record -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA \
-  -o capture.ndjson.gz --duration 30 --heap my_kernel_heap
-```
-
-**Replay it later — no hardware needed:**
+![Replay a recording](docs/assets/replay_session.gif)
 
 ```
 # Feed the recording into the TUI
@@ -194,6 +190,8 @@ By default the replay honors the recording's original cadence. Pass `--no-pacing
 The ELF is still required: DWARF offsets are resolved at replay time and are not stored in the recording.
 
 **CI-friendly single-frame snapshot:**
+
+![Dump as JSON](docs/assets/dump_json.gif)
 
 ```
 # One polling frame from a live probe, dumped as JSON on stdout
