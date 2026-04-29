@@ -142,17 +142,23 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
 * **r**: Soft refresh — re-walks the kernel thread list and clears runtime baselines.
 * **R**: Full reconnect — tears down the polling thread, disconnects the probe, reconnects, and resumes.
 
-[![TUI navigation](https://github.com/wkhadgar/zview/raw/main/docs/assets/default_view_1.png)](https://github.com/wkhadgar/zview/blob/main/docs/assets/default_view_1.png)
+### See your threads
 
-[![TUI navigation 2](https://github.com/wkhadgar/zview/raw/main/docs/assets/default_view_2.png)](https://github.com/wkhadgar/zview/blob/main/docs/assets/default_view_2.png)
+Every running thread, at a glance. Sort by any column, invert the order, and pop the help overlay any time.
 
-[![TUI thread tracking](https://github.com/wkhadgar/zview/raw/main/docs/assets/thread_detail_1.png)](https://github.com/wkhadgar/zview/blob/main/docs/assets/thread_detail_1.png)
+![Thread list navigation](docs/assets/default_navigation.gif)
 
-[![TUI heap navigation](https://github.com/wkhadgar/zview/raw/main/docs/assets/heaps_view_1.png)](https://github.com/wkhadgar/zview/blob/main/docs/assets/heaps_view_1.png)
+### Track a single thread
 
-[![TUI heap navigation 2](https://github.com/wkhadgar/zview/raw/main/docs/assets/heaps_view_2.png)](https://github.com/wkhadgar/zview/blob/main/docs/assets/heaps_view_2.png)
+Drill into one thread to watch its CPU and load graphs build up live.
 
-[![TUI heap fragmentation map](https://github.com/wkhadgar/zview/raw/main/docs/assets/heaps_detail_1.png)](https://github.com/wkhadgar/zview/blob/main/docs/assets/heaps_detail_1.png)
+![Thread detail](docs/assets/thread_detail.gif)
+
+### Inspect your heaps
+
+Jump to the heaps view and open any heap's fragmentation map.
+
+![Heap detail](docs/assets/heap_detail.gif)
 
 
 ## Offline workflows
