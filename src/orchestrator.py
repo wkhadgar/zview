@@ -52,6 +52,7 @@ class ZScraper:
         self.has_heaps: bool = True
         self.has_usage: bool = True
         self.has_names: bool = True
+        self.capture_all_heap_chunks: bool = False
 
         self._MAX_THREADS: int = max_threads
 
@@ -60,6 +61,9 @@ class ZScraper:
 
         if self.has_heaps:
             self._discover_heap_addresses()
+
+        if not self._m_scraper.is_live and self.has_heaps:
+            self.capture_all_heap_chunks = True
 
         self.reset_runtime_state()
 
@@ -522,7 +526,7 @@ class ZScraper:
                     continue
 
                 chunks = None
-                if self.extra_info_heap_address == heap_struct:
+                if self.capture_all_heap_chunks or self.extra_info_heap_address == heap_struct:
                     try:
                         chunks = self.get_heap_fragmentation(heap_struct)
                     except Exception as e:

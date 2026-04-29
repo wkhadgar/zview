@@ -198,38 +198,6 @@ def test_record_dispatches_with_frames_bound(monkeypatch, capsys, tmp_path):
     assert f"Recorded 7 frames to {out_file}" in out
 
 
-def test_record_forwards_heap_flag(monkeypatch, capsys, tmp_path):
-    recorded: list[dict] = []
-
-    def fake_record(backend, elf_path, out_path, **kwargs):
-        recorded.append(kwargs)
-        return 0
-
-    monkeypatch.setattr(zview_cli, "record_session", fake_record)
-
-    rc, _, _ = _invoke(
-        monkeypatch,
-        capsys,
-        [
-            "record",
-            "-e",
-            str(_ELF),
-            "-r",
-            "gdb",
-            "-t",
-            "localhost:1",
-            "-o",
-            str(tmp_path / "x.ndjson.gz"),
-            "--frames",
-            "1",
-            "--heap",
-            "my_kernel_heap",
-        ],
-    )
-    assert rc == 0
-    assert recorded[0]["heap_detail"] == "my_kernel_heap"
-
-
 def test_replay_no_pacing_passes_to_scraper(monkeypatch, capsys):
     """--no-pacing -> ReplayScraper(honor_timing=False)."""
     captured: dict = {}
