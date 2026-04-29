@@ -23,7 +23,7 @@ class HeapListView(BaseStateView):
         "Free B": 7,
         "Used B": 7,
         "Heap Usage %": 27,
-        "Watermark Bytes": 14,
+        "Watermark Bytes ": 15,
     }
     COLLUMS: list[str] = list(SCHEMA.keys())
     COLLUM_WIDTHS: list[int] = list(SCHEMA.values())

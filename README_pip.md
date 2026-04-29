@@ -76,7 +76,6 @@ ZView is invoked through one of four commands. Bare `zview ...` is a shortcut fo
 | `-o, --output` | `record` | Recording target path (`.ndjson.gz`). |
 | `--duration` | `record` | Recording upper bound, in seconds. |
 | `--frames` | `record` | Recording upper bound, in data frames. |
-| `--heap` | `record` | Capture per-frame fragmentation for the named `k_heap` variable. |
 | `-i, --input` | `replay`, `dump` | Recording source path (`.ndjson.gz`). |
 | `--no-pacing` | `replay` | Drain the recording as fast as possible instead of honoring its wall-clock cadence. |
 | `--frame` | `dump` | Which polling frame to emit (1-indexed; default: `1`). |

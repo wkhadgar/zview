@@ -23,7 +23,7 @@ class ThreadListView(BaseStateView):
         "CPU %": 7,
         "Load %": 7,
         "Stack Usage % (Watermark)": 27,
-        "Watermark Bytes": 14,
+        "Watermark Bytes": 15,
     }
     COLLUMS: list[str] = list(SCHEMA.keys())
     COLLUM_WIDTHS: list[int] = list(SCHEMA.values())

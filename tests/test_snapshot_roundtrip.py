@@ -141,56 +141,6 @@ def test_record_session_dual_bound_first_to_hit_wins(tmp_path):
     assert captured <= 5
 
 
-def test_configure_heap_detail_sets_extra_info_address():
-    """Reads the heap symbol via ``read32`` and stores the struct pointer."""
-    from unittest.mock import MagicMock
-
-    from orchestrator import ZScraper as _ZScraper
-    from snapshot import _configure_heap_detail
-
-    scraper = _ZScraper.__new__(_ZScraper)
-    scraper.has_heaps = True
-    scraper._k_heap_addresses = {"my_heap": [0x1000]}
-    scraper.extra_info_heap_address = None
-
-    recorder = MagicMock()
-    recorder.read32.return_value = [0x5000]
-
-    _configure_heap_detail(scraper, recorder, "my_heap")
-
-    assert scraper.extra_info_heap_address == 0x5000
-    recorder.begin_batch.assert_called_once()
-    recorder.end_batch.assert_called_once()
-    recorder.read32.assert_called_once_with(0x1000)
-
-
-def test_configure_heap_detail_unknown_heap_raises():
-    from unittest.mock import MagicMock
-
-    from orchestrator import ZScraper as _ZScraper
-    from snapshot import _configure_heap_detail
-
-    scraper = _ZScraper.__new__(_ZScraper)
-    scraper.has_heaps = True
-    scraper._k_heap_addresses = {"my_heap": [0x1000]}
-
-    with pytest.raises(ValueError, match="not found"):
-        _configure_heap_detail(scraper, MagicMock(), "nonexistent")
-
-
-def test_configure_heap_detail_requires_heap_support():
-    from unittest.mock import MagicMock
-
-    from orchestrator import ZScraper as _ZScraper
-    from snapshot import _configure_heap_detail
-
-    scraper = _ZScraper.__new__(_ZScraper)
-    scraper.has_heaps = False
-
-    with pytest.raises(ValueError, match="no k_heap"):
-        _configure_heap_detail(scraper, MagicMock(), "any")
-
-
 def test_dump_single_frame_propagates_fatal_error(monkeypatch):
     """``fatal_error`` from the polling thread surfaces as ``RuntimeError``."""
 

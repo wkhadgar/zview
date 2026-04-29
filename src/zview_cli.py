@@ -104,11 +104,6 @@ def register_commands(
     bound = p_record.add_mutually_exclusive_group(required=True)
     bound.add_argument("--duration", type=float, help="Recording bound, in seconds.")
     bound.add_argument("--frames", type=int, help="Recording bound, in data frames.")
-    p_record.add_argument(
-        "--heap",
-        metavar="NAME",
-        help="Capture per-frame fragmentation reads for the named k_heap variable.",
-    )
     _add_period(p_record)
 
     p_replay = _sub("replay", "Render the TUI from a recording file.")
@@ -219,7 +214,6 @@ def _do_record(args) -> int:
         duration=args.duration,
         frames=args.frames,
         period=args.period,
-        heap_detail=args.heap,
     )
     print(f"Recorded {captured} frames to {args.output}")
     return 0

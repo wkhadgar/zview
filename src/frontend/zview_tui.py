@@ -63,6 +63,7 @@ class ZView:
         self.detailing_heap_address: int | None = None
         self.idle_thread: ThreadInfo | None = None
         self._help_open: bool = False
+        self._help_drawn: bool = False
 
         theme = self._init_curses()
         self._theme = theme
@@ -172,6 +173,9 @@ class ZView:
                     self.stdscr.addstr(start_y + i, 0, centered_line)
             return
 
+        if self._help_open and self._help_drawn:
+            return
+
         self.views[self.state].render(self.stdscr, height, width)
 
         if self._help_open:
@@ -184,6 +188,10 @@ class ZView:
                     ("This view", [(b.key, b.help_text) for b in view_bindings]),
                 )
             TUITooltip(sections, self._theme.HEADER_FOOTER).draw(self.stdscr, height, width)
+            self.stdscr.refresh()
+            self._help_drawn = True
+        else:
+            self._help_drawn = False
 
     def transition_to(self, new_state: ZViewState):
         """Centralized state transition and data pipeline management."""
