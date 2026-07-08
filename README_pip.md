@@ -65,7 +65,7 @@ ZView is invoked through one of four commands. Bare `zview ...` is a shortcut fo
 | Argument | Used by | Description |
 | --- | --- | --- |
 | `-e, --elf-file` | all | Path to the firmware `.elf` file. |
-| `-r, --runner` | `live`, `record`, `dump` | Debug runner: `jlink`, `pyocd`, or `gdb`. |
+| `-r, --runner` | `live`, `record`, `dump` | Debug runner: `jlink`, `nrfutil`, `pyocd`, or `gdb`. |
 | `-t, --runner-target` | `live`, `record`, `dump` | MCU descriptor for the chosen runner (see below). |
 | `--period` | `live`, `record`, `dump` | Polling period in seconds (default: `0.10`). |
 
@@ -92,6 +92,10 @@ Use the device name from the [J-Link Supported Devices list](https://www.segger.
 ```
 # Example: Nordic nRF5340 DK
 zview -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA
+```
+**nrfutil (`-r nrfutil`)**
+```
+zview -e build/zephyr/zephyr.elf -r nrfutil -t 001057722700
 ```
 
 **pyOCD (`-r pyocd`)**

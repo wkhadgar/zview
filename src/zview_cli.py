@@ -5,6 +5,7 @@ import sys
 
 from backend.gdb import GDBScraper
 from backend.jlink import JLinkScraper
+from backend.nrfutil import NrfutilScraper
 from backend.pyocd import PyOCDScraper
 from backend.replay import ReplayScraper
 from frontend.zview_tui import tui_run
@@ -12,7 +13,7 @@ from logging_setup import configure as configure_logging
 from orchestrator import ZScraper
 from snapshot import dump_single_frame, record_session, serialize_frame
 
-AVAILABLE_RUNNERS = ("gdb", "jlink", "pyocd")
+AVAILABLE_RUNNERS = ("gdb", "jlink", "nrfutil", "pyocd")
 KNOWN_COMMANDS = ("live", "record", "replay", "dump")
 
 
@@ -186,6 +187,7 @@ def _build_live_backend(args):
     scraper_map = {
         "gdb": GDBScraper,
         "jlink": JLinkScraper,
+        "nrfutil": NrfutilScraper,
         "pyocd": PyOCDScraper,
     }
     cls = scraper_map.get(args.runner, PyOCDScraper)
