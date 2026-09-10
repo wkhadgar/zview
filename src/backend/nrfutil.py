@@ -105,7 +105,8 @@ class NrfutilScraper(AbstractScraper):
 
         try:
             raw = bytes(values)
-        except ValueError as e:
+        except (TypeError, ValueError) as e:
+            # Out-of-range ints raise ValueError, non-ints (e.g. "ff") TypeError.
             raise ProbeReadMalformed(f"Malformed data for address {hex(at)}") from e
 
         if len(raw) < amount:
