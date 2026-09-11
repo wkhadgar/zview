@@ -15,6 +15,7 @@ from typing import Literal
 from backend.base import AbstractScraper, HeapInfo, ThreadInfo, ThreadRuntime
 from backend.elf_inspector import ElfInspector
 from backend.replay import ReplayComplete
+from kernel import compat
 from kernel.heaps import walk_heap_fragmentation
 from kernel.layout import KernelLayout
 from kernel.threads import walk_thread_list
@@ -70,93 +71,30 @@ class ZScraper:
     def _resolve_layout(self) -> KernelLayout:
         """Resolve DWARF-derived offsets. Sets ``has_*`` flags for missing features."""
         elf = self._elf_inspector
-        stack_info = elf.get_struct_member_offset("k_thread", "stack_info")
 
-        fields: dict = {
-            "threads_head": elf.get_struct_member_offset("z_kernel", "threads"),
-            "thread_next": elf.get_struct_member_offset("k_thread", "next_thread"),
-            "stack_start": stack_info + elf.get_struct_member_offset("_thread_stack_info", "start"),
-            "stack_size": stack_info + elf.get_struct_member_offset("_thread_stack_info", "size"),
-        }
+        thread_fields = compat.resolve_fields(elf, compat.THREAD_FIELDS)
+        if thread_fields is None:
+            raise LookupError(
+                "Kernel thread layout not found in the ELF. ZView needs a build with "
+                "CONFIG_THREAD_MONITOR=y and CONFIG_THREAD_STACK_INFO=y."
+            )
 
-        if (extras := self._try_resolve_thread_name()) is not None:
-            fields.update(extras)
-        else:
-            self.has_names = False
+        fields: dict = dict(thread_fields)
 
-        if (extras := self._try_resolve_usage()) is not None:
-            fields.update(extras)
-        else:
-            self.has_usage = False
+        for group, flag in (
+            (compat.THREAD_NAME_FIELDS, "has_names"),
+            (compat.USAGE_FIELDS, "has_usage"),
+            (compat.HEAP_FIELDS, "has_heaps"),
+        ):
+            if (extras := compat.resolve_fields(elf, group)) is not None:
+                fields.update(extras)
+            else:
+                setattr(self, flag, False)
 
-        if (extras := self._try_resolve_heaps()) is not None:
-            fields.update(extras)
-        else:
-            self.has_heaps = False
-
-        if (extras := self._try_resolve_thread_meta()) is not None:
-            fields.update(extras)
+        # Metadata members resolve independently.
+        fields.update(compat.resolve_optional_fields(elf, compat.THREAD_META_FIELDS))
 
         return KernelLayout(**fields)
-
-    def _try_resolve_thread_name(self) -> dict | None:
-        try:
-            return {"thread_name": self._elf_inspector.get_struct_member_offset("k_thread", "name")}
-        except LookupError:
-            return None
-
-    def _try_resolve_usage(self) -> dict | None:
-        elf = self._elf_inspector
-        try:
-            cpu_usage = elf.get_struct_member_offset("z_kernel", "usage")
-            usage_base = elf.get_struct_member_offset(
-                "k_thread", "base"
-            ) + elf.get_struct_member_offset("_thread_base", "usage")
-            thread_usage = usage_base + elf.get_struct_member_offset("k_cycle_stats", "total")
-        except LookupError:
-            return None
-        return {"cpu_usage": cpu_usage, "thread_usage": thread_usage}
-
-    def _try_resolve_thread_meta(self) -> dict | None:
-        """Resolve ``k_thread`` metadata mirroring ``kernel threads list`` shell output."""
-        elf = self._elf_inspector
-        try:
-            base = elf.get_struct_member_offset("k_thread", "base")
-        except LookupError:
-            return None
-        out: dict = {}
-        for layout_field, member in (
-            ("thread_priority", "prio"),
-            ("thread_state", "thread_state"),
-            ("thread_user_options", "user_options"),
-        ):
-            with contextlib.suppress(LookupError):
-                out[layout_field] = base + elf.get_struct_member_offset("_thread_base", member)
-        with contextlib.suppress(LookupError):
-            entry = elf.get_struct_member_offset("k_thread", "entry")
-            # Struct name is ``__thread_entry`` in current Zephyr; some older
-            # vendor trees may have used a single underscore.
-            for entry_struct in ("__thread_entry", "_thread_entry"):
-                with contextlib.suppress(LookupError):
-                    out["thread_entry"] = entry + elf.get_struct_member_offset(
-                        entry_struct, "pEntry"
-                    )
-                    break
-        return out or None
-
-    def _try_resolve_heaps(self) -> dict | None:
-        elf = self._elf_inspector
-        try:
-            return {
-                "heap_free_bytes": elf.get_struct_member_offset("z_heap", "free_bytes"),
-                "heap_allocated_bytes": elf.get_struct_member_offset("z_heap", "allocated_bytes"),
-                "heap_max_allocated_bytes": elf.get_struct_member_offset(
-                    "z_heap", "max_allocated_bytes"
-                ),
-                "heap_end_chunk": elf.get_struct_member_offset("z_heap", "end_chunk"),
-            }
-        except LookupError:
-            return None
 
     def _resolve_addresses(self) -> None:
         elf = self._elf_inspector
