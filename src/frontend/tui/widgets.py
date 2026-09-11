@@ -140,7 +140,7 @@ class TUIBox:
 
 
 class TUITooltip:
-    """Centered, filled, bordered popup listing keybinding sections."""
+    """Centered, filled, bordered popup listing labelled rows in sections."""
 
     _BORDER_THICKNESS = 2  # top + bottom
     _PADDING_ROWS = 2  # blank row above + below content
@@ -148,19 +148,31 @@ class TUITooltip:
     _KEY_DESC_GAP = 2  # spaces between key column and description column
     _MIN_BOX_WIDTH = 30
 
-    def __init__(self, sections: list[tuple[str, list[tuple[str, str]]]], attr: int):
-        """``sections`` is ``[(section_title, [(key, description), ...]), ...]``."""
+    def __init__(
+        self,
+        sections: list[tuple[str, list[tuple[str, str]]]],
+        attr: int,
+        title: str = " Help ",
+    ):
+        """
+        ``sections`` is ``[(section_title, [(label, text), ...]), ...]``.
+
+        A section with an empty title contributes no heading row, for popups
+        whose box title is enough.
+        """
         self._sections = sections
         self._attr = attr
+        self._title = title
 
     def _build_rows(self) -> list[tuple[str, str] | None]:
         """Layout rows; ``None`` is a blank separator between sections."""
         rows: list[tuple[str, str] | None] = []
-        for idx, (title, bindings) in enumerate(self._sections):
+        for idx, (title, entries) in enumerate(self._sections):
             if idx > 0:
                 rows.append(None)
-            rows.append((title, ""))
-            rows.extend((f"  {key}", desc) for key, desc in bindings)
+            if title:
+                rows.append((title, ""))
+            rows.extend((f"  {label}", text) for label, text in entries)
         return rows
 
     def draw(self, stdscr: curses.window, height: int, width: int) -> None:
@@ -184,7 +196,7 @@ class TUITooltip:
             with contextlib.suppress(curses.error):
                 stdscr.addstr(y0 + row_offset, x0, blank, self._attr)
 
-        TUIBox(" Help ", " Press any key to dismiss ", self._attr).draw(
+        TUIBox(self._title, " Press any key to dismiss ", self._attr).draw(
             stdscr, y0, x0, box_h, box_w
         )
 

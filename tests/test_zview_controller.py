@@ -5,6 +5,7 @@
 """Coverage for ``ZView`` controller logic that doesn't require real curses."""
 
 import queue
+from collections import deque
 from unittest.mock import MagicMock
 
 import pytest
@@ -21,6 +22,7 @@ def app() -> ZView:
     a.threads_data = []
     a.heaps_data = []
     a.status_message = ""
+    a.messages = deque(maxlen=64)
     a.update_count = 0
     a.idle_thread = None
     a.data_queue = queue.Queue()

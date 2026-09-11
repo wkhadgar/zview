@@ -69,6 +69,7 @@ class SpecialCode:
     REFRESH = ord("r")
     RECONNECT = ord("R")
     HELP = ord("?")
+    MESSAGES = ord("m")
 
 
 class ZViewState(enum.Enum):

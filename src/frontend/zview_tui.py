@@ -7,6 +7,8 @@ import curses
 import queue
 import threading
 import time
+from collections import deque
+from dataclasses import dataclass
 
 from backend.base import HeapInfo, ThreadInfo
 from frontend.tui.views.base import (
@@ -26,9 +28,24 @@ from orchestrator import ZScraper
 
 _GLOBAL_KEYBINDINGS: list[Keybind] = [
     Keybind("?", "Help", "Toggle this help overlay"),
+    Keybind("m", "Messages", "Toggle the message log"),
     Keybind("R", "Reconnect", "Disconnect probe and reattach (full cycle)"),
     Keybind("q", "Quit", "Exit ZView"),
 ]
+
+_MESSAGE_LOG_SIZE = 64
+
+
+@dataclass
+class LogEntry:
+    """One reported message: the time it was first seen, its text, its repeats."""
+
+    time: str
+    text: str
+    count: int = 1
+
+    def line(self) -> str:
+        return self.text if self.count == 1 else f"{self.text} (x{self.count})"
 
 
 class ZView:
@@ -53,6 +70,9 @@ class ZView:
         self.threads_data: list[ThreadInfo] = []
         self.heaps_data: list[HeapInfo] = []
         self.status_message: str = ""
+        # The status row is overwritten by the heartbeat on every poll, so
+        # reported messages are kept here to stay readable.
+        self.messages: deque[LogEntry] = deque(maxlen=_MESSAGE_LOG_SIZE)
         self.data_queue = queue.Queue()
         self.stop_event = threading.Event()
         self.update_count = 0
@@ -62,8 +82,9 @@ class ZView:
         self.detailing_thread: str | None = None
         self.detailing_heap_address: int | None = None
         self.idle_thread: ThreadInfo | None = None
-        self._help_open: bool = False
-        self._help_drawn: bool = False
+        # Name of the open overlay ("help" or "messages"), or None.
+        self._overlay: str | None = None
+        self._overlay_drawn: bool = False
 
         theme = self._init_curses()
         self._theme = theme
@@ -124,6 +145,23 @@ class ZView:
                 curses.color_pair(10),
             )
 
+    def report(self, message: str) -> None:
+        """
+        Put a message on the status row and into the message log.
+
+        A message repeated back to back bumps the count of the entry it
+        repeats instead of adding another, so a per-poll error cannot push
+        everything else out of the log.
+        """
+        self.status_message = message
+
+        text = " ".join(message.split())
+        if self.messages and self.messages[-1].text == text:
+            self.messages[-1].count += 1
+            return
+
+        self.messages.append(LogEntry(time.strftime("%H:%M:%S"), text))
+
     def purge_queue(self):
         with self.data_queue.mutex:
             self.data_queue.queue.clear()
@@ -131,10 +169,10 @@ class ZView:
     def attempt_reconnect(self):
         """Executes hardware reconnection and data pipeline reset."""
         if not self.scraper._m_scraper.is_live:
-            self.status_message = "Reconnect is not available in replay mode."
+            self.report("Reconnect is not available in replay mode.")
             return
 
-        self.status_message = "Attempting to reconnect..."
+        self.report("Attempting to reconnect...")
         self.scraper.finish_polling_thread()
         self.scraper._m_scraper.disconnect()
         self.purge_queue()
@@ -173,30 +211,49 @@ class ZView:
                     self.stdscr.addstr(start_y + i, 0, centered_line)
             return
 
-        if self._help_open and self._help_drawn:
+        if self._overlay and self._overlay_drawn:
             return
 
         self.views[self.state].render(self.stdscr, height, width)
 
-        if self._help_open:
-            sections: list[tuple[str, list[tuple[str, str]]]] = [
-                ("Global", [(b.key, b.help_text) for b in _GLOBAL_KEYBINDINGS]),
-            ]
-            view_bindings = self.views[self.state].keybindings()
-            if view_bindings:
-                sections.append(
-                    ("This view", [(b.key, b.help_text) for b in view_bindings]),
-                )
-            TUITooltip(sections, self._theme.HEADER_FOOTER).draw(self.stdscr, height, width)
+        if self._overlay:
+            self._draw_overlay(height, width)
             self.stdscr.refresh()
-            self._help_drawn = True
+            self._overlay_drawn = True
         else:
-            self._help_drawn = False
+            self._overlay_drawn = False
+
+    def _draw_overlay(self, height: int, width: int) -> None:
+        if self._overlay == "messages":
+            TUITooltip(
+                [("", self._message_rows(height))], self._theme.HEADER_FOOTER, " Messages "
+            ).draw(self.stdscr, height, width)
+            return
+
+        sections: list[tuple[str, list[tuple[str, str]]]] = [
+            ("Global", [(b.key, b.help_text) for b in _GLOBAL_KEYBINDINGS]),
+        ]
+        view_bindings = self.views[self.state].keybindings()
+        if view_bindings:
+            sections.append(
+                ("This view", [(b.key, b.help_text) for b in view_bindings]),
+            )
+        TUITooltip(sections, self._theme.HEADER_FOOTER, " Help ").draw(self.stdscr, height, width)
+
+    def _message_rows(self, height: int) -> list[tuple[str, str]]:
+        """The log as ``(time, text)`` rows, oldest first."""
+        if not self.messages:
+            return [("", "Nothing reported yet.")]
+
+        # The popup does not scroll and is not drawn at all when it overflows
+        # the terminal, so only the newest entries that fit are listed.
+        listed = list(self.messages)[-max(1, height - 6) :]
+        return [(entry.time, entry.line()) for entry in listed]
 
     def transition_to(self, new_state: ZViewState):
         """Centralized state transition and data pipeline management."""
         if new_state not in self.views:
-            self.status_message = f"Warning: {new_state.name} is not yet implemented."
+            self.report(f"Warning: {new_state.name} is not yet implemented.")
             return
 
         # Replay backends cannot absorb polling-shape mutations without drifting
@@ -252,13 +309,17 @@ class ZView:
         if key == -1:
             return
 
-        if self._help_open:
-            self._help_open = False
+        if self._overlay:
+            self._overlay = None
             self.stdscr.clear()
             return
 
         if key == SpecialCode.HELP:
-            self._help_open = True
+            self._overlay = "help"
+            return
+
+        if key == SpecialCode.MESSAGES:
+            self._overlay = "messages"
             return
 
         if key == SpecialCode.RECONNECT:
@@ -272,15 +333,15 @@ class ZView:
     def process_data(self, data):
         if data.get("fatal_error"):
             self.state = ZViewState.FATAL_ERROR
-            self.status_message = f"TARGET LOST\n\n{data['fatal_error']}"
+            self.report(f"TARGET LOST\n\n{data['fatal_error']}")
             return
 
         if data.get("replay_complete"):
-            self.status_message = "Recording ended; replay complete."
+            self.report("Recording ended; replay complete.")
             return
 
         if data.get("error"):
-            self.status_message = f"Error: {data['error']}"
+            self.report(f"Error: {data['error']}")
         else:
             self.status_message = f"Running{'.' * (self.update_count % 4)}"
             self.update_count += 1
@@ -306,12 +367,12 @@ class ZView:
         This loop continuously checks for new data from the polling thread,
         updates the UI, and processes user input (e.g., 'q' to quit).
         """
-        self.status_message = "Initializing..."
+        self.report("Initializing...")
 
         try:
             self.scraper.update_available_threads()
         except RuntimeError as e:
-            self.status_message = f"Unable to update available threads [{e}]"
+            self.report(f"Unable to update available threads [{e}]")
 
         self.scraper.reset_thread_pool()
         self.scraper.start_polling_thread(self.data_queue, self.stop_event, inspection_period)
