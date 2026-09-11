@@ -18,6 +18,7 @@ from backend.replay import ReplayComplete
 from kernel import compat
 from kernel.heaps import walk_heap_fragmentation
 from kernel.layout import KernelLayout
+from kernel.mem_slabs import walk_mem_slabs
 from kernel.msgqs import walk_msgqs
 from kernel.mutexes import walk_mutexes
 from kernel.semaphores import walk_semaphores
@@ -59,6 +60,7 @@ class ZScraper:
         self.has_semaphores: bool = True
         self.has_mutexes: bool = True
         self.has_msgqs: bool = True
+        self.has_mem_slabs: bool = True
         self.capture_all_heap_chunks: bool = False
         # Set False by the TUI outside the kernel objects view; dump and record
         # leave it on.
@@ -105,6 +107,7 @@ class ZScraper:
             (compat.SEMAPHORE_FIELDS, "has_semaphores"),
             (compat.MUTEX_FIELDS, "has_mutexes"),
             (compat.MSGQ_FIELDS, "has_msgqs"),
+            (compat.MEM_SLAB_FIELDS, "has_mem_slabs"),
         ):
             if (extras := compat.resolve_fields(elf, group)) is not None:
                 fields.update(extras)
@@ -114,6 +117,7 @@ class ZScraper:
         # Metadata members and the qnode link resolve independently.
         fields.update(compat.resolve_optional_fields(elf, compat.THREAD_META_FIELDS))
         fields.update(compat.resolve_optional_fields(elf, compat.THREAD_QNODE_FIELDS))
+        fields.update(compat.resolve_optional_fields(elf, compat.MEM_SLAB_OPTIONAL_FIELDS))
 
         return KernelLayout(**fields)
 
@@ -140,6 +144,7 @@ class ZScraper:
         self._k_sem_addresses: dict[str, list[int]] = {}
         self._k_mutex_addresses: dict[str, list[int]] = {}
         self._k_msgq_addresses: dict[str, list[int]] = {}
+        self._k_mem_slab_addresses: dict[str, list[int]] = {}
 
         if self.has_semaphores:
             self._k_sem_addresses = self._discover_struct_instances("k_sem")
@@ -152,6 +157,10 @@ class ZScraper:
         if self.has_msgqs:
             self._k_msgq_addresses = self._discover_struct_instances("k_msgq")
             self.has_msgqs = bool(self._k_msgq_addresses)
+
+        if self.has_mem_slabs:
+            self._k_mem_slab_addresses = self._discover_struct_instances("k_mem_slab")
+            self.has_mem_slabs = bool(self._k_mem_slab_addresses)
 
     def _discover_struct_instances(self, struct_name: str) -> dict[str, list[int]]:
         """
@@ -185,6 +194,7 @@ class ZScraper:
         self.has_semaphores = self.has_semaphores and "semaphores" in features
         self.has_mutexes = self.has_mutexes and "mutexes" in features
         self.has_msgqs = self.has_msgqs and "msgqs" in features
+        self.has_mem_slabs = self.has_mem_slabs and "mem_slabs" in features
 
     def active_features(self) -> tuple[str, ...]:
         """The features this session polls, as recorded in a recording header."""
@@ -194,6 +204,7 @@ class ZScraper:
             (self.has_semaphores, "semaphores"),
             (self.has_mutexes, "mutexes"),
             (self.has_msgqs, "msgqs"),
+            (self.has_mem_slabs, "mem_slabs"),
         ):
             if enabled:
                 features.append(name)
@@ -201,7 +212,7 @@ class ZScraper:
         return tuple(features)
 
     def _has_kernel_objects(self) -> bool:
-        return self.has_semaphores or self.has_mutexes or self.has_msgqs
+        return self.has_semaphores or self.has_mutexes or self.has_msgqs or self.has_mem_slabs
 
     def _poll_kernel_objects(self, data_queue: queue.Queue) -> dict:
         """
@@ -221,6 +232,7 @@ class ZScraper:
             (self.has_semaphores, "semaphores", walk_semaphores, self._k_sem_addresses),
             (self.has_mutexes, "mutexes", walk_mutexes, self._k_mutex_addresses),
             (self.has_msgqs, "msgqs", walk_msgqs, self._k_msgq_addresses),
+            (self.has_mem_slabs, "mem_slabs", walk_mem_slabs, self._k_mem_slab_addresses),
         ):
             if not enabled:
                 continue

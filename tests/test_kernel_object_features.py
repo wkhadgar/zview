@@ -17,14 +17,15 @@ def _scraper(**enabled: bool) -> ZScraper:
     s.has_semaphores = enabled.get("semaphores", False)
     s.has_mutexes = enabled.get("mutexes", False)
     s.has_msgqs = enabled.get("msgqs", False)
+    s.has_mem_slabs = enabled.get("mem_slabs", False)
     s.poll_kernel_objects = True
     return s
 
 
 def test_active_features_lists_only_what_is_polled():
-    s = _scraper(heaps=True, semaphores=True, msgqs=True)
+    s = _scraper(heaps=True, semaphores=True, msgqs=True, mem_slabs=True)
 
-    assert s.active_features() == ("threads", "heaps", "semaphores", "msgqs")
+    assert s.active_features() == ("threads", "heaps", "semaphores", "msgqs", "mem_slabs")
 
 
 def test_threads_are_always_a_feature():
@@ -42,7 +43,7 @@ def test_a_live_session_is_not_restricted():
 
 def test_a_recording_without_a_group_turns_it_off():
     """Replay matches a strict read sequence, so an absent group must not be read."""
-    s = _scraper(semaphores=True, mutexes=True, msgqs=True)
+    s = _scraper(semaphores=True, mutexes=True, msgqs=True, mem_slabs=True)
     s._m_scraper = MagicMock(is_live=False, features=("threads", "semaphores"))
 
     s._restrict_features_to_recording()
@@ -50,6 +51,7 @@ def test_a_recording_without_a_group_turns_it_off():
     assert s.has_semaphores
     assert not s.has_mutexes
     assert not s.has_msgqs
+    assert not s.has_mem_slabs
 
 
 def test_a_group_absent_from_the_elf_stays_off_even_if_recorded():
