@@ -13,6 +13,7 @@ from datetime import datetime
 
 from backend.base import (
     HeapInfo,
+    MemSlabInfo,
     MsgqInfo,
     MutexInfo,
     MutexState,
@@ -31,6 +32,7 @@ from frontend.tui.views.fatal_error import FatalErrorView
 from frontend.tui.views.heap_detail import HeapDetailView
 from frontend.tui.views.heap_list import HeapListView
 from frontend.tui.views.kernel_object_list import KernelObjectListView
+from frontend.tui.views.mem_slab_detail import MemSlabDetailView
 from frontend.tui.views.msgq_detail import MsgqDetailView
 from frontend.tui.views.mutex_detail import MutexDetailView
 from frontend.tui.views.semaphore_detail import SemaphoreDetailView
@@ -111,11 +113,13 @@ class ZView:
         self.heaps_data: list[HeapInfo] = []
         self.semaphores_data: list[SemaphoreInfo] = []
         self.msgqs_data: list[MsgqInfo] = []
+        self.mem_slabs_data: list[MemSlabInfo] = []
         self.mutexes_data: list[MutexInfo] = []
         # One sample per frame per object, for the detail views.
         self.mutex_history: dict[int, deque[MutexState]] = {}
         self.sem_history: dict[int, deque[int]] = {}
         self.msgq_history: dict[int, deque[int]] = {}
+        self.mem_slab_history: dict[int, deque[int]] = {}
         self.status_message: str = ""
         # One entry per reported message, newest last.
         self.messages: deque[LogEntry] = deque(maxlen=_MESSAGE_LOG_SIZE)
@@ -130,6 +134,7 @@ class ZView:
         self.detailing_mutex_address: int | None = None
         self.detailing_semaphore_address: int | None = None
         self.detailing_msgq_address: int | None = None
+        self.detailing_mem_slab_address: int | None = None
         # Wait queues are walkable only in the dlist (simple) flavor.
         self.waiters_unknown: bool = scraper.waitq_flavor != "simple"
         self.idle_thread: ThreadInfo | None = None
@@ -165,6 +170,7 @@ class ZView:
             ZViewState.MUTEX_DETAIL_VIEW: MutexDetailView(self, theme),
             ZViewState.SEMAPHORE_DETAIL_VIEW: SemaphoreDetailView(self, theme),
             ZViewState.MSGQ_DETAIL_VIEW: MsgqDetailView(self, theme),
+            ZViewState.MEM_SLAB_DETAIL_VIEW: MemSlabDetailView(self, theme),
         }
 
         # The opening view is the thread list. A replay keeps polling whatever
@@ -396,6 +402,7 @@ class ZView:
                 | ZViewState.MUTEX_DETAIL_VIEW
                 | ZViewState.SEMAPHORE_DETAIL_VIEW
                 | ZViewState.MSGQ_DETAIL_VIEW
+                | ZViewState.MEM_SLAB_DETAIL_VIEW
             ):
                 if live:
                     # This view reads only the primitives.
@@ -481,6 +488,9 @@ class ZView:
             if "msgqs" in data:
                 self.msgqs_data = data["msgqs"]
                 self._record_depths(self.msgqs_data)
+            if "mem_slabs" in data:
+                self.mem_slabs_data = data["mem_slabs"]
+                self._record_usage(self.mem_slabs_data)
 
     def _record_counts(self, semaphores: list[SemaphoreInfo]) -> None:
         """Append one count sample per semaphore, per frame."""
@@ -493,6 +503,12 @@ class ZView:
         for msgq in msgqs:
             history = self.msgq_history.setdefault(msgq.address, deque(maxlen=256))
             history.append(msgq.used_msgs)
+
+    def _record_usage(self, slabs: list[MemSlabInfo]) -> None:
+        """Append one blocks-in-use sample per slab, per frame."""
+        for slab in slabs:
+            history = self.mem_slab_history.setdefault(slab.address, deque(maxlen=256))
+            history.append(slab.num_used)
 
     def _record_contention(self, mutexes: list[MutexInfo]) -> None:
         """
