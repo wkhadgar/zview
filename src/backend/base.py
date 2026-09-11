@@ -92,6 +92,28 @@ class SemaphoreInfo:
     waiters: tuple[str, ...] | None = None
 
 
+@dataclass(frozen=True)
+class MsgqInfo:
+    """Snapshot of a Zephyr ``k_msgq``."""
+
+    name: str
+    address: int
+    used_msgs: int
+    max_msgs: int
+    msg_size: int
+    # A ``k_msgq`` has one wait queue for both directions: senders queue on a
+    # full one, receivers on an empty one.
+    waiters: tuple[str, ...] | None = None
+
+    @property
+    def fill_percent(self) -> float:
+        return (self.used_msgs / self.max_msgs * 100.0) if self.max_msgs else 0.0
+
+    @property
+    def is_full(self) -> bool:
+        return self.max_msgs > 0 and self.used_msgs >= self.max_msgs
+
+
 class MutexState(enum.IntEnum):
     """Lock state of a ``k_mutex``, ordered by contention."""
 

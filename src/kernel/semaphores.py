@@ -8,6 +8,7 @@ from backend.base import AbstractScraper, SemaphoreInfo
 from backend.elf_inspector import ElfInspector
 from kernel.layout import KernelLayout
 from kernel.object_names import label_instances
+from kernel.structs import struct_words
 from kernel.wait_queues import resolve_waiter_names, walk_wait_queue
 
 
@@ -28,7 +29,7 @@ def walk_semaphores(
     ``walk_waiters=False`` skips the wait queue and leaves ``waiters`` as
     ``None``; required on a non-walkable (scalable) layout.
     """
-    words_to_read = _struct_words(elf, "k_sem")
+    words_to_read = struct_words(elf, "k_sem")
     count_idx = layout.sem_count // 4
     limit_idx = layout.sem_limit // 4
     wait_q_idx = layout.sem_wait_q // 4
@@ -58,8 +59,3 @@ def walk_semaphores(
         )
 
     return semaphores
-
-
-def _struct_words(elf: ElfInspector, struct_name: str) -> int:
-    """Word count covering a struct, rounded up so a trailing partial word is read."""
-    return (elf.get_struct_size(struct_name) + 3) // 4
