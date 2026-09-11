@@ -363,3 +363,46 @@ def test_read_mem_raw_happy_path_returns_decoded_bytes():
     with patch.object(GDBScraper, "_read_response", return_value=b"deadbeef"):
         result = scraper._read_mem_raw(0x1000, 4)
     assert result == b"\xde\xad\xbe\xef"
+
+
+def test_cpu_share_cannot_exceed_the_total_it_divides(elf_path):
+    """A thread reading more cycles than the global counter caps at 100%."""
+    mock_meta_scraper = MagicMock()
+    mock_meta_scraper.is_connected = True
+
+    scraper = ZScraper(mock_meta_scraper, elf_path=elf_path, max_threads=2)
+    scraper.has_heaps = False
+    scraper.has_usage = True
+    scraper.idle_threads_address = 0x2000
+
+    from dataclasses import replace as dc_replace
+
+    scraper._layout = dc_replace(scraper._layout, thread_usage=0x10)
+    scraper._cpu_usage_address = 0x1000
+    scraper.last_cpu_cycles = 100
+    scraper.last_cpu_delta = 100
+
+    scraper.thread_pool = [
+        ThreadInfo(address=0x1000, stack_start=0x0, stack_size=1000, name="burst", runtime=None),
+        ThreadInfo(address=0x2000, stack_start=0x0, stack_size=1000, name="idle", runtime=None),
+    ]
+    scraper.last_thread_cycles = {0x1000: 50, 0x2000: 50}
+
+    # The global counter advances by 100, the thread's own by 4950.
+    mock_meta_scraper.read32.return_value = [200]
+    mock_meta_scraper.read64.side_effect = lambda address: {
+        0x1000 + 0x10: [5000],
+        0x2000 + 0x10: [55],
+    }.get(address, [0])
+    mock_meta_scraper.calculate_dynamic_watermark.return_value = 250
+
+    data_queue: queue.Queue = queue.Queue()
+    stop_event = threading.Event()
+
+    with patch("time.sleep", side_effect=lambda _: stop_event.set()):
+        scraper._poll_thread_worker(data_queue, stop_event, 0)
+
+    burst = next(t for t in data_queue.get(timeout=1.0)["threads"] if t.name == "burst")
+
+    assert burst.runtime.cpu_normalized == 100.0
+    assert burst.runtime.cpu == 100.0
