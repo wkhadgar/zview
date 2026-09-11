@@ -4,6 +4,7 @@
 
 import contextlib
 import curses
+from typing import NamedTuple
 
 from backend.base import HeapInfo, ThreadInfo, ThreadRuntime
 
@@ -139,140 +140,65 @@ class TUIBox:
         stdscr.attroff(self._attr)
 
 
-class TUITooltip:
-    """Centered, filled, bordered popup listing labelled rows in sections."""
+class PopupRow(NamedTuple):
+    """
+    One row of a ``TUIPopup``.
 
-    _BORDER_THICKNESS = 2  # top + bottom
-    _PADDING_ROWS = 2  # blank row above + below content
-    _PADDING_COLS = 4  # left + right inner padding (2 each side)
-    _KEY_DESC_GAP = 2  # spaces between key column and description column
-    _MIN_BOX_WIDTH = 30
+    ``label`` and ``text`` are the two columns; ``level`` picks the text
+    color. A heading row carries its title in ``label``, and a row with both
+    columns empty is a gap.
+    """
 
-    def __init__(
-        self,
-        sections: list[tuple[str, list[tuple[str, str]]]],
-        attr: int,
-        title: str = " Help ",
-    ):
-        """
-        ``sections`` is ``[(section_title, [(label, text), ...]), ...]``.
-
-        A section with an empty title contributes no heading row, for popups
-        whose box title is enough.
-        """
-        self._sections = sections
-        self._attr = attr
-        self._title = title
-
-    def _build_rows(self) -> list[tuple[str, str] | None]:
-        """Layout rows; ``None`` is a blank separator between sections."""
-        rows: list[tuple[str, str] | None] = []
-        for idx, (title, entries) in enumerate(self._sections):
-            if idx > 0:
-                rows.append(None)
-            if title:
-                rows.append((title, ""))
-            rows.extend((f"  {label}", text) for label, text in entries)
-        return rows
-
-    def draw(self, stdscr: curses.window, height: int, width: int) -> None:
-        rows = self._build_rows()
-
-        # Keeps the rows and the width that fit, clipping the rest; the last
-        # row and column stay free.
-        max_rows = height - self._BORDER_THICKNESS - self._PADDING_ROWS - 1
-        max_width = width - 1
-        if max_rows < 1 or max_width < self._PADDING_COLS + 1:
-            return
-        rows = rows[:max_rows]
-
-        visible = [r for r in rows if r is not None]
-        key_w = max((len(k) for k, _ in visible), default=0)
-        desc_w = max((len(d) for _, d in visible), default=0)
-
-        inner_w = key_w + self._KEY_DESC_GAP + desc_w
-        box_w = min(max(inner_w + self._PADDING_COLS, self._MIN_BOX_WIDTH), max_width)
-        box_h = len(rows) + self._BORDER_THICKNESS + self._PADDING_ROWS
-
-        text_w = box_w - self._PADDING_COLS
-        key_w = min(key_w, text_w)
-
-        y0 = (height - box_h) // 2
-        x0 = (width - box_w) // 2
-
-        blank = " " * box_w
-        for row_offset in range(box_h):
-            with contextlib.suppress(curses.error):
-                stdscr.addstr(y0 + row_offset, x0, blank, self._attr)
-
-        TUIBox(self._title, " Press any key to dismiss ", self._attr).draw(
-            stdscr, y0, x0, box_h, box_w
-        )
-
-        for i, row in enumerate(rows):
-            line_y = y0 + 2 + i
-            if row is None:
-                continue
-            key, desc = row
-            with contextlib.suppress(curses.error):
-                if not desc:
-                    stdscr.addstr(line_y, x0 + 2, key[:text_w], self._attr | curses.A_BOLD)
-                else:
-                    stdscr.addstr(line_y, x0 + 2, key.ljust(key_w)[:key_w], self._attr)
-                    desc_room = text_w - key_w - self._KEY_DESC_GAP
-                    if desc_room > 0:
-                        stdscr.addstr(
-                            line_y,
-                            x0 + 2 + key_w + self._KEY_DESC_GAP,
-                            desc[:desc_room],
-                            self._attr,
-                        )
+    label: str
+    text: str = ""
+    level: str = "info"
+    heading: bool = False
 
 
 class TUIPopup:
     """
-    Centered popup listing timestamped messages, oldest first.
+    Centered popup listing two-column rows, blanking the area it covers.
 
-    Rows are ``(time, text, level)``, where ``level`` picks the text color.
-    The popup blanks the area it covers rather than tinting it.
+    ``keep_tail`` picks which rows survive when they do not all fit: the last
+    ones for a log, the first ones for a list that reads top down.
     """
 
     _BORDER_THICKNESS = 2  # top + bottom
     _PADDING_ROWS = 2  # blank row above + below content
     _PADDING_COLS = 4  # left + right inner padding (2 each side)
-    _TIME_GAP = 2  # spaces between the time column and the text column
+    _COLUMN_GAP = 2  # spaces between the label column and the text column
     _MIN_BOX_WIDTH = 34
 
     def __init__(
         self,
         title: str,
         frame_attr: int,
-        time_attr: int,
+        label_attr: int,
         level_attrs: dict[str, int],
+        keep_tail: bool = False,
     ):
         self._title = title
         self._frame_attr = frame_attr
-        self._time_attr = time_attr
+        self._label_attr = label_attr
         self._level_attrs = level_attrs
+        self._keep_tail = keep_tail
 
-    def draw(
-        self, stdscr: curses.window, height: int, width: int, rows: list[tuple[str, str, str]]
-    ) -> None:
+    def draw(self, stdscr: curses.window, height: int, width: int, rows: list[PopupRow]) -> None:
         if not rows:
             return
 
-        # Keeps the newest rows that fit, clipping the text; the last row and
-        # column stay free.
+        # Keeps the rows and the width that fit, clipping the text; the last
+        # row and column stay free.
         max_rows = height - self._BORDER_THICKNESS - self._PADDING_ROWS - 1
         max_width = width - 1
         if max_rows < 1 or max_width < self._MIN_BOX_WIDTH:
             return
 
-        rows = rows[-max_rows:]
+        rows = rows[-max_rows:] if self._keep_tail else rows[:max_rows]
 
-        time_w = max(len(stamp) for stamp, _, _ in rows)
-        text_w = max(len(text) for _, text, _ in rows)
-        needed = time_w + self._TIME_GAP + text_w + self._PADDING_COLS
+        label_w = max(len(row.label) for row in rows if not row.heading)
+        text_w = max(len(row.text) for row in rows)
+        needed = label_w + self._COLUMN_GAP + text_w + self._PADDING_COLS
         box_w = min(max(needed, self._MIN_BOX_WIDTH), max_width)
         box_h = len(rows) + self._BORDER_THICKNESS + self._PADDING_ROWS
 
@@ -289,17 +215,24 @@ class TUIPopup:
         )
 
         inner_w = box_w - self._PADDING_COLS
-        text_room = inner_w - time_w - self._TIME_GAP
-        for i, (stamp, text, level) in enumerate(rows):
+        text_room = inner_w - label_w - self._COLUMN_GAP
+        for i, row in enumerate(rows):
             line_y = y0 + 2 + i
             with contextlib.suppress(curses.error):
-                stdscr.addstr(line_y, x0 + 2, stamp[:inner_w], self._time_attr)
-                if text_room > 0:
+                if row.heading:
+                    stdscr.addstr(
+                        line_y, x0 + 2, row.label[:inner_w], self._frame_attr | curses.A_BOLD
+                    )
+                    continue
+
+                if row.label:
+                    stdscr.addstr(line_y, x0 + 2, row.label[:inner_w], self._label_attr)
+                if row.text and text_room > 0:
                     stdscr.addstr(
                         line_y,
-                        x0 + 2 + time_w + self._TIME_GAP,
-                        text[:text_room],
-                        self._level_attrs.get(level, 0),
+                        x0 + 2 + label_w + self._COLUMN_GAP,
+                        row.text[:text_room],
+                        self._level_attrs.get(row.level, 0),
                     )
 
 

@@ -12,8 +12,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from frontend.tui.views.base import SpecialCode, ZViewState, ZViewTUIAttributes
-from frontend.tui.widgets import TUIPopup, TUITooltip
+from frontend.tui.views.base import Keybind, SpecialCode, ZViewState, ZViewTUIAttributes
+from frontend.tui.widgets import PopupRow, TUIPopup
 from frontend.zview_tui import _MESSAGE_LOG_SIZE, LogEntry, ZView
 
 
@@ -80,16 +80,18 @@ def app() -> ZView:
     a.state = ZViewState.THREAD_LIST_VIEW
     a.stdscr = MagicMock()
     a._theme = ZViewTUIAttributes.create_mono()
-    a._log_popup = TUIPopup(" Messages ", 0, 0, {})
+    a._log_popup = TUIPopup(" Messages ", 0, 0, {}, keep_tail=True)
+    a._help_popup = TUIPopup(" Help ", 0, 0, {})
     a._overlay = None
     return a
 
 
 @pytest.fixture
-def theme_bindings() -> list[tuple[str, list[tuple[str, str]]]]:
-    """A help popup taller and wider than a minimum terminal can hold."""
-    rows = [(f"key{i}", f"a help line long enough to crowd the popup {i}") for i in range(20)]
-    return [("Global", rows), ("This view", rows)]
+def crowded_bindings() -> list[PopupRow]:
+    """More rows, and wider ones, than a minimum terminal can hold."""
+    return [
+        PopupRow(f"  key{i}", f"a help line long enough to crowd the popup {i}") for i in range(40)
+    ]
 
 
 def test_report_sets_the_status_row_and_logs(app):
@@ -153,11 +155,11 @@ def test_rows_are_oldest_first(app):
 
     rows = app._message_rows()
 
-    assert [text for _, text, _ in rows] == [f"message {i}" for i in range(30)]
+    assert [row.text for row in rows] == [f"message {i}" for i in range(30)]
 
 
 def test_rows_say_so_when_nothing_was_reported(app):
-    assert app._message_rows() == [("--:--:--.---", "Nothing reported yet.", "info")]
+    assert app._message_rows() == [PopupRow("--:--:--.---", "Nothing reported yet.")]
 
 
 def test_rows_carry_the_level_of_each_message(app):
@@ -165,7 +167,7 @@ def test_rows_carry_the_level_of_each_message(app):
     app.report("Warning: MSGQ_LIST_VIEW is not yet implemented.")
     app.report("Error: read timeout")
 
-    assert [level for _, _, level in app._message_rows()] == ["info", "warning", "error"]
+    assert [row.level for row in app._message_rows()] == ["info", "warning", "error"]
 
 
 def test_m_opens_the_log_and_any_key_dismisses_it(app):
@@ -207,22 +209,24 @@ def test_the_view_is_redrawn_under_an_open_overlay(app):
 def test_popup_clips_to_the_terminal_instead_of_vanishing():
     """A long message must not silently cost the whole popup."""
     win = _RecordingWin()
-    entries = [(f"12:00:{i:02d}.000", "read timeout at 0x20000100 " * 20) for i in range(40)]
+    rows = [PopupRow(f"12:00:{i:02d}.000", "read timeout at 0x20000100 " * 20) for i in range(40)]
 
-    TUITooltip([("", entries)], 0, " Messages ").draw(win, 20, 60)
+    TUIPopup(" Messages ", 0, 0, {}, keep_tail=True).draw(win, 20, 60, rows)
 
     assert win.writes, "the popup drew nothing"
     assert max(x + len(text) for _, x, text in win.writes) <= 60
     assert max(y for y, _, _ in win.writes) < 20
 
 
-def test_untitled_section_contributes_no_heading_row():
-    """The log popup titles itself in its box, so its section adds no heading."""
-    titled = TUITooltip([("Global", [("?", "Help")])], 0)
-    untitled = TUITooltip([("", [("12:00:00", "something happened")])], 0, " Messages ")
+def test_help_rows_are_grouped_under_headings(app):
+    """Global bindings first, then the ones the current view adds."""
+    app.views = {app.state: MagicMock()}
+    app.views[app.state].keybindings.return_value = [Keybind("s", "Sort", "Cycle sort keys")]
 
-    assert len(titled._build_rows()) == 2
-    assert len(untitled._build_rows()) == 1
+    rows = app._help_rows()
+
+    assert [row.label for row in rows if row.heading] == ["Global", "This view"]
+    assert rows[-1].text == "Cycle sort keys"
 
 
 def test_a_message_burst_fits_the_smallest_terminal(app):
@@ -261,11 +265,11 @@ def test_the_log_popup_gives_up_on_a_terminal_too_narrow_to_frame(app):
     assert win.writes == []
 
 
-def test_help_popup_fits_the_smallest_terminal(app, theme_bindings):
+def test_help_popup_fits_the_smallest_terminal(app, crowded_bindings):
     """The help popup grows with the view bindings and is clamped the same way."""
     win = _StrictWin(14, 85)
 
-    TUITooltip(theme_bindings, 0, " Help ").draw(win, 14, 85)
+    app._help_popup.draw(win, 14, 85, crowded_bindings)
 
     assert win.writes
     assert max(y for y, _, _ in win.writes) < 13
@@ -275,15 +279,15 @@ def test_help_popup_fits_the_smallest_terminal(app, theme_bindings):
 def test_each_level_is_drawn_in_its_own_color():
     """The level is what a log is read by, so it carries the color."""
     win = _AttrWin()
-    window = TUIPopup(" Messages ", frame_attr=1, time_attr=2, level_attrs={"info": 3, "error": 4})
+    window = TUIPopup(" Messages ", frame_attr=1, label_attr=2, level_attrs={"info": 3, "error": 4})
 
     window.draw(
         win,
         24,
         85,
         [
-            ("12:00:00.100", "Refreshing thread list...", "info"),
-            ("12:00:01.200", "Error: gone", "error"),
+            PopupRow("12:00:00.100", "Refreshing thread list...", "info"),
+            PopupRow("12:00:01.200", "Error: gone", "error"),
         ],
     )
 

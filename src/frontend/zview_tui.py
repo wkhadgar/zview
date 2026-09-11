@@ -24,7 +24,7 @@ from frontend.tui.views.heap_detail import HeapDetailView
 from frontend.tui.views.heap_list import HeapListView
 from frontend.tui.views.thread_detail import ThreadDetailView
 from frontend.tui.views.thread_list import ThreadListView
-from frontend.tui.widgets import TUIPopup, TUITooltip
+from frontend.tui.widgets import PopupRow, TUIPopup
 from orchestrator import ZScraper
 
 _GLOBAL_KEYBINDINGS: list[Keybind] = [
@@ -93,16 +93,21 @@ class ZView:
         theme = self._init_curses()
         self._theme = theme
 
+        levels = {
+            "info": theme.INACTIVE,
+            "warning": theme.PROGRESS_BAR_MEDIUM,
+            "error": theme.ERROR,
+        }
         self._log_popup = TUIPopup(
             " Messages ",
             theme.ACTIVE,
             theme.INACTIVE | curses.A_DIM,
-            {
-                "info": theme.INACTIVE,
-                "warning": theme.PROGRESS_BAR_MEDIUM,
-                "error": theme.ERROR,
-            },
+            levels,
+            keep_tail=True,
         )
+        # Keys carry their own color: the frame and the headings are already
+        # cyan, and the key is what the reader is looking for.
+        self._help_popup = TUIPopup(" Help ", theme.ACTIVE, theme.PROGRESS_BAR_LOW, levels)
 
         self.views: dict[ZViewState, BaseStateView] = {
             ZViewState.FATAL_ERROR: FatalErrorView(self, theme),
@@ -242,22 +247,27 @@ class ZView:
             self._log_popup.draw(self.stdscr, height, width, self._message_rows())
             return
 
-        sections: list[tuple[str, list[tuple[str, str]]]] = [
-            ("Global", [(b.key, b.help_text) for b in _GLOBAL_KEYBINDINGS]),
-        ]
+        self._help_popup.draw(self.stdscr, height, width, self._help_rows())
+
+    def _message_rows(self) -> list[PopupRow]:
+        """The log, oldest first."""
+        if not self.messages:
+            return [PopupRow("--:--:--.---", "Nothing reported yet.")]
+
+        return [PopupRow(entry.time, entry.line(), entry.level) for entry in self.messages]
+
+    def _help_rows(self) -> list[PopupRow]:
+        """The global bindings, then the ones the current view adds."""
+        rows = [PopupRow("Global", heading=True)]
+        rows += [PopupRow(f"  {b.key}", b.help_text) for b in _GLOBAL_KEYBINDINGS]
+
         view_bindings = self.views[self.state].keybindings()
         if view_bindings:
-            sections.append(
-                ("This view", [(b.key, b.help_text) for b in view_bindings]),
-            )
-        TUITooltip(sections, self._theme.HEADER_FOOTER, " Help ").draw(self.stdscr, height, width)
+            rows.append(PopupRow(""))
+            rows.append(PopupRow("This view", heading=True))
+            rows += [PopupRow(f"  {b.key}", b.help_text) for b in view_bindings]
 
-    def _message_rows(self) -> list[tuple[str, str, str]]:
-        """The log as ``(time, text, level)`` rows, oldest first."""
-        if not self.messages:
-            return [("--:--:--.---", "Nothing reported yet.", "info")]
-
-        return [(entry.time, entry.line(), entry.level) for entry in self.messages]
+        return rows
 
     def transition_to(self, new_state: ZViewState):
         """Centralized state transition and data pipeline management."""
