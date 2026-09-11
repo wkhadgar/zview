@@ -99,7 +99,7 @@ def test_report_sets_the_status_row_and_logs(app):
 
     assert app.status_message == "Refreshing thread list..."
     assert [e.text for e in app.messages] == ["Refreshing thread list..."]
-    assert re.fullmatch(r"\d{2}:\d{2}:\d{2}\.\d{3}", app.messages[0].time)
+    assert re.fullmatch(r"\d{2}:\d{2}:\d{2}\.\d", app.messages[0].time)
 
 
 def test_heartbeat_does_not_reach_the_log(app):
@@ -124,6 +124,18 @@ def test_repeats_collapse_into_a_count(app):
     ]
     assert app.messages[-1].count == 12
     assert app.messages[-1].line() == "Error: read timeout (x12)"
+
+
+def test_a_collapsed_time_is_marked_as_the_first_of_several(app):
+    """The time of a collapsed entry is the first of many, not the only one."""
+    app.report("Error: read timeout")
+    once = app._message_rows()[-1].label
+
+    app.report("Error: read timeout")
+    collapsed = app._message_rows()[-1].label
+
+    assert not once.endswith("+")
+    assert collapsed == f"{once}+"
 
 
 def test_distinct_messages_are_kept_apart(app):
@@ -159,7 +171,7 @@ def test_rows_are_oldest_first(app):
 
 
 def test_rows_say_so_when_nothing_was_reported(app):
-    assert app._message_rows() == [PopupRow("--:--:--.---", "Nothing reported yet.")]
+    assert app._message_rows() == [PopupRow("--:--:--.-", "Nothing reported yet.")]
 
 
 def test_rows_carry_the_level_of_each_message(app):
@@ -192,7 +204,7 @@ def test_help_and_the_log_do_not_stack(app):
 
 
 def test_log_entry_line_omits_the_count_of_a_single_report():
-    assert LogEntry("12:00:00.000", "once").line() == "once"
+    assert LogEntry("12:00:00", "once").line() == "once"
 
 
 def test_the_view_is_redrawn_under_an_open_overlay(app):
@@ -209,7 +221,7 @@ def test_the_view_is_redrawn_under_an_open_overlay(app):
 def test_popup_clips_to_the_terminal_instead_of_vanishing():
     """A long message must not silently cost the whole popup."""
     win = _RecordingWin()
-    rows = [PopupRow(f"12:00:{i:02d}.000", "read timeout at 0x20000100 " * 20) for i in range(40)]
+    rows = [PopupRow(f"12:00:{i:02d}", "read timeout at 0x20000100 " * 20) for i in range(40)]
 
     TUIPopup(" Messages ", 0, 0, {}, keep_tail=True).draw(win, 20, 60, rows)
 
@@ -286,15 +298,15 @@ def test_each_level_is_drawn_in_its_own_color():
         24,
         85,
         [
-            PopupRow("12:00:00.100", "Refreshing thread list...", "info"),
-            PopupRow("12:00:01.200", "Error: gone", "error"),
+            PopupRow("12:00:00", "Refreshing thread list...", "info"),
+            PopupRow("12:00:01", "Error: gone", "error"),
         ],
     )
 
     painted = {text.strip(): attr for _, _, text, attr in win.writes if text.strip()}
     assert painted["Refreshing thread list..."] == 3
     assert painted["Error: gone"] == 4
-    assert painted["12:00:00.100"] == 2
+    assert painted["12:00:00"] == 2
 
 
 class _AttrWin(_StrictWin):

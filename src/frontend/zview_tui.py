@@ -53,6 +53,10 @@ class LogEntry:
     def line(self) -> str:
         return self.text if self.count == 1 else f"{self.text} (x{self.count})"
 
+    def stamp(self) -> str:
+        """The time, marked when it is the first of several rather than the only one."""
+        return self.time if self.count == 1 else f"{self.time}+"
+
 
 class ZView:
     """
@@ -185,7 +189,8 @@ class ZView:
         elif text.startswith(_WARNING_PREFIXES):
             level = "warning"
 
-        self.messages.append(LogEntry(datetime.now().strftime("%H:%M:%S.%f")[:-3], text, level))
+        # One decimal: enough to order messages inside a poll.
+        self.messages.append(LogEntry(datetime.now().strftime("%H:%M:%S.%f")[:-5], text, level))
 
     def purge_queue(self):
         with self.data_queue.mutex:
@@ -252,9 +257,9 @@ class ZView:
     def _message_rows(self) -> list[PopupRow]:
         """The log, oldest first."""
         if not self.messages:
-            return [PopupRow("--:--:--.---", "Nothing reported yet.")]
+            return [PopupRow("--:--:--.-", "Nothing reported yet.")]
 
-        return [PopupRow(entry.time, entry.line(), entry.level) for entry in self.messages]
+        return [PopupRow(entry.stamp(), entry.line(), entry.level) for entry in self.messages]
 
     def _help_rows(self) -> list[PopupRow]:
         """The global bindings, then the ones the current view adds."""
