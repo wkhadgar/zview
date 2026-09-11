@@ -217,10 +217,10 @@ class ThreadListView(BaseStateView):
 
             case SpecialCode.REFRESH:
                 if not self.controller.scraper._m_scraper.is_live:
-                    self.controller.status_message = "Refresh is not available in replay mode."
+                    self.controller.report("Refresh is not available in replay mode.")
                     return None
 
-                self.controller.status_message = "Refreshing thread list..."
+                self.controller.report("Refreshing thread list...")
 
                 try:
                     self.controller.scraper.update_available_threads()
@@ -228,7 +228,7 @@ class ThreadListView(BaseStateView):
                     self.controller.scraper.reset_runtime_state()
                     self.controller.purge_queue()
                 except Exception as e:
-                    self.controller.status_message = f"Error refreshing threads: {e}"
+                    self.controller.report(f"Error refreshing threads: {e}")
 
                 return None
 

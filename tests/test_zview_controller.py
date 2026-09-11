@@ -4,7 +4,9 @@
 
 """Coverage for ``ZView`` controller logic that doesn't require real curses."""
 
+import curses
 import queue
+from collections import deque
 from unittest.mock import MagicMock
 
 import pytest
@@ -21,12 +23,15 @@ def app() -> ZView:
     a.threads_data = []
     a.heaps_data = []
     a.status_message = ""
+    a.messages = deque(maxlen=64)
     a.update_count = 0
     a.idle_thread = None
     a.data_queue = queue.Queue()
     a.scraper = MagicMock()
     a.scraper.idle_threads_address = 0xDEAD
     a.state = ZViewState.THREAD_LIST_VIEW
+    a.stdscr = MagicMock()
+    a._overlay = None
     return a
 
 
@@ -99,3 +104,28 @@ def test_process_data_empty_payload_does_not_clear_existing(app):
     app.threads_data = [main]
     app.process_data({})
     assert app.threads_data == [main]
+
+
+def test_a_resize_dismisses_nothing(app):
+    """A resize arrives as a key, but it is a size change, not a keypress."""
+    app._overlay = "messages"
+    app.views = {app.state: MagicMock()}
+    app.stdscr.getch.return_value = curses.KEY_RESIZE
+
+    app.process_events()
+
+    assert app._overlay == "messages"
+    assert app.stdscr.clear.called
+    assert not app.views[app.state].handle_input.called
+
+
+def test_a_frame_rejected_mid_resize_does_not_end_the_session(app):
+    """The screen shrank under the frame: drop it, the next one fits."""
+    app.views = {app.state: MagicMock()}
+    app.views[app.state].render.side_effect = curses.error("addwstr() returned ERR")
+    app.stdscr.getmaxyx.return_value = (57, 209)
+    app.min_dimensions = (14, 85)
+
+    app.draw_frame()
+
+    assert app.views[app.state].render.called
