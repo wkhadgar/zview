@@ -29,12 +29,12 @@ def controller() -> MagicMock:
 
 
 def test_thread_list_footer_truncates_at_max_with_ellipsis(controller, theme):
-    """5 view bindings -> ``Help: ?`` prepended, top 3 shown, trailing overflow indicator."""
+    """6 view bindings -> ``Help: ?`` prepended, top 3 shown, trailing overflow indicator."""
     view = ThreadListView(controller, theme)
     hint = view._footer_hint().rstrip()
     parts = [p.strip() for p in hint.split("|")]
     assert parts[0] == "Help: ?"
-    assert parts[1:4] == ["Detail: <Enter>", "Heaps: h", "Refresh: r"]
+    assert parts[1:4] == ["Detail: <Enter>", "Heaps: h", "Kernel objects: k"]
     assert parts[-1] == "…"
 
 
