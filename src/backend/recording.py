@@ -6,6 +6,7 @@
 
 import gzip
 import json
+import logging
 import time
 from collections.abc import Sequence
 from contextlib import ExitStack
@@ -14,7 +15,10 @@ from typing import IO
 
 from backend.base import AbstractScraper
 
-SCHEMA_VERSION = "zview-recording/2"
+logger = logging.getLogger("zview.recording")
+
+# /3 added the header's ``features`` list.
+SCHEMA_VERSION = "zview-recording/3"
 
 
 class RecordingScraper(AbstractScraper):
@@ -31,6 +35,20 @@ class RecordingScraper(AbstractScraper):
         self._fp: IO | None = None
         self._stack = ExitStack()
         self.endianess = wrapped.endianess
+        self._features: tuple[str, ...] = ()
+
+    def declare_features(self, features: Sequence[str]) -> None:
+        """
+        Declare which polling features this session samples.
+
+        Must be called before ``connect``, which writes the header; a later
+        call is ignored with a warning.
+        """
+        if self._fp is not None:
+            logger.warning("Recording header already written; feature declaration ignored.")
+            return
+
+        self._features = tuple(features)
 
     def _open(self) -> None:
         """Open the gzip stream and write the header. Idempotent."""
@@ -45,6 +63,7 @@ class RecordingScraper(AbstractScraper):
             "schema": SCHEMA_VERSION,
             "endianess": self.endianess,
             "created_at": time.time(),
+            "features": list(self._features),
         }
         self._fp.write(json.dumps(header) + "\n")
 
