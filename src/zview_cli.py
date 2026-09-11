@@ -230,6 +230,14 @@ def _do_replay(args) -> int:
     return 0
 
 
+def _waiters(waiters) -> str:
+    """Render a waiter list. ``None`` prints as ``unknown``, empty as ``-``."""
+    if waiters is None:
+        return "unknown"
+
+    return ",".join(waiters) if waiters else "-"
+
+
 def _do_dump(args) -> int:
     if args.input:
         backend = ReplayScraper(args.input, honor_timing=False)
@@ -252,6 +260,14 @@ def _do_dump(args) -> int:
             print(
                 f"heap {h.name:20s} free={h.free_bytes} "
                 f"alloc={h.allocated_bytes} max={h.max_allocated_bytes}"
+            )
+        for s in frame.get("semaphores", []):
+            print(f"sem  {s.name:20s} {s.count}/{s.limit}  waiters={_waiters(s.waiters)}")
+        for m in frame.get("mutexes", []):
+            state = f"owner={m.owner_name or hex(m.owner_address)} depth={m.lock_count}"
+            print(
+                f"mtx  {m.name:20s} {'LOCKED' if m.is_locked else 'FREE':6s} {state} "
+                f"waiters={_waiters(m.waiters)}"
             )
     return 0
 
