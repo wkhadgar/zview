@@ -408,8 +408,12 @@ class ZScraper:
 
         final: list[ThreadInfo] = []
         for data in polled:
+            # The two counters are read at different instants, so a share can
+            # land above the total it divides.
             absolute_cpu = (
-                (data["usage_delta"] / cpu_cycles_delta * 100) if cpu_cycles_delta > 0 else 0.0
+                min((data["usage_delta"] / cpu_cycles_delta) * 100.0, 100.0)
+                if cpu_cycles_delta > 0
+                else 0.0
             )
 
             if data["info"].address == self.idle_threads_address:
