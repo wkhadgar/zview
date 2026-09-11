@@ -35,3 +35,16 @@ class KernelLayout:
     heap_allocated_bytes: int | None = None
     heap_max_allocated_bytes: int | None = None
     heap_end_chunk: int | None = None
+
+    # Optional: synchronization primitives. Resolved per group.
+    sem_wait_q: int | None = None
+    sem_count: int | None = None
+    sem_limit: int | None = None
+
+    mutex_wait_q: int | None = None
+    mutex_owner: int | None = None
+    mutex_lock_count: int | None = None
+
+    # _thread_base.qnode_dlist within k_thread: the link a queued thread is
+    # threaded by.
+    thread_qnode: int | None = None
