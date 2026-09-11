@@ -9,6 +9,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime
 
 from backend.base import HeapInfo, ThreadInfo
 from frontend.tui.views.base import (
@@ -23,7 +24,7 @@ from frontend.tui.views.heap_detail import HeapDetailView
 from frontend.tui.views.heap_list import HeapListView
 from frontend.tui.views.thread_detail import ThreadDetailView
 from frontend.tui.views.thread_list import ThreadListView
-from frontend.tui.widgets import TUITooltip
+from frontend.tui.widgets import TUIPopup, TUITooltip
 from orchestrator import ZScraper
 
 _GLOBAL_KEYBINDINGS: list[Keybind] = [
@@ -35,6 +36,10 @@ _GLOBAL_KEYBINDINGS: list[Keybind] = [
 
 _MESSAGE_LOG_SIZE = 64
 
+# Message levels, by how a reported message opens.
+_ERROR_PREFIXES = ("Error", "Unable", "TARGET LOST", "Reconnection failed")
+_WARNING_PREFIXES = ("Warning",)
+
 
 @dataclass
 class LogEntry:
@@ -42,6 +47,7 @@ class LogEntry:
 
     time: str
     text: str
+    level: str = "info"
     count: int = 1
 
     def line(self) -> str:
@@ -70,8 +76,7 @@ class ZView:
         self.threads_data: list[ThreadInfo] = []
         self.heaps_data: list[HeapInfo] = []
         self.status_message: str = ""
-        # The status row is overwritten by the heartbeat on every poll, so
-        # reported messages are kept here to stay readable.
+        # One entry per reported message, newest last.
         self.messages: deque[LogEntry] = deque(maxlen=_MESSAGE_LOG_SIZE)
         self.data_queue = queue.Queue()
         self.stop_event = threading.Event()
@@ -87,6 +92,17 @@ class ZView:
 
         theme = self._init_curses()
         self._theme = theme
+
+        self._log_popup = TUIPopup(
+            " Messages ",
+            theme.ACTIVE,
+            theme.INACTIVE | curses.A_DIM,
+            {
+                "info": theme.INACTIVE,
+                "warning": theme.PROGRESS_BAR_MEDIUM,
+                "error": theme.ERROR,
+            },
+        )
 
         self.views: dict[ZViewState, BaseStateView] = {
             ZViewState.FATAL_ERROR: FatalErrorView(self, theme),
@@ -148,9 +164,8 @@ class ZView:
         """
         Put a message on the status row and into the message log.
 
-        A message repeated back to back bumps the count of the entry it
-        repeats instead of adding another, so a per-poll error cannot push
-        everything else out of the log.
+        A message repeated back to back bumps the count of the last entry
+        instead of adding another.
         """
         self.status_message = message
 
@@ -159,7 +174,13 @@ class ZView:
             self.messages[-1].count += 1
             return
 
-        self.messages.append(LogEntry(time.strftime("%H:%M:%S"), text))
+        level = "info"
+        if text.startswith(_ERROR_PREFIXES):
+            level = "error"
+        elif text.startswith(_WARNING_PREFIXES):
+            level = "warning"
+
+        self.messages.append(LogEntry(datetime.now().strftime("%H:%M:%S.%f")[:-3], text, level))
 
     def purge_queue(self):
         with self.data_queue.mutex:
@@ -218,9 +239,7 @@ class ZView:
 
     def _draw_overlay(self, height: int, width: int) -> None:
         if self._overlay == "messages":
-            TUITooltip(
-                [("", self._message_rows(height))], self._theme.HEADER_FOOTER, " Messages "
-            ).draw(self.stdscr, height, width)
+            self._log_popup.draw(self.stdscr, height, width, self._message_rows())
             return
 
         sections: list[tuple[str, list[tuple[str, str]]]] = [
@@ -233,15 +252,12 @@ class ZView:
             )
         TUITooltip(sections, self._theme.HEADER_FOOTER, " Help ").draw(self.stdscr, height, width)
 
-    def _message_rows(self, height: int) -> list[tuple[str, str]]:
-        """The log as ``(time, text)`` rows, oldest first."""
+    def _message_rows(self) -> list[tuple[str, str, str]]:
+        """The log as ``(time, text, level)`` rows, oldest first."""
         if not self.messages:
-            return [("", "Nothing reported yet.")]
+            return [("--:--:--.---", "Nothing reported yet.", "info")]
 
-        # The popup does not scroll and is not drawn at all when it overflows
-        # the terminal, so only the newest entries that fit are listed.
-        listed = list(self.messages)[-max(1, height - 6) :]
-        return [(entry.time, entry.line()) for entry in listed]
+        return [(entry.time, entry.line(), entry.level) for entry in self.messages]
 
     def transition_to(self, new_state: ZViewState):
         """Centralized state transition and data pipeline management."""

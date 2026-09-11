@@ -4,15 +4,43 @@
 
 """Coverage for the message log behind the ``m`` overlay."""
 
+import curses
 import queue
+import re
 from collections import deque
 from unittest.mock import MagicMock
 
 import pytest
 
 from frontend.tui.views.base import SpecialCode, ZViewState, ZViewTUIAttributes
-from frontend.tui.widgets import TUITooltip
+from frontend.tui.widgets import TUIPopup, TUITooltip
 from frontend.zview_tui import _MESSAGE_LOG_SIZE, LogEntry, ZView
+
+
+class _StrictWin:
+    """Window stand-in that rejects the writes curses rejects."""
+
+    def __init__(self, height: int, width: int):
+        self.height = height
+        self.width = width
+        self.writes: list[tuple[int, int, str]] = []
+
+    def addstr(self, y, x, text, attr=0):
+        del attr
+        if y < 0 or x < 0 or y >= self.height or x + len(text) > self.width:
+            raise curses.error("addwstr() returned ERR")
+        if y == self.height - 1 and x + len(text) == self.width:
+            raise curses.error("addwstr() returned ERR")
+        self.writes.append((y, x, text))
+
+    def attron(self, attr):
+        del attr
+
+    def attroff(self, attr):
+        del attr
+
+    def getmaxyx(self):
+        return self.height, self.width
 
 
 class _RecordingWin:
@@ -52,8 +80,16 @@ def app() -> ZView:
     a.state = ZViewState.THREAD_LIST_VIEW
     a.stdscr = MagicMock()
     a._theme = ZViewTUIAttributes.create_mono()
+    a._log_popup = TUIPopup(" Messages ", 0, 0, {})
     a._overlay = None
     return a
+
+
+@pytest.fixture
+def theme_bindings() -> list[tuple[str, list[tuple[str, str]]]]:
+    """A help popup taller and wider than a minimum terminal can hold."""
+    rows = [(f"key{i}", f"a help line long enough to crowd the popup {i}") for i in range(20)]
+    return [("Global", rows), ("This view", rows)]
 
 
 def test_report_sets_the_status_row_and_logs(app):
@@ -61,7 +97,7 @@ def test_report_sets_the_status_row_and_logs(app):
 
     assert app.status_message == "Refreshing thread list..."
     assert [e.text for e in app.messages] == ["Refreshing thread list..."]
-    assert app.messages[0].time
+    assert re.fullmatch(r"\d{2}:\d{2}:\d{2}\.\d{3}", app.messages[0].time)
 
 
 def test_heartbeat_does_not_reach_the_log(app):
@@ -111,19 +147,25 @@ def test_log_is_bounded(app):
     assert app.messages[-1].text == f"message {_MESSAGE_LOG_SIZE * 2 - 1}"
 
 
-def test_rows_are_oldest_first_and_capped_by_height(app):
+def test_rows_are_oldest_first(app):
     for i in range(30):
         app.report(f"message {i}")
 
-    rows = app._message_rows(14)
+    rows = app._message_rows()
 
-    assert len(rows) == 8
-    assert rows[0][1] == "message 22"
-    assert rows[-1][1] == "message 29"
+    assert [text for _, text, _ in rows] == [f"message {i}" for i in range(30)]
 
 
 def test_rows_say_so_when_nothing_was_reported(app):
-    assert app._message_rows(24) == [("", "Nothing reported yet.")]
+    assert app._message_rows() == [("--:--:--.---", "Nothing reported yet.", "info")]
+
+
+def test_rows_carry_the_level_of_each_message(app):
+    app.report("Refreshing thread list...")
+    app.report("Warning: MSGQ_LIST_VIEW is not yet implemented.")
+    app.report("Error: read timeout")
+
+    assert [level for _, _, level in app._message_rows()] == ["info", "warning", "error"]
 
 
 def test_m_opens_the_log_and_any_key_dismisses_it(app):
@@ -148,14 +190,11 @@ def test_help_and_the_log_do_not_stack(app):
 
 
 def test_log_entry_line_omits_the_count_of_a_single_report():
-    assert LogEntry("12:00:00", "once").line() == "once"
+    assert LogEntry("12:00:00.000", "once").line() == "once"
 
 
 def test_the_view_is_redrawn_under_an_open_overlay(app):
-    """
-    An overlay that latched its drawing left the screen frozen, so a resize
-    or a repaint showed a stale frame. Both layers are drawn every frame.
-    """
+    """Both layers are drawn every frame, so an open overlay cannot freeze one."""
     app.views = {app.state: MagicMock()}
     app._overlay = "messages"
 
@@ -168,7 +207,7 @@ def test_the_view_is_redrawn_under_an_open_overlay(app):
 def test_popup_clips_to_the_terminal_instead_of_vanishing():
     """A long message must not silently cost the whole popup."""
     win = _RecordingWin()
-    entries = [(f"12:00:{i:02d}", "read timeout at 0x20000100 " * 20) for i in range(40)]
+    entries = [(f"12:00:{i:02d}.000", "read timeout at 0x20000100 " * 20) for i in range(40)]
 
     TUITooltip([("", entries)], 0, " Messages ").draw(win, 20, 60)
 
@@ -184,3 +223,84 @@ def test_untitled_section_contributes_no_heading_row():
 
     assert len(titled._build_rows()) == 2
     assert len(untitled._build_rows()) == 1
+
+
+def test_a_message_burst_fits_the_smallest_terminal(app):
+    """A full log stays inside the terminal at every supported size."""
+    for i in range(_MESSAGE_LOG_SIZE * 2):
+        app.report(f"Error: read timeout at 0x{i:08X} on a very long bus name")
+
+    for height, width in ((14, 85), (24, 85), (57, 209)):
+        win = _StrictWin(height, width)
+        app._log_popup.draw(win, height, width, app._message_rows())
+
+        assert win.writes, f"drew nothing at {width}x{height}"
+        assert max(y for y, _, _ in win.writes) < height - 1
+        assert max(x + len(text) for _, x, text in win.writes) < width
+
+
+def test_the_log_popup_keeps_the_newest_entries_that_fit(app):
+    """What is dropped is the top of the log, not the message just reported."""
+    for i in range(40):
+        app.report(f"message {i}")
+
+    win = _StrictWin(14, 85)
+    app._log_popup.draw(win, 14, 85, app._message_rows())
+
+    assert any("message 39" in text for _, _, text in win.writes)
+    assert not any("message 0 " in text for _, _, text in win.writes)
+
+
+def test_the_log_popup_gives_up_on_a_terminal_too_narrow_to_frame(app):
+    """Too small to frame is not drawn at all, rather than drawn broken."""
+    app.report("Error: read timeout")
+
+    win = _StrictWin(14, 20)
+    app._log_popup.draw(win, 14, 20, app._message_rows())
+
+    assert win.writes == []
+
+
+def test_help_popup_fits_the_smallest_terminal(app, theme_bindings):
+    """The help popup grows with the view bindings and is clamped the same way."""
+    win = _StrictWin(14, 85)
+
+    TUITooltip(theme_bindings, 0, " Help ").draw(win, 14, 85)
+
+    assert win.writes
+    assert max(y for y, _, _ in win.writes) < 13
+    assert max(x + len(text) for _, x, text in win.writes) < 85
+
+
+def test_each_level_is_drawn_in_its_own_color():
+    """The level is what a log is read by, so it carries the color."""
+    win = _AttrWin()
+    window = TUIPopup(" Messages ", frame_attr=1, time_attr=2, level_attrs={"info": 3, "error": 4})
+
+    window.draw(
+        win,
+        24,
+        85,
+        [
+            ("12:00:00.100", "Refreshing thread list...", "info"),
+            ("12:00:01.200", "Error: gone", "error"),
+        ],
+    )
+
+    painted = {text.strip(): attr for _, _, text, attr in win.writes if text.strip()}
+    assert painted["Refreshing thread list..."] == 3
+    assert painted["Error: gone"] == 4
+    assert painted["12:00:00.100"] == 2
+
+
+class _AttrWin(_StrictWin):
+    """``_StrictWin`` that also keeps the attribute of every write."""
+
+    def __init__(self):
+        super().__init__(24, 85)
+        self.writes: list[tuple[int, int, str, int]] = []
+
+    def addstr(self, y, x, text, attr=0):
+        if y >= self.height or x + len(text) > self.width:
+            raise curses.error("addwstr() returned ERR")
+        self.writes.append((y, x, text, attr))

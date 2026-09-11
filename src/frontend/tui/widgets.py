@@ -178,10 +178,11 @@ class TUITooltip:
     def draw(self, stdscr: curses.window, height: int, width: int) -> None:
         rows = self._build_rows()
 
-        # The popup does not scroll, so it takes the rows and the width that
-        # fit the terminal and clips whatever is left over.
-        max_rows = height - self._BORDER_THICKNESS - self._PADDING_ROWS
-        if max_rows < 1 or width < self._PADDING_COLS + 1:
+        # Keeps the rows and the width that fit, clipping the rest; the last
+        # row and column stay free.
+        max_rows = height - self._BORDER_THICKNESS - self._PADDING_ROWS - 1
+        max_width = width - 1
+        if max_rows < 1 or max_width < self._PADDING_COLS + 1:
             return
         rows = rows[:max_rows]
 
@@ -190,7 +191,7 @@ class TUITooltip:
         desc_w = max((len(d) for _, d in visible), default=0)
 
         inner_w = key_w + self._KEY_DESC_GAP + desc_w
-        box_w = min(max(inner_w + self._PADDING_COLS, self._MIN_BOX_WIDTH), width)
+        box_w = min(max(inner_w + self._PADDING_COLS, self._MIN_BOX_WIDTH), max_width)
         box_h = len(rows) + self._BORDER_THICKNESS + self._PADDING_ROWS
 
         text_w = box_w - self._PADDING_COLS
@@ -226,6 +227,80 @@ class TUITooltip:
                             desc[:desc_room],
                             self._attr,
                         )
+
+
+class TUIPopup:
+    """
+    Centered popup listing timestamped messages, oldest first.
+
+    Rows are ``(time, text, level)``, where ``level`` picks the text color.
+    The popup blanks the area it covers rather than tinting it.
+    """
+
+    _BORDER_THICKNESS = 2  # top + bottom
+    _PADDING_ROWS = 2  # blank row above + below content
+    _PADDING_COLS = 4  # left + right inner padding (2 each side)
+    _TIME_GAP = 2  # spaces between the time column and the text column
+    _MIN_BOX_WIDTH = 34
+
+    def __init__(
+        self,
+        title: str,
+        frame_attr: int,
+        time_attr: int,
+        level_attrs: dict[str, int],
+    ):
+        self._title = title
+        self._frame_attr = frame_attr
+        self._time_attr = time_attr
+        self._level_attrs = level_attrs
+
+    def draw(
+        self, stdscr: curses.window, height: int, width: int, rows: list[tuple[str, str, str]]
+    ) -> None:
+        if not rows:
+            return
+
+        # Keeps the newest rows that fit, clipping the text; the last row and
+        # column stay free.
+        max_rows = height - self._BORDER_THICKNESS - self._PADDING_ROWS - 1
+        max_width = width - 1
+        if max_rows < 1 or max_width < self._MIN_BOX_WIDTH:
+            return
+
+        rows = rows[-max_rows:]
+
+        time_w = max(len(stamp) for stamp, _, _ in rows)
+        text_w = max(len(text) for _, text, _ in rows)
+        needed = time_w + self._TIME_GAP + text_w + self._PADDING_COLS
+        box_w = min(max(needed, self._MIN_BOX_WIDTH), max_width)
+        box_h = len(rows) + self._BORDER_THICKNESS + self._PADDING_ROWS
+
+        y0 = (height - box_h) // 2
+        x0 = (width - box_w) // 2
+
+        blank = " " * box_w
+        for row_offset in range(box_h):
+            with contextlib.suppress(curses.error):
+                stdscr.addstr(y0 + row_offset, x0, blank)
+
+        TUIBox(self._title, " Press any key to dismiss ", self._frame_attr).draw(
+            stdscr, y0, x0, box_h, box_w
+        )
+
+        inner_w = box_w - self._PADDING_COLS
+        text_room = inner_w - time_w - self._TIME_GAP
+        for i, (stamp, text, level) in enumerate(rows):
+            line_y = y0 + 2 + i
+            with contextlib.suppress(curses.error):
+                stdscr.addstr(line_y, x0 + 2, stamp[:inner_w], self._time_attr)
+                if text_room > 0:
+                    stdscr.addstr(
+                        line_y,
+                        x0 + 2 + time_w + self._TIME_GAP,
+                        text[:text_room],
+                        self._level_attrs.get(level, 0),
+                    )
 
 
 class TUIGraph(TUIBox):
