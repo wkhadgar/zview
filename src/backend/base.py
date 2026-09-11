@@ -9,6 +9,7 @@ replay). Shared kernel-level dataclasses and the probe error hierarchy live
 here as well.
 """
 
+import enum
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -77,6 +78,51 @@ class HeapInfo:
     max_allocated_bytes: int
     usage_percent: float
     chunks: list[dict] | None
+
+
+@dataclass(frozen=True)
+class SemaphoreInfo:
+    """Snapshot of a Zephyr ``k_sem``."""
+
+    name: str
+    address: int
+    count: int
+    limit: int
+    # ``None``: the wait queue layout is not walkable. ``()``: nobody waiting.
+    waiters: tuple[str, ...] | None = None
+
+
+class MutexState(enum.IntEnum):
+    """Lock state of a ``k_mutex``, ordered by contention."""
+
+    FREE = 0
+    LOCKED = 1
+    CONTENDED = 2
+
+
+@dataclass(frozen=True)
+class MutexInfo:
+    """Snapshot of a Zephyr ``k_mutex``."""
+
+    name: str
+    address: int
+    lock_count: int
+    owner_address: int
+    # ``None`` when the mutex is free or the owner is not in the thread table.
+    owner_name: str | None = None
+    waiters: tuple[str, ...] | None = None
+
+    @property
+    def is_locked(self) -> bool:
+        return self.owner_address != 0
+
+    @property
+    def state(self) -> MutexState:
+        """Held with threads queued on it is contention; held alone is not."""
+        if not self.is_locked:
+            return MutexState.FREE
+
+        return MutexState.CONTENDED if self.waiters else MutexState.LOCKED
 
 
 class AbstractScraper(ABC):

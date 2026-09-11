@@ -16,4 +16,6 @@ ZView is an open-source `west` extension designed for high-fidelity Zephyr RTOS 
 
 * **Environment**: Development is supported on Linux (preferred), macOS, and Windows.
 
+* **README assets**: The gifs are recorded with [vhs](https://github.com/charmbracelet/vhs) at 920x560; the tapes stay out of the repository, since the workspace and probe differ per machine.
+
 * **Community & Support**: For architectural questions or assistance, refer to the project repository or open an issue with the `question` tag.

@@ -211,3 +211,7 @@ __marimo__/
 # Claude
 .claude
 PLAN.md
+
+# VHS tapes that record the README assets. The launch command, the workspace
+# and the probe differ per machine, so they are kept locally.
+docs/assets/vhs-tapes/

@@ -17,10 +17,9 @@ from orchestrator import ZScraper
 def serialize_frame(frame: dict) -> dict:
     """Convert a polling frame's dataclasses into a JSON-serializable dict."""
     out: dict = {}
-    if "threads" in frame:
-        out["threads"] = [dataclasses.asdict(t) for t in frame["threads"]]
-    if "heaps" in frame:
-        out["heaps"] = [dataclasses.asdict(h) for h in frame["heaps"]]
+    for key in ("threads", "heaps", "semaphores", "mutexes"):
+        if key in frame:
+            out[key] = [dataclasses.asdict(entry) for entry in frame[key]]
     return out
 
 
@@ -91,8 +90,12 @@ def record_session(
         raise ValueError("record_session requires either duration or frames bound")
 
     recorder = RecordingScraper(backend, out_path)
+    # Built before connect: the header is written there, and the constructor
+    # only reads the ELF.
+    scraper = ZScraper(recorder, elf_path)
+    recorder.declare_features(scraper.active_features())
+
     with recorder:
-        scraper = ZScraper(recorder, elf_path)
         scraper.update_available_threads()
         scraper.reset_thread_pool()
         scraper.capture_all_heap_chunks = scraper.has_heaps
