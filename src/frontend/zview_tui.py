@@ -240,6 +240,12 @@ class ZView:
         except Exception as e:
             self.process_data({"fatal_error": f"Reconnection failed: {e}"})
 
+    def draw_frame(self) -> None:
+        """Draw one frame, dropping it if the screen shrank under its writes."""
+        height, width = self.stdscr.getmaxyx()
+        with contextlib.suppress(curses.error):
+            self.draw_tui(height, width)
+
     def draw_tui(self, height, width):
         if height < self.min_dimensions[0] or width < self.min_dimensions[1]:
             self.stdscr.erase()
@@ -354,6 +360,11 @@ class ZView:
         if key == -1:
             return
 
+        if key == curses.KEY_RESIZE:
+            # A size change, not a keypress: it dismisses nothing.
+            self.stdscr.clear()
+            return
+
         if self._overlay:
             self._overlay = None
             self.stdscr.clear()
@@ -429,9 +440,7 @@ class ZView:
                     data = self.data_queue.get_nowait()
                     self.process_data(data)
 
-            h, w = self.stdscr.getmaxyx()
-
-            self.draw_tui(h, w)
+            self.draw_frame()
 
             self.process_events()
 
