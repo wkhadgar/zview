@@ -10,9 +10,29 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from frontend.tui.views.base import SpecialCode, ZViewState
+from frontend.tui.views.base import SpecialCode, ZViewState, ZViewTUIAttributes
 from frontend.tui.widgets import TUITooltip
 from frontend.zview_tui import _MESSAGE_LOG_SIZE, LogEntry, ZView
+
+
+class _RecordingWin:
+    """Minimal curses window stand-in recording the writes it receives."""
+
+    def __init__(self):
+        self.writes: list[tuple[int, int, str]] = []
+
+    def addstr(self, y, x, text, attr=0):
+        del attr
+        self.writes.append((y, x, text))
+
+    def attron(self, attr):
+        del attr
+
+    def attroff(self, attr):
+        del attr
+
+    def getmaxyx(self):
+        return 20, 60
 
 
 @pytest.fixture
@@ -31,8 +51,8 @@ def app() -> ZView:
     a.scraper.idle_threads_address = 0xDEAD
     a.state = ZViewState.THREAD_LIST_VIEW
     a.stdscr = MagicMock()
+    a._theme = ZViewTUIAttributes.create_mono()
     a._overlay = None
-    a._overlay_drawn = False
     return a
 
 
@@ -129,6 +149,32 @@ def test_help_and_the_log_do_not_stack(app):
 
 def test_log_entry_line_omits_the_count_of_a_single_report():
     assert LogEntry("12:00:00", "once").line() == "once"
+
+
+def test_the_view_is_redrawn_under_an_open_overlay(app):
+    """
+    An overlay that latched its drawing left the screen frozen, so a resize
+    or a repaint showed a stale frame. Both layers are drawn every frame.
+    """
+    app.views = {app.state: MagicMock()}
+    app._overlay = "messages"
+
+    for _ in range(3):
+        app.draw_tui(40, 120)
+
+    assert app.views[app.state].render.call_count == 3
+
+
+def test_popup_clips_to_the_terminal_instead_of_vanishing():
+    """A long message must not silently cost the whole popup."""
+    win = _RecordingWin()
+    entries = [(f"12:00:{i:02d}", "read timeout at 0x20000100 " * 20) for i in range(40)]
+
+    TUITooltip([("", entries)], 0, " Messages ").draw(win, 20, 60)
+
+    assert win.writes, "the popup drew nothing"
+    assert max(x + len(text) for _, x, text in win.writes) <= 60
+    assert max(y for y, _, _ in win.writes) < 20
 
 
 def test_untitled_section_contributes_no_heading_row():

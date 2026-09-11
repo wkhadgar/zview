@@ -84,7 +84,6 @@ class ZView:
         self.idle_thread: ThreadInfo | None = None
         # Name of the open overlay ("help" or "messages"), or None.
         self._overlay: str | None = None
-        self._overlay_drawn: bool = False
 
         theme = self._init_curses()
         self._theme = theme
@@ -211,17 +210,11 @@ class ZView:
                     self.stdscr.addstr(start_y + i, 0, centered_line)
             return
 
-        if self._overlay and self._overlay_drawn:
-            return
-
         self.views[self.state].render(self.stdscr, height, width)
 
         if self._overlay:
             self._draw_overlay(height, width)
             self.stdscr.refresh()
-            self._overlay_drawn = True
-        else:
-            self._overlay_drawn = False
 
     def _draw_overlay(self, height: int, width: int) -> None:
         if self._overlay == "messages":

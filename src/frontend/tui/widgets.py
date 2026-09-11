@@ -177,16 +177,24 @@ class TUITooltip:
 
     def draw(self, stdscr: curses.window, height: int, width: int) -> None:
         rows = self._build_rows()
+
+        # The popup does not scroll, so it takes the rows and the width that
+        # fit the terminal and clips whatever is left over.
+        max_rows = height - self._BORDER_THICKNESS - self._PADDING_ROWS
+        if max_rows < 1 or width < self._PADDING_COLS + 1:
+            return
+        rows = rows[:max_rows]
+
         visible = [r for r in rows if r is not None]
         key_w = max((len(k) for k, _ in visible), default=0)
         desc_w = max((len(d) for _, d in visible), default=0)
 
         inner_w = key_w + self._KEY_DESC_GAP + desc_w
-        box_w = max(inner_w + self._PADDING_COLS, self._MIN_BOX_WIDTH)
+        box_w = min(max(inner_w + self._PADDING_COLS, self._MIN_BOX_WIDTH), width)
         box_h = len(rows) + self._BORDER_THICKNESS + self._PADDING_ROWS
 
-        if box_h > height or box_w > width:
-            return
+        text_w = box_w - self._PADDING_COLS
+        key_w = min(key_w, text_w)
 
         y0 = (height - box_h) // 2
         x0 = (width - box_w) // 2
@@ -207,10 +215,17 @@ class TUITooltip:
             key, desc = row
             with contextlib.suppress(curses.error):
                 if not desc:
-                    stdscr.addstr(line_y, x0 + 2, key, self._attr | curses.A_BOLD)
+                    stdscr.addstr(line_y, x0 + 2, key[:text_w], self._attr | curses.A_BOLD)
                 else:
-                    stdscr.addstr(line_y, x0 + 2, key.ljust(key_w), self._attr)
-                    stdscr.addstr(line_y, x0 + 2 + key_w + self._KEY_DESC_GAP, desc, self._attr)
+                    stdscr.addstr(line_y, x0 + 2, key.ljust(key_w)[:key_w], self._attr)
+                    desc_room = text_w - key_w - self._KEY_DESC_GAP
+                    if desc_room > 0:
+                        stdscr.addstr(
+                            line_y,
+                            x0 + 2 + key_w + self._KEY_DESC_GAP,
+                            desc[:desc_room],
+                            self._attr,
+                        )
 
 
 class TUIGraph(TUIBox):
