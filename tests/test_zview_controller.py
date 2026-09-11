@@ -20,6 +20,10 @@ def app() -> ZView:
     a = ZView.__new__(ZView)
     a.threads_data = []
     a.heaps_data = []
+    a.semaphores_data = []
+    a.mutexes_data = []
+    a.mutex_history = {}
+    a.sem_history = {}
     a.status_message = ""
     a.update_count = 0
     a.idle_thread = None
@@ -99,3 +103,66 @@ def test_process_data_empty_payload_does_not_clear_existing(app):
     app.threads_data = [main]
     app.process_data({})
     assert app.threads_data == [main]
+
+
+def test_process_data_stores_kernel_objects(app):
+    """Semaphore and mutex frames land on the controller."""
+    from backend.base import MutexInfo, SemaphoreInfo
+
+    sem = SemaphoreInfo(name="data_ready", address=0x2000, count=1, limit=4, waiters=())
+    mutex = MutexInfo(name="spi_bus", address=0x3000, lock_count=0, owner_address=0)
+
+    app.process_data({"threads": [], "semaphores": [sem], "mutexes": [mutex]})
+
+    assert app.semaphores_data == [sem]
+    assert app.mutexes_data == [mutex]
+
+
+def test_process_data_without_kernel_objects_keeps_the_last_frame(app):
+    """A frame without the keys leaves the last values in place."""
+    from backend.base import SemaphoreInfo
+
+    sem = SemaphoreInfo(name="s", address=0x2000, count=1, limit=1, waiters=())
+    app.process_data({"threads": [], "semaphores": [sem]})
+
+    app.process_data({"threads": []})
+
+    assert app.semaphores_data == [sem]
+
+
+def test_contention_history_samples_once_per_frame(app):
+    """Each frame appends one mark: free, held alone, or held with waiters."""
+    from backend.base import MutexInfo, MutexState
+
+    free = MutexInfo(name="m", address=0x3000, lock_count=0, owner_address=0, waiters=())
+    contended = MutexInfo(
+        name="m",
+        address=0x3000,
+        lock_count=1,
+        owner_address=0x4000,
+        owner_name="t",
+        waiters=("other",),
+    )
+    held_uncontended = MutexInfo(
+        name="m", address=0x3000, lock_count=1, owner_address=0x4000, waiters=()
+    )
+
+    for frame_mutex in (free, contended, held_uncontended):
+        app.process_data({"threads": [], "mutexes": [frame_mutex]})
+
+    assert list(app.mutex_history[0x3000]) == [
+        MutexState.FREE,
+        MutexState.CONTENDED,
+        MutexState.LOCKED,
+    ]
+
+
+def test_contention_history_is_bounded(app):
+    """History is capped at 256 samples per mutex."""
+    from backend.base import MutexInfo
+
+    mutex = MutexInfo(name="m", address=0x3000, lock_count=0, owner_address=0, waiters=())
+    for _ in range(600):
+        app.process_data({"threads": [], "mutexes": [mutex]})
+
+    assert len(app.mutex_history[0x3000]) == 256

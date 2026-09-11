@@ -5,7 +5,7 @@
 import contextlib
 import curses
 
-from backend.base import HeapInfo, ThreadInfo, ThreadRuntime
+from backend.base import HeapInfo, MutexState, ThreadInfo, ThreadRuntime
 
 
 def _truncate_str(text: str, max_size: int) -> str:
@@ -71,8 +71,18 @@ class TUIProgressBar:
         y: int,
         x: int,
         percentage: float,
+        label: str | None = None,
+        attr: int | None = None,
     ):
-        if percentage > self._high_threshold:
+        """
+        Draw the bar at ``percentage``, captioned with ``label`` or the percentage.
+
+        ``attr`` overrides the threshold colors, for callers that color a bar by
+        state rather than by how full it is.
+        """
+        if attr is not None:
+            bar_color_attr = attr
+        elif percentage > self._high_threshold:
             bar_color_attr = self._high_threshold_attr
         elif percentage > self._medium_threshold:
             bar_color_attr = self._medium_threshold_attr
@@ -86,7 +96,9 @@ class TUIProgressBar:
         stdscr.attron(bar_color_attr)
         stdscr.addstr(y, x, "█" * completed_chars)
 
-        percent_display = f"{percentage:.1f}%"
+        percent_display = _truncate_str(
+            f"{percentage:.1f}%" if label is None else label, self._bar_width
+        )
         percent_start_x = x + (self.width // 2) - (len(percent_display) // 2)
         bar_end_x = x + completed_chars
 
@@ -432,3 +444,148 @@ class TUIHeapInfo:
             self._watermark_width,
         )
         _addstr_clipped(stdscr, y, col_pos, watermark_bytes_display, screen_w)
+
+
+SEMAPHORE = "SEM"
+MUTEX = "MTX"
+
+
+class TUIKernelObjectInfo:
+    """
+    One kernel object as a table row: type, name, state bar, wait queue.
+
+    Shared by the kernel objects list and the per-object detail views, so an
+    object reads the same in both.
+    """
+
+    _MAX_LISTED_WAITERS = 3
+    _UNKNOWN = "?"
+
+    def __init__(
+        self,
+        selected_attribute: int,
+        contended_attribute: int,
+        busy_attribute: int,
+        bar_attributes: tuple[int, int, int],
+    ):
+        self._selected_attr = selected_attribute
+        self._contended_attr = contended_attribute
+        self._busy_attr = busy_attribute
+
+        self._type_width = 5
+        self._name_width = 24
+        self._waiters_width = 30
+
+        # Thresholds out of reach on purpose: a full semaphore is healthy, so
+        # the bar carries the row's state color, not a usage color.
+        self.state_bar = TUIProgressBar(
+            26,
+            bar_attributes[0],
+            (101.0, bar_attributes[1]),
+            (102.0, bar_attributes[2]),
+        )
+
+    def set_field_widths(self, type_w: int, name_w: int, bar_w: int, waiters_w: int) -> None:
+        self._type_width = type_w
+        self._name_width = name_w
+        self._waiters_width = waiters_w
+        self.state_bar.width = bar_w
+
+    def waiters_cell(self, waiters: tuple[str, ...] | None, max_width: int | None = None) -> str:
+        """
+        ``N (names)`` for a queue, ``-`` for an empty one, ``?`` when not walked.
+
+        Drops names, then the list entirely, so the cell fits ``max_width``
+        rather than being cut mid-name.
+        """
+        if waiters is None:
+            return self._UNKNOWN
+        if not waiters:
+            return "-"
+
+        count = len(waiters)
+        listed = ", ".join(waiters[: self._MAX_LISTED_WAITERS])
+        if count > self._MAX_LISTED_WAITERS:
+            listed += ", ..."
+
+        candidates = [f"{count} ({listed})"]
+        if count > 1:
+            candidates.append(f"{count} ({waiters[0]}, ...)")
+        candidates.append(str(count))
+
+        if max_width is None:
+            return candidates[0]
+
+        return next((c for c in candidates if len(c) <= max_width), candidates[-1])
+
+    def row_values(self, kind: str, obj) -> tuple[float, str, str, int]:
+        """``(bar percentage, bar label, waiters cell, attribute)`` for one object."""
+        cell = self.waiters_cell(obj.waiters, self._waiters_width)
+
+        if kind == SEMAPHORE:
+            fill = (obj.count / obj.limit * 100.0) if obj.limit else 0.0
+            attr = self._busy_attr if obj.waiters else 0
+            return fill, f"{obj.count}/{obj.limit}", cell, attr
+
+        if not obj.is_locked:
+            return 0.0, "FREE", cell, 0
+
+        owner = obj.owner_name or f"0x{obj.owner_address:X}"
+        label = f"LOCKED ● {owner}"
+        if obj.lock_count > 1:
+            label += f" ×{obj.lock_count}"
+
+        attr = self._contended_attr if obj.state is MutexState.CONTENDED else self._busy_attr
+
+        return 100.0, label, cell, attr
+
+    def draw(
+        self, stdscr: curses.window, y: int, x: int, kind: str, obj, selected: bool = False
+    ) -> None:
+        fill, label, waiters, attr = self.row_values(kind, obj)
+        self.draw_cells(stdscr, y, x, kind, obj.name, fill, label, waiters, attr, selected)
+
+    def draw_cells(
+        self,
+        stdscr: curses.window,
+        y: int,
+        x: int,
+        kind: str,
+        name: str,
+        fill: float,
+        label: str,
+        waiters: str,
+        attr: int,
+        selected: bool = False,
+    ) -> None:
+        """
+        Draw the four cells of a row.
+
+        Selection marks the type and name only, as in the thread and heap
+        rows, so the bar keeps its state color and its unfilled track stays
+        readable under the cursor.
+        """
+        _, screen_w = stdscr.getmaxyx()
+        selected_attr = self._selected_attr if selected else attr
+
+        col_pos = x
+        _addstr_clipped(
+            stdscr, y, col_pos, _fit_str(kind, self._type_width), screen_w, selected_attr
+        )
+        col_pos += self._type_width + 1
+
+        _addstr_clipped(
+            stdscr,
+            y,
+            col_pos,
+            _truncate_str(name, self._name_width).ljust(self._name_width),
+            screen_w,
+            selected_attr,
+        )
+        col_pos += self._name_width + 1
+
+        if col_pos + self.state_bar.width <= screen_w:
+            self.state_bar.draw(stdscr, y, col_pos, fill, label, attr)
+        col_pos += self.state_bar.width + 1
+
+        _addstr_clipped(stdscr, y, col_pos, _fit_str(waiters, self._waiters_width), screen_w, attr)

@@ -65,7 +65,10 @@ class SpecialCode:
     RETURN = ord("\r")
     SORT = ord("s")
     INVERSE = ord("i")
+    ESCAPE = 27
     HEAPS = ord("h")
+    KERNEL_OBJECTS = ord("k")
+    FILTER = ord("f")
     REFRESH = ord("r")
     RECONNECT = ord("R")
     HELP = ord("?")
@@ -77,6 +80,9 @@ class ZViewState(enum.Enum):
     THREAD_DETAIL_VIEW = 3
     HEAP_LIST_VIEW = 4
     HEAPS_DETAIL_VIEW = 5
+    KERNEL_OBJECT_LIST_VIEW = 6
+    MUTEX_DETAIL_VIEW = 7
+    SEMAPHORE_DETAIL_VIEW = 8
 
 
 class BaseStateView:

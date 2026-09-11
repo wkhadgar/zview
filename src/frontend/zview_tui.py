@@ -7,8 +7,9 @@ import curses
 import queue
 import threading
 import time
+from collections import deque
 
-from backend.base import HeapInfo, ThreadInfo
+from backend.base import HeapInfo, MutexInfo, MutexState, SemaphoreInfo, ThreadInfo
 from frontend.tui.views.base import (
     BaseStateView,
     Keybind,
@@ -19,6 +20,9 @@ from frontend.tui.views.base import (
 from frontend.tui.views.fatal_error import FatalErrorView
 from frontend.tui.views.heap_detail import HeapDetailView
 from frontend.tui.views.heap_list import HeapListView
+from frontend.tui.views.kernel_object_list import KernelObjectListView
+from frontend.tui.views.mutex_detail import MutexDetailView
+from frontend.tui.views.semaphore_detail import SemaphoreDetailView
 from frontend.tui.views.thread_detail import ThreadDetailView
 from frontend.tui.views.thread_list import ThreadListView
 from frontend.tui.widgets import TUITooltip
@@ -52,6 +56,11 @@ class ZView:
         self.running = True
         self.threads_data: list[ThreadInfo] = []
         self.heaps_data: list[HeapInfo] = []
+        self.semaphores_data: list[SemaphoreInfo] = []
+        self.mutexes_data: list[MutexInfo] = []
+        # One sample per frame per object, for the detail views.
+        self.mutex_history: dict[int, deque[MutexState]] = {}
+        self.sem_history: dict[int, deque[int]] = {}
         self.status_message: str = ""
         self.data_queue = queue.Queue()
         self.stop_event = threading.Event()
@@ -61,6 +70,10 @@ class ZView:
 
         self.detailing_thread: str | None = None
         self.detailing_heap_address: int | None = None
+        self.detailing_mutex_address: int | None = None
+        self.detailing_semaphore_address: int | None = None
+        # Wait queues are walkable only in the dlist (simple) flavor.
+        self.waiters_unknown: bool = scraper.waitq_flavor != "simple"
         self.idle_thread: ThreadInfo | None = None
         self._help_open: bool = False
         self._help_drawn: bool = False
@@ -74,7 +87,15 @@ class ZView:
             ZViewState.THREAD_DETAIL_VIEW: ThreadDetailView(self, theme),
             ZViewState.HEAP_LIST_VIEW: HeapListView(self, theme),
             ZViewState.HEAPS_DETAIL_VIEW: HeapDetailView(self, theme),
+            ZViewState.KERNEL_OBJECT_LIST_VIEW: KernelObjectListView(self, theme),
+            ZViewState.MUTEX_DETAIL_VIEW: MutexDetailView(self, theme),
+            ZViewState.SEMAPHORE_DETAIL_VIEW: SemaphoreDetailView(self, theme),
         }
+
+        # The opening view is the thread list. A replay keeps polling whatever
+        # its recording holds.
+        if self.scraper._m_scraper.is_live:
+            self.scraper.poll_kernel_objects = False
 
     def _init_curses(self) -> ZViewTUIAttributes:
         """
@@ -208,6 +229,7 @@ class ZView:
             case ZViewState.THREAD_LIST_VIEW:
                 if live:
                     self.scraper.thread_pool = list(self.scraper.all_threads.values())
+                    self.scraper.poll_kernel_objects = False
                 self.purge_queue()
 
             case ZViewState.THREAD_DETAIL_VIEW:
@@ -238,6 +260,19 @@ class ZView:
                 if live:
                     self.scraper.extra_info_heap_address = None
                     self.scraper.thread_pool = []
+                    self.scraper.poll_kernel_objects = False
+                self.purge_queue()
+
+            case (
+                ZViewState.KERNEL_OBJECT_LIST_VIEW
+                | ZViewState.MUTEX_DETAIL_VIEW
+                | ZViewState.SEMAPHORE_DETAIL_VIEW
+            ):
+                if live:
+                    # This view reads only the primitives.
+                    self.scraper.extra_info_heap_address = None
+                    self.scraper.thread_pool = []
+                    self.scraper.poll_kernel_objects = True
                 self.purge_queue()
 
             case ZViewState.HEAPS_DETAIL_VIEW:
@@ -298,6 +333,29 @@ class ZView:
                 self.threads_data = threads_data
             if len(heaps_data):
                 self.heaps_data = heaps_data
+
+            if "semaphores" in data:
+                self.semaphores_data = data["semaphores"]
+                self._record_counts(self.semaphores_data)
+            if "mutexes" in data:
+                self.mutexes_data = data["mutexes"]
+                self._record_contention(self.mutexes_data)
+
+    def _record_counts(self, semaphores: list[SemaphoreInfo]) -> None:
+        """Append one count sample per semaphore, per frame."""
+        for sem in semaphores:
+            history = self.sem_history.setdefault(sem.address, deque(maxlen=256))
+            history.append(sem.count)
+
+    def _record_contention(self, mutexes: list[MutexInfo]) -> None:
+        """
+        Append one lock state sample per mutex, per frame.
+
+        Samples are per frame, not per lock operation.
+        """
+        for mutex in mutexes:
+            history = self.mutex_history.setdefault(mutex.address, deque(maxlen=256))
+            history.append(mutex.state)
 
     def run(self, inspection_period):
         """

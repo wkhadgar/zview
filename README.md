@@ -138,6 +138,8 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
 * **ENTER**: Get details for a specific thread/heap (hit ENTER again to return).
 * **S / I**: Sort the data and invert the sorting order.
 * **H**: Access the **Heap Runtime** visualization (hit H again to return).
+* **k**: Access the **Kernel Objects** view listing semaphores and mutexes (hit k again to return).
+* **f**: In the kernel objects view, cycle the type filter (ALL, SEM, MTX).
 * **r**: Soft refresh — re-walks the kernel thread list and clears runtime baselines.
 * **R**: Full reconnect — tears down the polling thread, disconnects the probe, reconnects, and resumes.
 
@@ -152,6 +154,24 @@ Every running thread, at a glance. Sort by any column, invert the order, and pop
 Drill into one thread to watch its CPU and load graphs build up live.
 
 ![Thread detail](docs/assets/thread_detail.gif)
+
+### Watch your synchronization primitives
+
+Press **k** for every statically declared `k_sem` and `k_mutex`: semaphore counts with
+their waiter lists, and mutexes with the thread that holds each lock. Open a mutex with
+**ENTER** to see its owner, the threads queued behind it, and a per-frame lock strip that
+separates free from held from held-with-waiters.
+
+Two limits apply:
+
+* Only statically declared objects are listed. `K_SEM_DEFINE`, `K_MUTEX_DEFINE` and
+  friends land in the symbol table; objects created at runtime have no symbol.
+* Waiter lists need a `sys_dlist_t` wait queue, the default (`CONFIG_WAITQ_SIMPLE`).
+  Under `CONFIG_WAITQ_SCALABLE` the queue is a red-black tree and waiters read as
+  `unknown`.
+
+Counts, owners and queue membership are read per poll, so a lock taken and released
+between two polls is not seen.
 
 ### Inspect your heaps
 

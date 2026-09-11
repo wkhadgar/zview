@@ -156,6 +156,7 @@ class HeapListView(BaseStateView):
         return [
             Keybind("<Enter>", "Detail", "Open detail view for the selected heap"),
             Keybind("h", "Threads", "Switch to the threads view"),
+            Keybind("k", "Kernel objects", "Switch to the semaphores and mutexes view"),
             Keybind("s", "Sort", "Cycle through sort keys"),
             Keybind("i", "Invert", "Reverse the current sort order"),
         ]
@@ -186,6 +187,14 @@ class HeapListView(BaseStateView):
 
             case SpecialCode.HEAPS:
                 return ZViewState.THREAD_LIST_VIEW
+
+            case SpecialCode.KERNEL_OBJECTS:
+                if not (
+                    self.controller.scraper.has_semaphores or self.controller.scraper.has_mutexes
+                ):
+                    return None
+
+                return ZViewState.KERNEL_OBJECT_LIST_VIEW
 
             case SpecialCode.QUIT:
                 self.controller.running = False
