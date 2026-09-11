@@ -4,6 +4,7 @@
 
 import contextlib
 import curses
+import textwrap
 from typing import NamedTuple
 
 from backend.base import HeapInfo, ThreadInfo, ThreadRuntime
@@ -183,23 +184,47 @@ class TUIPopup:
         self._level_attrs = level_attrs
         self._keep_tail = keep_tail
 
+    def _wrap(self, rows: list[PopupRow], text_room: int) -> list[PopupRow]:
+        """
+        Split rows whose text is wider than its column.
+
+        The continuation lines carry no label, so the popup reads as one entry
+        per label with its text below it.
+        """
+        if text_room < 1:
+            return rows
+
+        wrapped: list[PopupRow] = []
+        for row in rows:
+            if row.heading or len(row.text) <= text_room:
+                wrapped.append(row)
+                continue
+
+            pieces = textwrap.wrap(row.text, text_room) or [row.text[:text_room]]
+            wrapped.append(PopupRow(row.label, pieces[0], row.level))
+            wrapped += [PopupRow("", piece, row.level) for piece in pieces[1:]]
+
+        return wrapped
+
     def draw(self, stdscr: curses.window, height: int, width: int, rows: list[PopupRow]) -> None:
         if not rows:
             return
 
-        # Keeps the rows and the width that fit, clipping the text; the last
-        # row and column stay free.
+        # The last row and column stay free.
         max_rows = height - self._BORDER_THICKNESS - self._PADDING_ROWS - 1
         max_width = width - 1
         if max_rows < 1 or max_width < self._MIN_BOX_WIDTH:
             return
 
-        rows = rows[-max_rows:] if self._keep_tail else rows[:max_rows]
-
         label_w = max(len(row.label) for row in rows if not row.heading)
         text_w = max(len(row.text) for row in rows)
         needed = label_w + self._COLUMN_GAP + text_w + self._PADDING_COLS
         box_w = min(max(needed, self._MIN_BOX_WIDTH), max_width)
+
+        # Wrap before trimming: what has to fit the height is lines, not rows.
+        text_room = box_w - self._PADDING_COLS - label_w - self._COLUMN_GAP
+        rows = self._wrap(rows, text_room)
+        rows = rows[-max_rows:] if self._keep_tail else rows[:max_rows]
         box_h = len(rows) + self._BORDER_THICKNESS + self._PADDING_ROWS
 
         y0 = (height - box_h) // 2
@@ -215,7 +240,6 @@ class TUIPopup:
         )
 
         inner_w = box_w - self._PADDING_COLS
-        text_room = inner_w - label_w - self._COLUMN_GAP
         for i, row in enumerate(rows):
             line_y = y0 + 2 + i
             with contextlib.suppress(curses.error):

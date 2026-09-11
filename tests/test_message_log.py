@@ -230,6 +230,48 @@ def test_popup_clips_to_the_terminal_instead_of_vanishing():
     assert max(y for y, _, _ in win.writes) < 20
 
 
+def test_long_text_wraps_instead_of_being_cut(app):
+    """A narrow popup keeps the whole message."""
+    reason = (
+        "Error: Target lost after 3 retries: Error reading global CPU cycles: "
+        "SWD/JTAG communication failure, check the probe wiring and power"
+    )
+    app.report(reason)
+
+    win = _StrictWin(40, 104)
+    app._log_popup.draw(win, 40, 104, app._message_rows())
+
+    drawn = " ".join(text.strip() for _, _, text in win.writes if text.strip())
+    for word in reason.split():
+        assert word in drawn
+
+
+def test_wrapped_lines_carry_the_label_once(app):
+    """Continuation lines are unlabelled, so one entry reads as one entry."""
+    window = TUIPopup(" Messages ", 0, 0, {}, keep_tail=True)
+    row = PopupRow("12:00:00.0", "a message far wider than the column it is drawn in")
+
+    wrapped = window._wrap([row], 20)
+
+    assert len(wrapped) > 1
+    assert wrapped[0].label == "12:00:00.0"
+    assert [line.label for line in wrapped[1:]] == [""] * (len(wrapped) - 1)
+    assert all(len(line.text) <= 20 for line in wrapped)
+
+
+def test_wrapping_does_not_push_the_popup_past_the_terminal(app):
+    """Wrapped lines are what has to fit the height, not the entries."""
+    for i in range(_MESSAGE_LOG_SIZE):
+        app.report(f"Error: read timeout at 0x{i:08X}, {'and a very long tail ' * 6}")
+
+    win = _StrictWin(14, 85)
+    app._log_popup.draw(win, 14, 85, app._message_rows())
+
+    assert win.writes
+    assert max(y for y, _, _ in win.writes) < 13
+    assert max(x + len(text) for _, x, text in win.writes) < 85
+
+
 def test_help_rows_are_grouped_under_headings(app):
     """Global bindings first, then the ones the current view adds."""
     app.views = {app.state: MagicMock()}

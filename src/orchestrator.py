@@ -258,13 +258,9 @@ class ZScraper:
                         }
                     )
                     break
-                data_queue.put(
-                    {
-                        "error": f"Transient read fault "
-                        f"({consecutive_errors}/{self._MAX_TOLERATED_ERRORS}): {e}"
-                    },
-                    block=False,
-                )
+                # One message per fault, not one per attempt: the message log
+                # counts the repeats, which is the retry number.
+                data_queue.put({"error": f"Transient read fault: {e}"}, block=False)
             finally:
                 if in_batch:
                     with contextlib.suppress(Exception):

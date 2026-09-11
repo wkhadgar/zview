@@ -173,7 +173,7 @@ def test_single_strike_emits_transient_error(elf_path):
     msg = q.get(timeout=1)
     assert "error" in msg
     assert "Transient" in msg["error"]
-    assert "1/3" in msg["error"]
+    assert "read fail" in msg["error"]
 
 
 def test_three_strikes_emit_fatal_and_break(elf_path):
@@ -193,8 +193,9 @@ def test_three_strikes_emit_fatal_and_break(elf_path):
         messages.append(q.get_nowait())
 
     assert len(messages) == 3
-    assert "1/3" in messages[0]["error"]
-    assert "2/3" in messages[1]["error"]
+    # The same fault worded the same way twice, so the message log collapses it.
+    assert messages[0]["error"] == messages[1]["error"]
+    assert "persistent fail" in messages[0]["error"]
     assert "fatal_error" in messages[2]
     assert "Target lost" in messages[2]["fatal_error"]
 
@@ -226,8 +227,8 @@ def test_strike_counter_resets_on_success(elf_path):
         messages.append(q.get_nowait())
 
     assert len(messages) == 3
-    assert "1/3" in messages[0]["error"]
-    assert "2/3" in messages[1]["error"]
+    assert "fail-1" in messages[0]["error"]
+    assert "fail-2" in messages[1]["error"]
     assert "threads" in messages[2]
     assert "fatal_error" not in messages[2]
 
