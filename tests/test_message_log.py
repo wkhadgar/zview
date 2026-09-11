@@ -230,6 +230,19 @@ def test_popup_clips_to_the_terminal_instead_of_vanishing():
     assert max(y for y, _, _ in win.writes) < 20
 
 
+def test_the_screen_is_updated_once_per_frame_under_an_overlay(app):
+    """Two updates per frame is the screen showing the view without the overlay."""
+    app.views = {app.state: MagicMock()}
+    # The views refresh at the end of their own render.
+    app.views[app.state].render.side_effect = lambda win, height, width: win.refresh()
+    app._overlay = "messages"
+
+    app.draw_tui(40, 120)
+
+    assert app.stdscr.refresh.call_count == 1
+    assert app.stdscr.noutrefresh.call_count == 1
+
+
 def test_long_text_wraps_instead_of_being_cut(app):
     """A narrow popup keeps the whole message."""
     reason = (

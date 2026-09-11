@@ -13,6 +13,7 @@ from datetime import datetime
 
 from backend.base import HeapInfo, ThreadInfo
 from frontend.tui.views.base import (
+    Any,
     BaseStateView,
     Keybind,
     SpecialCode,
@@ -39,6 +40,24 @@ _MESSAGE_LOG_SIZE = 64
 # Message levels, by how a reported message opens.
 _ERROR_PREFIXES = ("Error", "Unable", "TARGET LOST", "Reconnection failed")
 _WARNING_PREFIXES = ("Warning",)
+
+
+class _StagedWindow:
+    """
+    Window proxy whose ``refresh`` stages the frame rather than displaying it.
+
+    Views refresh at the end of their own render, which puts the frame on the
+    screen before anything drawn on top of it.
+    """
+
+    def __init__(self, window: curses.window):
+        self._window = window
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._window, name)
+
+    def refresh(self) -> None:
+        self._window.noutrefresh()
 
 
 @dataclass
@@ -241,7 +260,9 @@ class ZView:
                     self.stdscr.addstr(start_y + i, 0, centered_line)
             return
 
-        self.views[self.state].render(self.stdscr, height, width)
+        # Under an overlay the view stages its frame, for one update per frame.
+        target = _StagedWindow(self.stdscr) if self._overlay else self.stdscr
+        self.views[self.state].render(target, height, width)
 
         if self._overlay:
             self._draw_overlay(height, width)
