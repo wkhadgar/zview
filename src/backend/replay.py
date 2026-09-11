@@ -13,6 +13,11 @@ from pathlib import Path
 from backend.base import AbstractScraper
 from backend.recording import SCHEMA_VERSION
 
+# Schema /2 has no feature list in its header; its read stream covers threads
+# and heaps only.
+SUPPORTED_SCHEMAS = (SCHEMA_VERSION, "zview-recording/2")
+LEGACY_FEATURES = ("threads", "heaps")
+
 
 class ReplayError(Exception):
     """Base for replay errors."""
@@ -47,6 +52,9 @@ class ReplayScraper(AbstractScraper):
     # drifting against the recording.
     is_live = False
 
+    # Overwritten from the header on load.
+    features: tuple[str, ...] = LEGACY_FEATURES
+
     def __init__(self, source_path: Path | str, honor_timing: bool = True):
         super().__init__(target_mcu=None)
         self._source_path = Path(source_path)
@@ -68,12 +76,13 @@ class ReplayScraper(AbstractScraper):
                 raise UnsupportedSchema(f"Empty recording: {self._source_path}")
 
             header = json.loads(header_line)
-            if header.get("schema") != SCHEMA_VERSION:
+            if header.get("schema") not in SUPPORTED_SCHEMAS:
                 raise UnsupportedSchema(
-                    f"Expected schema {SCHEMA_VERSION}, got {header.get('schema')!r}"
+                    f"Expected one of {', '.join(SUPPORTED_SCHEMAS)}, got {header.get('schema')!r}"
                 )
 
             self.endianess = header.get("endianess", "<")
+            self.features = tuple(header.get("features") or LEGACY_FEATURES)
 
             for line in fp:
                 line = line.strip()
