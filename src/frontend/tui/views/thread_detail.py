@@ -140,9 +140,14 @@ class ThreadDetailView(BaseStateView):
         )
         graph_width = width // 2
 
-        if len(self._usages["load"]) > graph_width - 2:
-            self._usages["load"].pop(0)
-            self._usages["cpu"].pop(0)
+        # Trim to the column count in one step. Dropping a single sample per
+        # frame would leave more points than columns for many frames after a
+        # resize to a narrower terminal, and the graph averages a surplus into
+        # buckets whose boundaries move, reshaping parts already drawn.
+        budget = max(1, graph_width - 2)
+        if len(self._usages["load"]) > budget:
+            del self._usages["load"][:-budget]
+            del self._usages["cpu"][:-budget]
 
         self._cpu_graph.draw(
             stdscr,
