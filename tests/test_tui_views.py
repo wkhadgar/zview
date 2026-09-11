@@ -330,3 +330,54 @@ def test_footer_hint_uses_label_for_compactness():
     hint = view._footer_hint()
     assert "Short: x" in hint
     assert "verbose" not in hint
+
+
+class _StubWin:
+    """curses window stand-in; the graph widgets toggle attributes as they draw."""
+
+    def __init__(self, height: int = 24, width: int = 209):
+        self._h, self._w = height, width
+
+    def getmaxyx(self):
+        return self._h, self._w
+
+    def addstr(self, y, x, text, attr=0):
+        assert 0 <= y < self._h, f"row {y} outside height {self._h}"
+        assert 0 <= x < self._w, f"col {x} outside width {self._w}"
+
+    def erase(self): ...
+    def refresh(self): ...
+    def move(self, y, x): ...
+    def clrtoeol(self): ...
+    def hline(self, y, x, ch, n): ...
+    def attron(self, attr): ...
+    def attroff(self, attr): ...
+
+    def getbkgd(self):
+        return 0
+
+
+def test_thread_detail_history_never_exceeds_the_graph_columns(controller, theme):
+    """A surplus of samples would be averaged into moving buckets by the graph."""
+    from backend.base import ThreadInfo, ThreadRuntime
+
+    runtime = ThreadRuntime(
+        cpu=10.0, cpu_normalized=5.0, active=True, stack_watermark=64, stack_watermark_percent=25.0
+    )
+    thread = ThreadInfo(
+        address=0x1000, stack_start=0x2000, stack_size=512, name="worker", runtime=runtime
+    )
+    controller.threads_data = [thread]
+    controller.detailing_thread = "worker"
+    controller.min_dimensions = (14, 85)
+
+    view = ThreadDetailView(controller, theme)
+
+    for _ in range(80):
+        view.render(_StubWin(width=120), 24, 120)
+    assert len(view._usages["cpu"]) <= (120 // 2) - 2
+
+    # Shrinking the terminal must bring the history inside the new budget at
+    # once, not one sample per frame.
+    view.render(_StubWin(width=60), 24, 60)
+    assert len(view._usages["cpu"]) <= (60 // 2) - 2
