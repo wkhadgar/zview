@@ -50,6 +50,13 @@ class KernelLayout:
     msgq_max_msgs: int | None = None
     msgq_used_msgs: int | None = None
 
+    mem_slab_wait_q: int | None = None
+    mem_slab_num_blocks: int | None = None
+    mem_slab_block_size: int | None = None
+    mem_slab_num_used: int | None = None
+    # Only on a build with CONFIG_MEM_SLAB_TRACE_MAX_UTILIZATION.
+    mem_slab_max_used: int | None = None
+
     # _thread_base.qnode_dlist within k_thread: the link a queued thread is
     # threaded by.
     thread_qnode: int | None = None

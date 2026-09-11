@@ -114,6 +114,40 @@ class MsgqInfo:
         return self.max_msgs > 0 and self.used_msgs >= self.max_msgs
 
 
+@dataclass(frozen=True)
+class MemSlabInfo:
+    """Snapshot of a Zephyr ``k_mem_slab``."""
+
+    name: str
+    address: int
+    num_blocks: int
+    block_size: int
+    num_used: int
+    # ``None`` unless the build sets CONFIG_MEM_SLAB_TRACE_MAX_UTILIZATION. A
+    # high-water mark, so it holds its peak between reads.
+    max_used: int | None = None
+    waiters: tuple[str, ...] | None = None
+
+    @property
+    def fill_percent(self) -> float:
+        return (self.num_used / self.num_blocks * 100.0) if self.num_blocks else 0.0
+
+    @property
+    def peak_percent(self) -> float | None:
+        if self.max_used is None or not self.num_blocks:
+            return None
+
+        return self.max_used / self.num_blocks * 100.0
+
+    @property
+    def is_exhausted(self) -> bool:
+        return self.num_blocks > 0 and self.num_used >= self.num_blocks
+
+    @property
+    def total_bytes(self) -> int:
+        return self.num_blocks * self.block_size
+
+
 class MutexState(enum.IntEnum):
     """Lock state of a ``k_mutex``, ordered by contention."""
 
