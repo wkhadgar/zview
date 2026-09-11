@@ -18,6 +18,8 @@ from backend.replay import ReplayComplete
 from kernel import compat
 from kernel.heaps import walk_heap_fragmentation
 from kernel.layout import KernelLayout
+from kernel.mutexes import walk_mutexes
+from kernel.semaphores import walk_semaphores
 from kernel.threads import walk_thread_list
 
 logger = logging.getLogger("zview.scraper")
@@ -53,7 +55,17 @@ class ZScraper:
         self.has_heaps: bool = True
         self.has_usage: bool = True
         self.has_names: bool = True
+        self.has_semaphores: bool = True
+        self.has_mutexes: bool = True
         self.capture_all_heap_chunks: bool = False
+        # Set False by the TUI outside the kernel objects view; dump and record
+        # leave it on.
+        self.poll_kernel_objects: bool = True
+
+        # Built Zephyr version (when the ELF is in its build tree) and the wait
+        # queue layout.
+        self.zephyr_version: str | None = compat.detect_zephyr_version(elf_path)
+        self.waitq_flavor: compat.WaitQFlavor = compat.waitq_flavor(self._elf_inspector)
 
         self._MAX_THREADS: int = max_threads
 
@@ -62,6 +74,9 @@ class ZScraper:
 
         if self.has_heaps:
             self._discover_heap_addresses()
+
+        self._discover_kernel_object_addresses()
+        self._restrict_features_to_recording()
 
         if not self._m_scraper.is_live and self.has_heaps:
             self.capture_all_heap_chunks = True
@@ -85,14 +100,17 @@ class ZScraper:
             (compat.THREAD_NAME_FIELDS, "has_names"),
             (compat.USAGE_FIELDS, "has_usage"),
             (compat.HEAP_FIELDS, "has_heaps"),
+            (compat.SEMAPHORE_FIELDS, "has_semaphores"),
+            (compat.MUTEX_FIELDS, "has_mutexes"),
         ):
             if (extras := compat.resolve_fields(elf, group)) is not None:
                 fields.update(extras)
             else:
                 setattr(self, flag, False)
 
-        # Metadata members resolve independently.
+        # Metadata members and the qnode link resolve independently.
         fields.update(compat.resolve_optional_fields(elf, compat.THREAD_META_FIELDS))
+        fields.update(compat.resolve_optional_fields(elf, compat.THREAD_QNODE_FIELDS))
 
         return KernelLayout(**fields)
 
@@ -113,6 +131,102 @@ class ZScraper:
             return
         self._k_heap_addresses = {n: elf.get_symbol_info(n, "address") for n in names}
         self.extra_info_heap_address: int | None = None
+
+    def _discover_kernel_object_addresses(self) -> None:
+        """Populate synchronization object addresses; clears the flag when none exist."""
+        self._k_sem_addresses: dict[str, list[int]] = {}
+        self._k_mutex_addresses: dict[str, list[int]] = {}
+
+        if self.has_semaphores:
+            self._k_sem_addresses = self._discover_struct_instances("k_sem")
+            self.has_semaphores = bool(self._k_sem_addresses)
+
+        if self.has_mutexes:
+            self._k_mutex_addresses = self._discover_struct_instances("k_mutex")
+            self.has_mutexes = bool(self._k_mutex_addresses)
+
+    def _discover_struct_instances(self, struct_name: str) -> dict[str, list[int]]:
+        """
+        Map ``{symbol: addresses}`` for every global instance of ``struct_name``.
+
+        Only statically declared objects (``K_SEM_DEFINE`` and friends) have a
+        symbol. A DWARF variable with no symbol address is skipped.
+        """
+        elf = self._elf_inspector
+        found: dict[str, list[int]] = {}
+        for name in elf.find_struct_variable_names(struct_name) or []:
+            with contextlib.suppress(LookupError):
+                found[name] = elf.get_symbol_info(name, "address")
+
+        return found
+
+    def _restrict_features_to_recording(self) -> None:
+        """
+        Limit a replayed session to the features its recording captured.
+
+        Replay matches a strict read sequence. A recording with no feature list
+        predates the primitives and is treated as threads and heaps only.
+        """
+        if self._m_scraper.is_live:
+            return
+
+        features = getattr(self._m_scraper, "features", None)
+        if features is None:
+            return
+
+        self.has_semaphores = self.has_semaphores and "semaphores" in features
+        self.has_mutexes = self.has_mutexes and "mutexes" in features
+
+    def active_features(self) -> tuple[str, ...]:
+        """The features this session polls, as recorded in a recording header."""
+        features = ["threads"]
+        for enabled, name in (
+            (self.has_heaps, "heaps"),
+            (self.has_semaphores, "semaphores"),
+            (self.has_mutexes, "mutexes"),
+        ):
+            if enabled:
+                features.append(name)
+
+        return tuple(features)
+
+    def _poll_kernel_objects(self, data_queue: queue.Queue) -> dict:
+        """
+        Read the synchronization primitives. A failing group is skipped.
+
+        Wait queues are walked only on the ``simple`` layout; otherwise
+        ``waiters`` is ``None``.
+        """
+        frame: dict = {}
+        if not self.poll_kernel_objects or not (self.has_semaphores or self.has_mutexes):
+            return frame
+
+        walk_waiters = self.waitq_flavor == "simple"
+        thread_names = {t.address: t.name for t in self._all_threads_info.values()}
+
+        for enabled, key, walker, addresses in (
+            (self.has_semaphores, "semaphores", walk_semaphores, self._k_sem_addresses),
+            (self.has_mutexes, "mutexes", walk_mutexes, self._k_mutex_addresses),
+        ):
+            if not enabled:
+                continue
+
+            try:
+                objects = walker(
+                    self._m_scraper,
+                    self._elf_inspector,
+                    addresses,
+                    self._layout,
+                    thread_names,
+                    walk_waiters=walk_waiters,
+                )
+            except Exception as e:
+                data_queue.put({"error": f"Error reading {key}: {e}"}, block=False)
+                continue
+
+            frame[key] = list(objects.values())
+
+        return frame
 
     def __enter__(self):
         self._m_scraper.__enter__()
@@ -237,6 +351,7 @@ class ZScraper:
                 frame: dict = {"threads": final_threads}
                 if self.has_heaps:
                     frame["heaps"] = self._poll_heaps(data_queue)
+                frame.update(self._poll_kernel_objects(data_queue))
                 data_queue.put(frame, block=False)
 
                 consecutive_errors = 0
