@@ -12,19 +12,20 @@ from frontend.tui.views.base import (
     ZViewState,
     ZViewTUIAttributes,
 )
-from frontend.tui.widgets import MUTEX, SEMAPHORE, TUIKernelObjectInfo
+from frontend.tui.widgets import MSGQ, MUTEX, SEMAPHORE, TUIKernelObjectInfo
 
-__all__ = ["MUTEX", "SEMAPHORE", "KernelObjectListView"]
+__all__ = ["MSGQ", "MUTEX", "SEMAPHORE", "KernelObjectListView"]
 
 
 class KernelObjectListView(BaseStateView):
     """
-    List of the semaphores and mutexes found in the ELF.
+    List of the semaphores, mutexes and message queues found in the ELF.
 
     Columns are type, name, a state bar and the wait queue. The bar shows
-    count over limit for a semaphore and held or free for a mutex, captioned
-    with the count or the owner. ``f`` filters by type, ``Enter`` opens the
-    detail view for the selected object.
+    count over limit for a semaphore, held or free for a mutex, and used over
+    capacity for a queue, captioned with the count, the owner or the message
+    size. ``f`` filters by type, ``Enter`` opens the detail view for the
+    selected object.
     """
 
     # ``State`` is the bar column and absorbs the spare width.
@@ -32,9 +33,14 @@ class KernelObjectListView(BaseStateView):
     COLUMNS: list[str] = list(SCHEMA.keys())
     _BAR_COLUMN = 2
 
-    _FILTERS = ("ALL", SEMAPHORE, MUTEX)
+    _FILTERS = ("ALL", SEMAPHORE, MUTEX, MSGQ)
     # The aggregate row sums the filtered rows, so it is labelled by the filter.
-    _AGGREGATE_LABELS = {"ALL": "All Objects", SEMAPHORE: "All Semaphores", MUTEX: "All Mutexes"}
+    _AGGREGATE_LABELS = {
+        "ALL": "All Objects",
+        SEMAPHORE: "All Semaphores",
+        MUTEX: "All Mutexes",
+        MSGQ: "All Queues",
+    }
     _MAX_NAME = 34
     _MAX_LISTED_WAITERS = 3
     _UNKNOWN = "?"
@@ -73,6 +79,8 @@ class KernelObjectListView(BaseStateView):
             rows += [(SEMAPHORE, sem) for sem in self.controller.semaphores_data]
         if self.filter_name in ("ALL", MUTEX):
             rows += [(MUTEX, mutex) for mutex in self.controller.mutexes_data]
+        if self.filter_name in ("ALL", MSGQ):
+            rows += [(MSGQ, msgq) for msgq in self.controller.msgqs_data]
 
         return sorted(
             rows, key=self._sort_keys[self._current_sort_idx], reverse=self._invert_sorting
@@ -159,7 +167,11 @@ class KernelObjectListView(BaseStateView):
 
     def _aggregate(self, rows: list[tuple[str, Any]]) -> tuple[float, str, str]:
         """``(bar percentage, bar label, waiters cell)`` for the aggregate row."""
-        pressured = sum(1 for kind, obj in rows if obj.waiters or (kind == MUTEX and obj.is_locked))
+        pressured = sum(
+            1
+            for kind, obj in rows
+            if obj.waiters or (kind == MUTEX and obj.is_locked) or self._is_contended(kind, obj)
+        )
         fill = (pressured / len(rows) * 100.0) if rows else 0.0
 
         walked = [obj.waiters for _, obj in rows if obj.waiters is not None]
@@ -168,9 +180,16 @@ class KernelObjectListView(BaseStateView):
 
         return fill, self._summary(rows).strip(), cell
 
+    def _is_contended(self, kind: str, obj: Any) -> bool:
+        """A mutex held with threads queued on it, or a queue at capacity."""
+        if kind == MUTEX:
+            return bool(obj.is_locked and obj.waiters)
+
+        return kind == MSGQ and obj.is_full
+
     def _summary(self, rows: list[tuple[str, Any]]) -> str:
-        contended = sum(1 for kind, obj in rows if kind == MUTEX and obj.is_locked and obj.waiters)
-        queued = sum(1 for kind, obj in rows if kind == SEMAPHORE and obj.waiters)
+        contended = sum(1 for kind, obj in rows if self._is_contended(kind, obj))
+        queued = sum(1 for _, obj in rows if obj.waiters)
 
         summary = f" {len(rows)} objects | {contended} contended | {queued} with waiters"
         if self.controller.waiters_unknown:
@@ -180,8 +199,9 @@ class KernelObjectListView(BaseStateView):
         return summary
 
     def _empty_message(self) -> str:
-        if not (self.controller.scraper.has_semaphores or self.controller.scraper.has_mutexes):
-            return " No statically declared semaphores or mutexes in this build."
+        scraper = self.controller.scraper
+        if not (scraper.has_semaphores or scraper.has_mutexes or scraper.has_msgqs):
+            return " No statically declared semaphores, mutexes or queues in this build."
 
         return f" No {self.filter_name} objects."
 
@@ -209,6 +229,10 @@ class KernelObjectListView(BaseStateView):
                 if kind == MUTEX:
                     self.controller.detailing_mutex_address = obj.address
                     return ZViewState.MUTEX_DETAIL_VIEW
+
+                if kind == MSGQ:
+                    self.controller.detailing_msgq_address = obj.address
+                    return ZViewState.MSGQ_DETAIL_VIEW
 
                 self.controller.detailing_semaphore_address = obj.address
                 return ZViewState.SEMAPHORE_DETAIL_VIEW

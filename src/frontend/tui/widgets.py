@@ -507,6 +507,7 @@ class TUIHeapInfo:
 
 SEMAPHORE = "SEM"
 MUTEX = "MTX"
+MSGQ = "MSG"
 
 
 class TUIKernelObjectInfo:
@@ -584,6 +585,12 @@ class TUIKernelObjectInfo:
             fill = (obj.count / obj.limit * 100.0) if obj.limit else 0.0
             attr = self._busy_attr if obj.waiters else 0
             return fill, f"{obj.count}/{obj.limit}", cell, attr
+
+        if kind == MSGQ:
+            label = f"{obj.used_msgs}/{obj.max_msgs} × {obj.msg_size}B"
+            # A full queue blocks its senders.
+            attr = self._contended_attr if obj.is_full else (self._busy_attr if obj.waiters else 0)
+            return obj.fill_percent, label, cell, attr
 
         if not obj.is_locked:
             return 0.0, "FREE", cell, 0

@@ -9,9 +9,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backend.base import MutexInfo, MutexState, SemaphoreInfo
+from backend.base import MsgqInfo, MutexInfo, MutexState, SemaphoreInfo
 from frontend.tui.views.base import SpecialCode, ZViewState, ZViewTUIAttributes
-from frontend.tui.views.kernel_object_list import MUTEX, SEMAPHORE, KernelObjectListView
+from frontend.tui.views.kernel_object_list import MSGQ, MUTEX, SEMAPHORE, KernelObjectListView
+from frontend.tui.views.msgq_detail import MsgqDetailView
 from frontend.tui.views.mutex_detail import MutexDetailView
 from frontend.tui.views.semaphore_detail import SemaphoreDetailView
 
@@ -32,7 +33,9 @@ def controller() -> MagicMock:
     c = MagicMock()
     c.scraper.has_semaphores = True
     c.scraper.has_mutexes = True
+    c.scraper.has_msgqs = True
     c.waiters_unknown = False
+    c.status_message = "Running"
     c.semaphores_data = [
         SemaphoreInfo(name="data_ready", address=0x2000, count=0, limit=4, waiters=("sensor",)),
         SemaphoreInfo(name="conn_pool", address=0x2100, count=3, limit=4, waiters=()),
@@ -48,17 +51,28 @@ def controller() -> MagicMock:
             waiters=("sensor_task", "logger_task"),
         ),
     ]
+    c.msgqs_data = [
+        MsgqInfo(
+            name="sensor_q",
+            address=0x4000,
+            used_msgs=2,
+            max_msgs=8,
+            msg_size=16,
+            waiters=(),
+        ),
+    ]
     c.mutex_history = {}
+    c.msgq_history = {}
     return c
 
 
-def test_rows_include_both_types(controller, theme):
+def test_rows_include_every_type(controller, theme):
     view = KernelObjectListView(controller, theme)
 
     kinds = {kind for kind, _ in view._rows()}
 
-    assert kinds == {SEMAPHORE, MUTEX}
-    assert len(view._rows()) == 4
+    assert kinds == {SEMAPHORE, MUTEX, MSGQ}
+    assert len(view._rows()) == 5
 
 
 def test_filter_cycles_through_types(controller, theme):
@@ -72,6 +86,10 @@ def test_filter_cycles_through_types(controller, theme):
     view.handle_input(SpecialCode.FILTER)
     assert view.filter_name == MUTEX
     assert {kind for kind, _ in view._rows()} == {MUTEX}
+
+    view.handle_input(SpecialCode.FILTER)
+    assert view.filter_name == MSGQ
+    assert {kind for kind, _ in view._rows()} == {MSGQ}
 
     view.handle_input(SpecialCode.FILTER)
     assert view.filter_name == "ALL"
@@ -171,9 +189,19 @@ def test_summary_counts_contention(controller, theme):
 
     summary = view._summary(view._rows())
 
-    assert "4 objects" in summary
+    assert "5 objects" in summary
     assert "1 contended" in summary
-    assert "1 with waiters" in summary
+    # Every type counts here, and a contended mutex is one of them.
+    assert "2 with waiters" in summary
+
+
+def test_a_full_queue_counts_as_contended(controller, theme):
+    controller.msgqs_data = [
+        MsgqInfo(name="sensor_q", address=0x4000, used_msgs=8, max_msgs=8, msg_size=16, waiters=())
+    ]
+    view = KernelObjectListView(controller, theme)
+
+    assert "2 contended" in view._summary(view._rows())
 
 
 def test_summary_flags_unobservable_wait_queues(controller, theme):
@@ -187,11 +215,13 @@ def test_empty_message_distinguishes_absent_from_filtered(controller, theme):
     view = KernelObjectListView(controller, theme)
     controller.semaphores_data = []
     controller.mutexes_data = []
+    controller.msgqs_data = []
 
     assert "No ALL objects." in view._empty_message()
 
     controller.scraper.has_semaphores = False
     controller.scraper.has_mutexes = False
+    controller.scraper.has_msgqs = False
 
     assert "No statically declared" in view._empty_message()
 
@@ -224,6 +254,7 @@ def test_enter_on_a_semaphore_opens_its_detail_view(controller, theme):
 def test_enter_on_an_empty_list_is_a_no_op(controller, theme):
     controller.semaphores_data = []
     controller.mutexes_data = []
+    controller.msgqs_data = []
     view = KernelObjectListView(controller, theme)
 
     assert view.handle_input(SpecialCode.NEWLINE) is None
@@ -491,6 +522,7 @@ def test_default_sort_groups_by_type_then_name(controller, theme):
     view = KernelObjectListView(controller, theme)
 
     assert [(kind, obj.name) for kind, obj in view._rows()] == [
+        (MSGQ, "sensor_q"),
         (MUTEX, "spi_bus"),
         (MUTEX, "uart_mutex"),
         (SEMAPHORE, "conn_pool"),
@@ -707,3 +739,74 @@ def test_the_aggregate_row_is_labelled_by_the_filter(
     row = [text for y, _, text in win.writes if y == 2]
     assert expected_type in row[0]
     assert expected_label in row[1]
+
+
+def test_msgq_row_shows_fill_and_message_size(controller, theme):
+    view = KernelObjectListView(controller, theme)
+
+    fill, label, waiters, attr = view._info.row_values(MSGQ, controller.msgqs_data[0])
+
+    assert fill == 25.0
+    assert label == "2/8 × 16B"
+    assert waiters == "-"
+    assert attr == 0
+
+
+def test_a_full_queue_reads_as_contention(controller, distinct_theme):
+    """A full queue blocks its senders, so it carries the contended color."""
+    view = KernelObjectListView(controller, distinct_theme)
+    full = MsgqInfo(name="q", address=0x1, used_msgs=4, max_msgs=4, msg_size=8, waiters=())
+    queued = MsgqInfo(name="q", address=0x1, used_msgs=0, max_msgs=4, msg_size=8, waiters=("rx",))
+    idle = MsgqInfo(name="q", address=0x1, used_msgs=1, max_msgs=4, msg_size=8, waiters=())
+
+    assert view._info.row_values(MSGQ, full)[3] == distinct_theme.ERROR
+    assert view._info.row_values(MSGQ, queued)[3] == distinct_theme.PROGRESS_BAR_MEDIUM
+    assert view._info.row_values(MSGQ, idle)[3] == 0
+
+
+def test_a_zero_capacity_queue_row_does_not_divide_by_zero(controller, theme):
+    view = KernelObjectListView(controller, theme)
+    msgq = MsgqInfo(name="q", address=0x1, used_msgs=0, max_msgs=0, msg_size=4, waiters=())
+
+    assert view._info.row_values(MSGQ, msgq)[0] == 0.0
+
+
+def test_enter_on_a_queue_opens_its_detail_view(controller, theme):
+    view = KernelObjectListView(controller, theme)
+    view.handle_input(SpecialCode.FILTER)  # SEM
+    view.handle_input(SpecialCode.FILTER)  # MTX
+    view.handle_input(SpecialCode.FILTER)  # MSG
+    view.cursor = 0
+
+    target = view._rows()[0][1]
+    state = view.handle_input(SpecialCode.NEWLINE)
+
+    assert state == ZViewState.MSGQ_DETAIL_VIEW
+    assert controller.detailing_msgq_address == target.address
+
+
+def test_the_queue_detail_plots_its_depth_against_capacity(controller, distinct_theme):
+    if not hasattr(curses, "ACS_S3"):
+        curses.ACS_S3 = ord("-")
+
+    controller.detailing_msgq_address = 0x4000
+    controller.msgq_history = {0x4000: [0, 1, 2, 3]}
+    view = MsgqDetailView(controller, distinct_theme)
+
+    win = _StubWin()
+    view.render(win, 24, 209)
+
+    drawn = " ".join(text for _, _, text in win.writes)
+    assert "0 to 8 messages" in drawn
+    assert "16 B" in drawn
+    assert "0x4000" in drawn
+
+
+def test_the_queue_detail_says_when_the_queue_is_gone(controller, theme):
+    controller.detailing_msgq_address = 0x9999
+    view = MsgqDetailView(controller, theme)
+
+    win = _StubWin()
+    view.render(win, 24, 209)
+
+    assert any("no longer being reported" in text for _, _, text in win.writes)

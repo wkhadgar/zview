@@ -84,6 +84,7 @@ class ZViewState(enum.Enum):
     KERNEL_OBJECT_LIST_VIEW = 6
     MUTEX_DETAIL_VIEW = 7
     SEMAPHORE_DETAIL_VIEW = 8
+    MSGQ_DETAIL_VIEW = 9
 
 
 class BaseStateView:
