@@ -154,26 +154,35 @@ class ZView:
             return ZViewTUIAttributes.create_mono()
         else:
             curses.start_color()
+
+            # Text keeps the terminal's own background. ANSI black is only the
+            # same color on a terminal whose background is ANSI black, and
+            # anywhere else it paints a block behind the text.
+            text_background = curses.COLOR_BLACK
+            with contextlib.suppress(curses.error):
+                curses.use_default_colors()
+                text_background = -1
+
             # Active thread name
-            curses.init_pair(1, curses.COLOR_CYAN, curses.COLOR_BLACK)
+            curses.init_pair(1, curses.COLOR_CYAN, text_background)
             # Inactive thread name
-            curses.init_pair(2, curses.COLOR_WHITE, curses.COLOR_BLACK)
+            curses.init_pair(2, curses.COLOR_WHITE, text_background)
             # Progress bar: low usage
-            curses.init_pair(3, curses.COLOR_GREEN, curses.COLOR_BLACK)
+            curses.init_pair(3, curses.COLOR_GREEN, text_background)
             # Progress bar: medium usage
-            curses.init_pair(4, curses.COLOR_YELLOW, curses.COLOR_BLACK)
+            curses.init_pair(4, curses.COLOR_YELLOW, text_background)
             # Progress bar: high usage
-            curses.init_pair(5, curses.COLOR_RED, curses.COLOR_BLACK)
+            curses.init_pair(5, curses.COLOR_RED, text_background)
             # Header/Footer background
             curses.init_pair(6, curses.COLOR_WHITE, curses.COLOR_BLUE)
             # Error message text
-            curses.init_pair(7, curses.COLOR_RED, curses.COLOR_BLACK)
+            curses.init_pair(7, curses.COLOR_RED, text_background)
             # Cursor selection
             curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_WHITE)
             # Graph A
-            curses.init_pair(9, curses.COLOR_MAGENTA, curses.COLOR_BLACK)
+            curses.init_pair(9, curses.COLOR_MAGENTA, text_background)
             # Graph B
-            curses.init_pair(10, curses.COLOR_CYAN, curses.COLOR_BLACK)
+            curses.init_pair(10, curses.COLOR_CYAN, text_background)
 
             return ZViewTUIAttributes(
                 curses.color_pair(1),
