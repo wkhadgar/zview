@@ -466,6 +466,29 @@ def test_the_last_sort_key_orders_every_type_by_its_bar(controller, theme):
     assert fills[-1] == pytest.approx(100.0)
 
 
+def test_a_wide_terminal_puts_the_queue_beside_the_graph(controller, theme):
+    view = SemaphoreDetailView(controller, theme)
+
+    panels = view._panels(height=24, width=200, top=6)
+
+    assert panels.graph_w == 200 - view._QUEUE_WIDTH
+    assert panels.queue_x == panels.graph_w
+    assert panels.queue_w == view._QUEUE_WIDTH
+    # Both take every row left, which is what the graph wants and what fits names.
+    assert panels.graph_h == panels.queue_h == 24 - 2 - 6
+    assert panels.queue_y == 6
+
+
+def test_a_short_terminal_still_leaves_both_panels_a_border(controller, theme):
+    """Three rows is the least a box can be drawn in."""
+    view = SemaphoreDetailView(controller, theme)
+
+    panels = view._panels(height=10, width=60, top=6)
+
+    assert panels.graph_h >= 3
+    assert panels.queue_h >= 3
+
+
 class _StubWin:
     """curses window stand-in recording ``(row, col, text)`` writes."""
 
@@ -1119,3 +1142,36 @@ def test_enter_on_a_heap_opens_its_own_view(controller, theme):
 
     assert state is ZViewState.HEAPS_DETAIL_VIEW
     assert controller.detailing_heap_address == 0x6000
+
+
+def _render(view, height: int = 24, width: int = 209) -> _StubWin:
+    """Render one frame into a stub window, with the theme's real attributes."""
+    win = _StubWin(height, width)
+    view.render(win, height, width)
+    return win
+
+
+def test_the_queue_is_drawn_in_its_own_column_beside_the_graph(controller, theme):
+    controller.detailing_semaphore_address = 0x2000
+    controller.sem_history = {0x2000: [0, 1, 2]}
+    view = SemaphoreDetailView(controller, theme)
+
+    win = _render(view)
+
+    queue_col = 209 - view._QUEUE_WIDTH
+    titles = [(y, x) for y, x, text in win.writes if text.startswith("┌Wait queue")]
+    assert titles and all(x == queue_col for _, x in titles)
+    # The waiter list sits in that column, not under the graph.
+    assert any(x == queue_col + 2 and "sensor" in text for _, x, text in win.writes)
+
+
+def test_a_narrow_terminal_draws_the_queue_under_the_graph(controller, theme):
+    controller.detailing_semaphore_address = 0x2000
+    controller.sem_history = {0x2000: [0, 1, 2]}
+    view = SemaphoreDetailView(controller, theme)
+
+    win = _render(view, height=24, width=70)
+
+    titles = [(y, x) for y, x, text in win.writes if text.startswith("┌Wait queue")]
+    assert titles and all(x == 0 for _, x in titles)
+    assert titles[0][0] > view._GRAPH_ROW

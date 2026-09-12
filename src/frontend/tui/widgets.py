@@ -501,6 +501,65 @@ class TUIHeapInfo:
         self.usage_bar.draw(stdscr, y, col_pos, heap_info.usage_percent)
 
 
+class TUIWaitQueue:
+    """
+    Panel listing the threads queued on an object, as a tree inside a box.
+
+    ``None`` waiters is not an empty queue: it means the layout could not be
+    walked. Waiters past the panel's height collapse into a count.
+    """
+
+    _UNWALKABLE = "not observable on this build (CONFIG_WAITQ_SCALABLE)"
+    _EMPTY = "empty"
+
+    def __init__(self, label_attr: int, title: str = "Wait queue"):
+        self._label_attr = label_attr
+        self._box = TUIBox(title, "", 0)
+
+    def draw(
+        self,
+        stdscr: curses.window,
+        y: int,
+        x: int,
+        height: int,
+        width: int,
+        waiters: tuple[str, ...] | None,
+    ) -> None:
+        # The last screen row belongs to the footer, and a box needs three rows
+        # for its own borders.
+        screen_h, _ = stdscr.getmaxyx()
+        box_h = min(max(3, height), screen_h - 1 - y)
+        if box_h < 3:
+            return
+
+        self._box.draw(stdscr, y, x, box_h, width)
+
+        inner_w = width - 4
+        if inner_w <= 0:
+            return
+
+        text_x = x + 2
+        if waiters is None:
+            stdscr.addstr(y + 1, text_x, self._UNWALKABLE[:inner_w], self._label_attr)
+            return
+
+        if not waiters:
+            stdscr.addstr(y + 1, text_x, self._EMPTY[:inner_w], self._label_attr)
+            return
+
+        last_row = y + box_h - 2
+        for idx, waiter in enumerate(waiters):
+            row = y + 1 + idx
+            if row > last_row:
+                # Replaces the last waiter row, so it covers the whole row.
+                more = f"... {len(waiters) - idx + 1} more"
+                stdscr.addstr(last_row, text_x, more.ljust(inner_w)[:inner_w])
+                break
+
+            branch = "└─" if idx == len(waiters) - 1 else "├─"
+            stdscr.addstr(row, text_x, f"{branch} {waiter}"[:inner_w])
+
+
 SEMAPHORE = "SEM"
 MUTEX = "MTX"
 MSGQ = "MSG"
