@@ -7,7 +7,7 @@ import curses
 import textwrap
 from typing import NamedTuple
 
-from backend.base import HeapInfo, MutexState, ThreadInfo, ThreadRuntime
+from backend.base import MutexState, ThreadInfo, ThreadRuntime
 
 
 def _truncate_str(text: str, max_size: int) -> str:
@@ -442,63 +442,6 @@ class TUIThreadInfo:
             f"{runtime.stack_watermark} / {thread_info.stack_size}", self._stack_bytes_width
         )
         _addstr_clipped(stdscr, y, col_pos, watermark_bytes_display, screen_w)
-
-
-class TUIHeapInfo:
-    def __init__(
-        self,
-        selected_attribute: int,
-        default_attribute: int,
-        bar_attributes: tuple[int, int, int],
-    ):
-        self._selected_attribute: int = selected_attribute
-        self._default_attribute: int = default_attribute
-
-        # These are nice values to default to
-        self._heap_name_width = 30
-        self._free_bytes_width = 8
-        self._allocated_bytes_width = 8
-
-        self.usage_bar = TUIProgressBar(
-            32,
-            bar_attributes[0],
-            (75, bar_attributes[1]),
-            (90, bar_attributes[2]),
-        )
-
-    def set_field_widths(self, name: int, free_bytes: int, allocated_bytes: int, usage_bar: int):
-        self._heap_name_width = name
-        self._free_bytes_width = free_bytes
-        self._allocated_bytes_width = allocated_bytes
-
-        self.usage_bar.width = usage_bar
-
-    def draw(
-        self, stdscr: curses.window, y: int, x: int, heap_info: HeapInfo, selected: bool = False
-    ):
-        col_pos = x
-        _, screen_w = stdscr.getmaxyx()
-
-        # Heap name
-        heap_name_display = _truncate_str(heap_info.name, self._heap_name_width)
-        heap_name_attr = self._selected_attribute if selected else self._default_attribute
-        _addstr_clipped(stdscr, y, col_pos, heap_name_display, screen_w, heap_name_attr)
-        col_pos += self._heap_name_width + 1
-
-        # Free bytes
-        free_bytes_display = _fit_str(str(heap_info.free_bytes), self._free_bytes_width)
-        _addstr_clipped(stdscr, y, col_pos, free_bytes_display, screen_w)
-        col_pos += self._free_bytes_width + 1
-
-        # Allocated bytes
-        allocated_bytes_display = _fit_str(
-            str(heap_info.allocated_bytes), self._allocated_bytes_width
-        )
-        _addstr_clipped(stdscr, y, col_pos, allocated_bytes_display, screen_w)
-        col_pos += self._allocated_bytes_width + 1
-
-        # Heap Usage Progress Bar
-        self.usage_bar.draw(stdscr, y, col_pos, heap_info.usage_percent)
 
 
 class TUIWaitQueue:

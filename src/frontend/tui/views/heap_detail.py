@@ -4,43 +4,91 @@
 
 import curses
 
-from frontend.tui.views.base import (
-    Any,
-    BaseStateView,
-    Keybind,
-    SpecialCode,
-    ZViewState,
-    ZViewTUIAttributes,
-    compute_flex_widths,
-)
-from frontend.tui.widgets import TUIBox, TUIHeapInfo
+from backend.base import HeapInfo
+from frontend.tui.views.base import Any, ZViewTUIAttributes
+from frontend.tui.views.kernel_object_detail import KernelObjectDetailView, Panels
+from frontend.tui.widgets import HEAP, TUIBox
 
 
-class HeapDetailView(BaseStateView):
-    """One heap: its row of byte counts, and the fragmentation map of its chunks."""
+class HeapDetailView(KernelObjectDetailView):
+    """
+    One heap: the bytes free and out, a map of its chunks, and the wait queue.
 
-    SCHEMA = {
-        "Heap": 25,
-        "Free B": 7,
-        "Used B": 7,
-        "Heap Usage %": 27,
-    }
-    COLLUM_WIDTHS: list[int] = list(SCHEMA.values())
+    The map lays the chunks out in address order and shades each cell by how
+    much of the bytes it covers are in use.
+    """
+
+    _INFO_TITLES = (("Address", 2), ("Free", 1), ("Used", 1))
+    _MAP_ROW = KernelObjectDetailView._INFO_ROW + KernelObjectDetailView._INFO_BOX_HEIGHT
+    _UNCAPTURED = "chunk map not captured for this frame"
 
     def __init__(self, controller: Any, theme: ZViewTUIAttributes):
         super().__init__(controller, theme)
-        self._scheme = self.SCHEMA
-        self._graph_a_attr = theme.GRAPH_A
-        self._frag_map_frame: TUIBox = TUIBox("Fragmentation Map", "", theme.GRAPH_B)
+        self._map_title = "Fragmentation map"
 
-        bar_theme = (theme.PROGRESS_BAR_LOW, theme.PROGRESS_BAR_MEDIUM, theme.PROGRESS_BAR_HIGH)
-        self._tui_heap_info: TUIHeapInfo = TUIHeapInfo(theme.CURSOR, theme.ACTIVE, bar_theme)
-        self._tui_heap_info.set_field_widths(
-            self.COLLUM_WIDTHS[0],
-            self.COLLUM_WIDTHS[1],
-            self.COLLUM_WIDTHS[2],
-            self.COLLUM_WIDTHS[3],
+    def _target(self) -> HeapInfo | None:
+        address = self.controller.detailing_heap_address
+        if address is None:
+            return None
+
+        return next((h for h in self.controller.heaps_data if h.address == address), None)
+
+    def render(self, stdscr: curses.window, height: int, width: int) -> None:
+        stdscr.erase()
+        self._render_frame(stdscr, self._footer_hint(), height, width)
+
+        heap = self._target()
+        if heap is None:
+            stdscr.addstr(1, 0, " Heap is no longer being reported."[:width], self._error_attr)
+            self._render_status(stdscr, width, height - 2)
+            stdscr.refresh()
+            return
+
+        self._draw_title(stdscr, width, HEAP, heap)
+        self._draw_info_boxes(
+            stdscr,
+            self._INFO_ROW,
+            width,
+            [f"0x{heap.address:X}", f"{heap.free_bytes} B", f"{heap.allocated_bytes} B"],
         )
+
+        panels = self._panels(height, width, self._MAP_ROW)
+        self._draw_map(stdscr, panels, heap)
+        self._draw_wait_queue(stdscr, panels, heap.waiters)
+
+        self._render_status(stdscr, width, height - 2)
+        stdscr.refresh()
+
+    def _draw_map(self, stdscr: curses.window, panels: Panels, heap: HeapInfo) -> None:
+        # Red with nothing free, yellow while a thread waits, plain otherwise.
+        if heap.is_exhausted:
+            attr = self._contended_attr
+        else:
+            attr = self._busy_attr if heap.waiters else 0
+
+        inner_h = panels.graph_h - 2
+        inner_w = panels.graph_w - 2
+
+        metrics = self._get_fragmentation_metrics(heap.chunks or [])
+        # A cell's worth depends on the box, so the footer names it.
+        if heap.chunks and inner_h > 0 and inner_w > 0:
+            chunks_cell = metrics.pop("Chunks", None)
+            metrics["Cell"] = (sum(c["size"] for c in heap.chunks) / (inner_w * inner_h), "bytes")
+            if chunks_cell is not None:
+                metrics["Chunks"] = chunks_cell
+
+        box = TUIBox(self._map_title, self._get_heap_details_footer(metrics), 0)
+        box.draw(stdscr, self._MAP_ROW, 0, panels.graph_h, panels.graph_w)
+
+        if inner_h <= 0 or inner_w <= 0:
+            return
+
+        if not heap.chunks:
+            stdscr.addstr(self._MAP_ROW + 1, 1, self._UNCAPTURED[:inner_w], self._label_attr)
+            return
+
+        for idx, row in enumerate(self.get_sparsity_map(heap.chunks, inner_w, inner_h)):
+            stdscr.addstr(self._MAP_ROW + 1 + idx, 1, row, attr)
 
     @staticmethod
     def get_sparsity_map(chunks: list[dict], width: int, height: int) -> list[str]:
@@ -99,7 +147,7 @@ class HeapDetailView(BaseStateView):
         ratio = (1 - largest_free / free_bytes) * 100 if free_bytes > 0 else 0.0
         return {
             "Largest free": (largest_free, "bytes"),
-            "Frag ratio": (ratio, "percent"),
+            "Frag": (ratio, "percent"),
             "Chunks": (f"{allocated_chunks}/{total_chunks}", "raw"),
         }
 
@@ -110,78 +158,12 @@ class HeapDetailView(BaseStateView):
 
         def fmt(value, hint):
             if hint == "bytes":
-                return f"{value / 1024:.1f} KB" if value >= 1024 else f"{value} B"
+                if value >= 1024:
+                    return f"{value / 1024:.1f} KB"
+
+                return f"{value} B" if isinstance(value, int) else f"{value:.2f} B"
             if hint == "percent":
                 return f"{value:.1f}%"
             return str(value)
 
         return " · ".join([f"{k}: {fmt(v, h)}" for k, (v, h) in metrics.items()])
-
-    def render(self, stdscr: curses.window, height: int, width: int) -> None:
-        stdscr.erase()
-
-        self._render_frame(stdscr, self._footer_hint(), height, width)
-
-        widths = compute_flex_widths(list(self._scheme.values()), width, self.controller.heaps_data)
-        self._tui_heap_info.set_field_widths(*widths)
-
-        curr_x = 0
-        for col_header, h_width in zip(self._scheme.keys(), widths, strict=True):
-            if curr_x >= width:
-                break
-
-            txt = f"{col_header:^{h_width}}"[: width - curr_x]
-            stdscr.addstr(1, curr_x, txt)
-            curr_x += h_width + 1
-
-        heap = next(
-            (
-                h
-                for h in self.controller.heaps_data
-                if h.address == self.controller.detailing_heap_address
-            ),
-            None,
-        )
-
-        if not heap or not heap.chunks:
-            self._render_status(stdscr, width, height - 2)
-            stdscr.refresh()
-            return
-
-        self._tui_heap_info.draw(stdscr, 2, 0, heap, False)
-
-        start_y = 5
-        start_x = 1
-        map_height = height - start_y - 4
-        map_width = width - start_x - 1
-
-        if map_height > 0 and map_width > 0:
-            sparsity_matrix = self.get_sparsity_map(heap.chunks, map_width, map_height)
-            metrics = self._get_fragmentation_metrics(heap.chunks)
-            desc = self._get_heap_details_footer(metrics)
-
-            self._frag_map_frame._description = desc
-            self._frag_map_frame.draw(
-                stdscr,
-                start_y - 1,
-                start_x - 1,
-                map_height + 2,
-                map_width + 2,
-            )
-
-            for i, row_str in enumerate(sparsity_matrix):
-                stdscr.addstr(start_y + i, start_x, row_str, self._graph_a_attr)
-
-        self._render_status(stdscr, width, height - 2)
-
-        stdscr.refresh()
-
-    def keybindings(self) -> list[Keybind]:
-        return [Keybind("<Enter>", "Back", "Return to the kernel objects list")]
-
-    def handle_input(self, key: int) -> ZViewState | None:
-        if key in (curses.KEY_ENTER, SpecialCode.NEWLINE, SpecialCode.RETURN):
-            return ZViewState.KERNEL_OBJECT_LIST_VIEW
-        elif key == SpecialCode.QUIT:
-            self.controller.running = False
-        return None

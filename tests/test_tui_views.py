@@ -42,9 +42,9 @@ def test_thread_detail_footer_minimal(controller, theme):
     assert view._footer_hint() == "Help: ? | Back: <Enter> "
 
 
-def test_heap_detail_footer_minimal(controller, theme):
+def test_heap_detail_footer_matches_the_other_object_views(controller, theme):
     view = HeapDetailView(controller, theme)
-    assert view._footer_hint() == "Help: ? | Back: <Enter> "
+    assert view._footer_hint() == "Help: ? | Back: <Esc> | Objects: k "
 
 
 def test_fatal_error_footer_is_help_gateway_only(controller, theme):
