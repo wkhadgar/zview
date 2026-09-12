@@ -76,6 +76,23 @@ def test_replay_produces_frames(replay_run):
     assert valid, "Replay produced no valid frames"
 
 
+def test_replay_reads_only_what_the_recording_holds(replay_run):
+    """
+    A recording replays a read sequence, so a group added later must be gated
+    on the recording declaring it; an ungated read drifts every frame.
+
+    The chunk map is the one known exception: a replay forces it on for every
+    heap, which a recording that never captured it cannot serve.
+    """
+    frames, _ = replay_run
+
+    drifted = {e.split(" for ")[0] for f in frames if (e := f.get("error")) and "drift" in e} - {
+        "Error reading sparsity"
+    }
+
+    assert drifted == set()
+
+
 def test_thread_shape(replay_run):
     """Every emitted thread has a non-empty name and a positive stack size."""
     frames, _ = replay_run

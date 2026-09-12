@@ -16,7 +16,7 @@ from backend.base import AbstractScraper, HeapInfo, ThreadInfo, ThreadRuntime
 from backend.elf_inspector import ElfInspector
 from backend.replay import ReplayComplete
 from kernel import compat
-from kernel.heaps import walk_heap_fragmentation
+from kernel.heaps import walk_heap_fragmentation, walk_heap_waiters
 from kernel.layout import KernelLayout
 from kernel.mem_slabs import walk_mem_slabs
 from kernel.msgqs import walk_msgqs
@@ -61,6 +61,9 @@ class ZScraper:
         self.has_mutexes: bool = True
         self.has_msgqs: bool = True
         self.has_mem_slabs: bool = True
+        # The heap wait queue walk reads per heap per frame, so it is its own
+        # feature: a recording taken before it has no such read to replay.
+        self.has_heap_waiters: bool = True
         self.capture_all_heap_chunks: bool = False
         # Set False by the TUI outside the kernel objects view; dump and record
         # leave it on.
@@ -118,6 +121,7 @@ class ZScraper:
         fields.update(compat.resolve_optional_fields(elf, compat.THREAD_META_FIELDS))
         fields.update(compat.resolve_optional_fields(elf, compat.THREAD_QNODE_FIELDS))
         fields.update(compat.resolve_optional_fields(elf, compat.MEM_SLAB_OPTIONAL_FIELDS))
+        fields.update(compat.resolve_optional_fields(elf, compat.HEAP_OPTIONAL_FIELDS))
 
         return KernelLayout(**fields)
 
@@ -195,6 +199,7 @@ class ZScraper:
         self.has_mutexes = self.has_mutexes and "mutexes" in features
         self.has_msgqs = self.has_msgqs and "msgqs" in features
         self.has_mem_slabs = self.has_mem_slabs and "mem_slabs" in features
+        self.has_heap_waiters = self.has_heap_waiters and "heap_waiters" in features
 
     def active_features(self) -> tuple[str, ...]:
         """The features this session polls, as recorded in a recording header."""
@@ -205,6 +210,7 @@ class ZScraper:
             (self.has_mutexes, "mutexes"),
             (self.has_msgqs, "msgqs"),
             (self.has_mem_slabs, "mem_slabs"),
+            (self.has_heaps and self.has_heap_waiters, "heap_waiters"),
         ):
             if enabled:
                 features.append(name)
@@ -226,7 +232,7 @@ class ZScraper:
             return frame
 
         walk_waiters = self.waitq_flavor == "simple"
-        thread_names = {t.address: t.name for t in self._all_threads_info.values()}
+        thread_names = self._thread_names()
 
         for enabled, key, walker, addresses in (
             (self.has_semaphores, "semaphores", walk_semaphores, self._k_sem_addresses),
@@ -588,9 +594,20 @@ class ZScraper:
             )
         return final
 
+    def _thread_names(self) -> dict[int, str]:
+        """``{address: name}`` for the threads a wait queue can name."""
+        return {t.address: t.name for t in self._all_threads_info.values()}
+
     def _poll_heaps(self, data_queue: queue.Queue) -> list[HeapInfo]:
         """Read all heap metadata. Per-heap read failures emit ``error`` frames and are skipped."""
         heaps: list[HeapInfo] = []
+        walk_waiters = (
+            self.has_heap_waiters
+            and self.waitq_flavor == "simple"
+            and self._layout.heap_wait_q is not None
+            and self._layout.thread_qnode is not None
+        )
+        thread_names = self._thread_names() if walk_waiters else {}
         for heap_name, heap_addresses in self._k_heap_addresses.items():
             for heap_address in heap_addresses:
                 try:
@@ -608,6 +625,22 @@ class ZScraper:
                         block=False,
                     )
                     continue
+
+                waiters = None
+                if walk_waiters:
+                    try:
+                        waiters = walk_heap_waiters(
+                            self._m_scraper,
+                            heap_address,
+                            self._layout.heap_wait_q,
+                            self._layout.thread_qnode,
+                            thread_names,
+                        )
+                    except Exception as e:
+                        data_queue.put(
+                            {"error": f"Error reading waiters for {heap_name}: {e}"},
+                            block=False,
+                        )
 
                 chunks = None
                 if self.capture_all_heap_chunks or self.extra_info_heap_address == heap_struct:
@@ -631,6 +664,7 @@ class ZScraper:
                         max_allocated,
                         usage_pct,
                         chunks,
+                        waiters,
                     )
                 )
         return heaps

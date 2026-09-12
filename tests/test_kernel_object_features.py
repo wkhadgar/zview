@@ -18,6 +18,7 @@ def _scraper(**enabled: bool) -> ZScraper:
     s.has_mutexes = enabled.get("mutexes", False)
     s.has_msgqs = enabled.get("msgqs", False)
     s.has_mem_slabs = enabled.get("mem_slabs", False)
+    s.has_heap_waiters = enabled.get("heap_waiters", s.has_heaps)
     s.poll_kernel_objects = True
     return s
 
@@ -25,7 +26,25 @@ def _scraper(**enabled: bool) -> ZScraper:
 def test_active_features_lists_only_what_is_polled():
     s = _scraper(heaps=True, semaphores=True, msgqs=True, mem_slabs=True)
 
-    assert s.active_features() == ("threads", "heaps", "semaphores", "msgqs", "mem_slabs")
+    assert s.active_features() == (
+        "threads",
+        "heaps",
+        "semaphores",
+        "msgqs",
+        "mem_slabs",
+        "heap_waiters",
+    )
+
+
+def test_a_recording_without_the_heap_wait_queue_reads_does_not_replay_them():
+    """The walk sits inside the heaps group, so an older recording has no reads for it."""
+    s = _scraper(heaps=True)
+    s._m_scraper = MagicMock(is_live=False, features=("threads", "heaps"))
+
+    s._restrict_features_to_recording()
+
+    assert s.has_heaps
+    assert not s.has_heap_waiters
 
 
 def test_threads_are_always_a_feature():
