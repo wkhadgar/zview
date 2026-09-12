@@ -67,6 +67,8 @@ class TUIProgressBar:
         self._width = new
         self._bar_width = new - 2
 
+    HIGH_WATER_MARK = "┃"
+
     def draw(
         self,
         stdscr: curses.window,
@@ -75,12 +77,14 @@ class TUIProgressBar:
         percentage: float,
         label: str | None = None,
         attr: int | None = None,
+        mark: float | None = None,
     ):
         """
         Draw the bar at ``percentage``, captioned with ``label`` or the percentage.
 
         ``attr`` overrides the threshold colors, for callers that color a bar by
-        state rather than by how full it is.
+        state rather than by how full it is. ``mark`` is a second percentage
+        drawn as a line across the track, for a high-water mark.
         """
         if attr is not None:
             bar_color_attr = attr
@@ -115,6 +119,11 @@ class TUIProgressBar:
         text_outside_bar = percent_display[split_point:]
         if text_outside_bar:
             stdscr.addstr(y, percent_start_x + split_point, text_outside_bar)
+
+        # After the caption, which would otherwise cover the cell.
+        if mark is not None and self._bar_width > 0:
+            cell = min(self._bar_width - 1, int(self._bar_width * (mark / 100)))
+            stdscr.addstr(y, x + max(0, cell), self.HIGH_WATER_MARK)
 
         stdscr.attroff(bar_color_attr)
 
@@ -507,6 +516,8 @@ class TUIHeapInfo:
 
 SEMAPHORE = "SEM"
 MUTEX = "MTX"
+MSGQ = "MSG"
+MEM_SLAB = "SLB"
 
 
 class TUIKernelObjectInfo:
@@ -585,6 +596,22 @@ class TUIKernelObjectInfo:
             attr = self._busy_attr if obj.waiters else 0
             return fill, f"{obj.count}/{obj.limit}", cell, attr
 
+        if kind == MSGQ:
+            label = f"{obj.used_msgs}/{obj.max_msgs} × {obj.msg_size}B"
+            # A full queue blocks its senders.
+            attr = self._contended_attr if obj.is_full else (self._busy_attr if obj.waiters else 0)
+            return obj.fill_percent, label, cell, attr
+
+        if kind == MEM_SLAB:
+            label = f"{obj.num_used}/{obj.num_blocks} × {obj.block_size}B"
+            # An exhausted slab blocks the next allocation.
+            attr = (
+                self._contended_attr
+                if obj.is_exhausted
+                else (self._busy_attr if obj.waiters else 0)
+            )
+            return obj.fill_percent, label, cell, attr
+
         if not obj.is_locked:
             return 0.0, "FREE", cell, 0
 
@@ -601,7 +628,12 @@ class TUIKernelObjectInfo:
         self, stdscr: curses.window, y: int, x: int, kind: str, obj, selected: bool = False
     ) -> None:
         fill, label, waiters, attr = self.row_values(kind, obj)
-        self.draw_cells(stdscr, y, x, kind, obj.name, fill, label, waiters, attr, selected)
+        # Only a slab carries a peak, and only where the build tracks it. A
+        # zero peak sits on the track's first cell.
+        mark = getattr(obj, "peak_percent", None)
+        if mark == 0:
+            mark = None
+        self.draw_cells(stdscr, y, x, kind, obj.name, fill, label, waiters, attr, selected, mark)
 
     def draw_cells(
         self,
@@ -615,12 +647,13 @@ class TUIKernelObjectInfo:
         waiters: str,
         attr: int,
         selected: bool = False,
+        mark: float | None = None,
     ) -> None:
         """
         Draw the four cells of a row.
 
         Selection marks the type and name only, so the bar keeps its state
-        color.
+        color. ``mark`` is a high-water percentage drawn across the bar.
         """
         _, screen_w = stdscr.getmaxyx()
         selected_attr = self._selected_attr if selected else attr
@@ -642,7 +675,7 @@ class TUIKernelObjectInfo:
         col_pos += self._name_width + 1
 
         if col_pos + self.state_bar.width <= screen_w:
-            self.state_bar.draw(stdscr, y, col_pos, fill, label, attr)
+            self.state_bar.draw(stdscr, y, col_pos, fill, label, attr, mark)
         col_pos += self.state_bar.width + 1
 
         _addstr_clipped(stdscr, y, col_pos, _fit_str(waiters, self._waiters_width), screen_w, attr)

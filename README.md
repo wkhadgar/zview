@@ -139,8 +139,8 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
 * **ENTER**: Get details for a specific thread/heap (hit ENTER again to return).
 * **S / I**: Sort the data and invert the sorting order.
 * **H**: Access the **Heap Runtime** visualization (hit H again to return).
-* **k**: Access the **Kernel Objects** view listing semaphores and mutexes (hit k again to return).
-* **f**: In the kernel objects view, cycle the type filter (ALL, SEM, MTX).
+* **k**: Access the **Kernel Objects** view listing semaphores, mutexes, message queues and memory slabs (hit k again to return).
+* **f**: In the kernel objects view, cycle the type filter (ALL, SEM, MTX, MSG, SLB).
 * **r**: Soft refresh — re-walks the kernel thread list and clears runtime baselines.
 * **R**: Full reconnect — tears down the polling thread, disconnects the probe, reconnects, and resumes.
 
@@ -150,35 +150,62 @@ Every running thread, at a glance. Sort by any column, invert the order, and pop
 
 ![Thread list navigation](docs/assets/default_navigation.gif)
 
-### Track a single thread
+<details>
+<summary><strong>See a thread's own view</strong></summary>
+<br>
 
-Drill into one thread to watch its CPU and load graphs build up live.
+A thread carries its CPU and load graphs, building up live as it is polled.
 
 ![Thread detail](docs/assets/thread_detail.gif)
 
-### Watch your synchronization primitives
+</details>
 
-Press **k** for every statically declared `k_sem` and `k_mutex`: semaphore counts with
-their waiter lists, and mutexes with the thread that holds each lock. **f** cycles the
+### Watch your kernel objects
+
+Press **k** for every statically declared `k_sem`, `k_mutex`, `k_msgq` and `k_mem_slab`:
+semaphore counts with their waiter lists, mutexes with the thread that holds each lock,
+queues with their fill level, and slabs with the blocks they have out. **f** cycles the
 type filter, and the aggregate row on top sums whatever the filter leaves.
 
 ![Kernel objects list](docs/assets/kernel_objects.gif)
 
-Open a mutex with **ENTER** for its owner, lock depth, the threads queued behind it, and
-a per-frame lock strip that separates free from held alone from held with waiters.
+**ENTER** opens the selected object on its own history.
+
+<details>
+<summary><strong>See each object's view</strong></summary>
+<br>
+
+A mutex carries its owner, lock depth, the threads queued behind it, and a per-frame lock strip that separates free from held alone from held with waiters.
 
 ![Mutex detail](docs/assets/mutex_detail.gif)
 
-A semaphore opens onto its count against the limit over time, so a sweep from empty to
-full and the burst that drains it read visually.
+A semaphore plots its count against the limit over time, so a sweep from empty to full and the burst that drains it read visually.
 
 ![Semaphore detail](docs/assets/semaphore_detail.gif)
 
+A queue plots its depth against its capacity, with the threads parked on it: senders when it is full, receivers when it is empty.
+
+![Message queue detail](docs/assets/msgq_detail.gif)
+
+A slab plots the blocks it has out against the blocks it owns, with its peak marked on the bar if the build sets `CONFIG_MEM_SLAB_TRACE_MAX_UTILIZATION`.
+
+![Memory slab detail](docs/assets/mem_slab_detail.gif)
+
+</details>
+
 ### Inspect your heaps
 
-Jump to the heaps view and open any heap's fragmentation map.
+Jump to the heaps view with **H** for every heap's usage against its size.
+
+<details>
+<summary><strong>See a heap's fragmentation map</strong></summary>
+<br>
+
+A heap opens onto a map of its chunks in address order, so the free space left between allocations reads as gaps.
 
 ![Heap detail](docs/assets/heap_detail.gif)
+
+</details>
 
 ## Offline workflows
 
@@ -263,7 +290,7 @@ west zview -r gdb -t localhost:1234
 <summary><strong>Kernel object coverage</strong></summary>
 <br>
 
-Only statically declared objects are listed. `K_SEM_DEFINE`, `K_MUTEX_DEFINE` and friends land in the symbol table, where ZView finds them while parsing the ELF; an object created at runtime has no symbol and never appears in the view.
+Only statically declared objects are listed. `K_SEM_DEFINE`, `K_MUTEX_DEFINE`, `K_MSGQ_DEFINE`, `K_MEM_SLAB_DEFINE` and friends land in the symbol table, where ZView finds them while parsing the ELF; an object created at runtime has no symbol and never appears in the view. Nor does one the linker drops: an object no code touches is garbage collected out of the symbol table, however statically it was declared.
 
 > **Note:** Waiter lists need a `sys_dlist_t` wait queue, Zephyr's default (`CONFIG_WAITQ_SIMPLE`). Under `CONFIG_WAITQ_SCALABLE` the queue is a red-black tree, and the waiters column reads `unknown` instead of a count.
 

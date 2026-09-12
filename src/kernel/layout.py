@@ -36,7 +36,7 @@ class KernelLayout:
     heap_max_allocated_bytes: int | None = None
     heap_end_chunk: int | None = None
 
-    # Optional: synchronization primitives. Resolved per group.
+    # Optional: kernel objects. Resolved per group.
     sem_wait_q: int | None = None
     sem_count: int | None = None
     sem_limit: int | None = None
@@ -44,6 +44,18 @@ class KernelLayout:
     mutex_wait_q: int | None = None
     mutex_owner: int | None = None
     mutex_lock_count: int | None = None
+
+    msgq_wait_q: int | None = None
+    msgq_msg_size: int | None = None
+    msgq_max_msgs: int | None = None
+    msgq_used_msgs: int | None = None
+
+    mem_slab_wait_q: int | None = None
+    mem_slab_num_blocks: int | None = None
+    mem_slab_block_size: int | None = None
+    mem_slab_num_used: int | None = None
+    # Only on a build with CONFIG_MEM_SLAB_TRACE_MAX_UTILIZATION.
+    mem_slab_max_used: int | None = None
 
     # _thread_base.qnode_dlist within k_thread: the link a queued thread is
     # threaded by.
