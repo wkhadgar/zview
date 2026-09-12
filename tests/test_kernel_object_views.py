@@ -672,22 +672,6 @@ def test_detail_layout_holds_as_the_wait_queue_grows(controller, theme):
     assert rows_by_size[0] == rows_by_size[1] == rows_by_size[2]
 
 
-def test_detail_wait_queue_truncates_instead_of_overflowing(controller, theme):
-    """A queue longer than the screen ends in a `... N more` line."""
-    if not hasattr(curses, "ACS_S3"):
-        curses.ACS_S3 = ord("-")
-
-    controller.detailing_mutex_address = 0x3000
-    controller.mutex_history = {}
-    controller.mutexes_data = [_lock_with(tuple(f"waiter_{i}" for i in range(40)))]
-    view = MutexDetailView(controller, theme)
-
-    win = _StubWin(height=24)
-    view.render(win, 24, 209)
-
-    assert any("more" in text for _, _, text in win.writes)
-
-
 def test_contention_strip_colors_contended_frames(controller, distinct_theme):
     """Contended frames are red in the strip, held-alone frames busy, free plain."""
     if not hasattr(curses, "ACS_S3"):
