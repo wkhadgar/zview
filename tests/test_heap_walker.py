@@ -6,6 +6,7 @@ import struct
 
 import pytest
 
+from kernel.heaps import walk_heap_waiters
 from orchestrator import ZScraper
 
 
@@ -142,3 +143,53 @@ def test_big_endian_16bit_walk():
     assert walker.get_heap_fragmentation(0x1000) == [
         {"used": True, "size": 16},
     ]
+
+
+class FakeWaitQueueScraper:
+    """Word-addressed stand-in for the ``k_heap`` wait queue reads."""
+
+    def __init__(self, words: dict[int, int]):
+        self._words = words
+        self.endianess = "<"
+
+    def read32(self, at: int, amount: int = 1):
+        try:
+            return tuple(self._words[at + 4 * i] for i in range(amount))
+        except KeyError as e:
+            raise AssertionError(f"unexpected read32 @ 0x{at:X}") from e
+
+
+# k_heap: a sys_heap at offset 0, the wait queue behind it.
+_HEAP = 0x8000
+_WAIT_Q = 12
+_QNODE = 0
+
+
+def test_a_quiet_heap_has_no_waiters():
+    scraper = FakeWaitQueueScraper({_HEAP + _WAIT_Q: _HEAP + _WAIT_Q})
+
+    assert walk_heap_waiters(scraper, _HEAP, _WAIT_Q, _QNODE) == ()
+
+
+def test_threads_waiting_for_memory_are_named():
+    first, second = 0x3000, 0x3100
+    scraper = FakeWaitQueueScraper(
+        {
+            _HEAP + _WAIT_Q: first,
+            first: second,
+            second: _HEAP + _WAIT_Q,
+        }
+    )
+
+    waiters = walk_heap_waiters(
+        scraper, _HEAP, _WAIT_Q, _QNODE, {first: "worker", second: "logger"}
+    )
+
+    assert waiters == ("worker", "logger")
+
+
+def test_an_unnamed_waiter_falls_back_to_its_address():
+    thread = 0x3000
+    scraper = FakeWaitQueueScraper({_HEAP + _WAIT_Q: thread, thread: _HEAP + _WAIT_Q})
+
+    assert walk_heap_waiters(scraper, _HEAP, _WAIT_Q, _QNODE) == ("thread @ 0x3000",)

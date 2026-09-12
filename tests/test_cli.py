@@ -98,6 +98,7 @@ def test_dump_prints_every_group_it_polled(monkeypatch, capsys):
                 max_allocated_bytes=1536,
                 usage_percent=50.0,
                 chunks=None,
+                waiters=("heap_waiter_id",),
             )
         ],
         "msgqs": [
@@ -124,6 +125,7 @@ def test_dump_prints_every_group_it_polled(monkeypatch, capsys):
     assert rc == 0
     assert "msgq bench_q              8/8 x 4B waiters=-" in out
     assert "slab bench_slab           6/8 x 64B peak=7 waiters=slab_id" in out
+    assert "waiters=heap_waiter_id" in out
 
 
 def test_dump_frame_arg_skips_to_requested_frame(monkeypatch, capsys):

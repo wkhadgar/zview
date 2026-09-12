@@ -2,11 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Zephyr sys_heap chunk walker."""
+"""Zephyr sys_heap chunk walker and k_heap wait queue reader."""
 
 import struct
 
 from backend.base import AbstractScraper
+from kernel.wait_queues import resolve_waiter_names, walk_wait_queue
 
 
 def walk_heap_fragmentation(
@@ -74,3 +75,23 @@ def walk_heap_fragmentation(
         c += c_size
 
     return chunks
+
+
+def walk_heap_waiters(
+    scraper: AbstractScraper,
+    heap_address: int,
+    wait_q_offset: int,
+    qnode_offset: int,
+    thread_names: dict[int, str] | None = None,
+) -> tuple[str, ...]:
+    """
+    Return the names of the threads queued on a ``k_heap``, in queue order.
+
+    ``heap_address`` is the ``k_heap`` itself, not the ``sys_heap`` it wraps;
+    ``wait_q_offset`` is the queue's offset within it. A thread queues there by
+    asking for memory with a timeout the heap cannot meet.
+    """
+    return resolve_waiter_names(
+        walk_wait_queue(scraper, heap_address + wait_q_offset, qnode_offset),
+        thread_names,
+    )

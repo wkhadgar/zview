@@ -259,7 +259,8 @@ def _do_dump(args) -> int:
         for h in frame.get("heaps", []):
             print(
                 f"heap {h.name:20s} free={h.free_bytes} "
-                f"alloc={h.allocated_bytes} max={h.max_allocated_bytes}"
+                f"alloc={h.allocated_bytes} max={h.max_allocated_bytes} "
+                f"waiters={_waiters(h.waiters)}"
             )
         for s in frame.get("semaphores", []):
             print(f"sem  {s.name:20s} {s.count}/{s.limit}  waiters={_waiters(s.waiters)}")
