@@ -66,7 +66,6 @@ class SpecialCode:
     SORT = ord("s")
     INVERSE = ord("i")
     ESCAPE = 27
-    HEAPS = ord("h")
     KERNEL_OBJECTS = ord("k")
     FILTER = ord("f")
     REFRESH = ord("r")
@@ -79,7 +78,6 @@ class ZViewState(enum.Enum):
     FATAL_ERROR = 1
     THREAD_LIST_VIEW = 2
     THREAD_DETAIL_VIEW = 3
-    HEAP_LIST_VIEW = 4
     HEAPS_DETAIL_VIEW = 5
     KERNEL_OBJECT_LIST_VIEW = 6
     MUTEX_DETAIL_VIEW = 7

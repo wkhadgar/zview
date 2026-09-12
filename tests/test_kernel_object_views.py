@@ -9,9 +9,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backend.base import MemSlabInfo, MsgqInfo, MutexInfo, MutexState, SemaphoreInfo
+from backend.base import HeapInfo, MemSlabInfo, MsgqInfo, MutexInfo, MutexState, SemaphoreInfo
 from frontend.tui.views.base import SpecialCode, ZViewState, ZViewTUIAttributes
 from frontend.tui.views.kernel_object_list import (
+    ALLOCATORS,
+    HEAP,
     MEM_SLAB,
     MSGQ,
     MUTEX,
@@ -86,13 +88,24 @@ def controller() -> MagicMock:
     return c
 
 
+def _filter_to(view: KernelObjectListView, step: str) -> None:
+    """Press ``f`` until the view sits on one filter step."""
+    for _ in range(len(view._FILTERS)):
+        if view.filter_name == step:
+            return
+        view.handle_input(SpecialCode.FILTER)
+
+    raise AssertionError(f"filter {step} is not in the cycle")
+
+
 def test_rows_include_every_type(controller, theme):
+    controller.heaps_data = [_heap()]
     view = KernelObjectListView(controller, theme)
 
     kinds = {kind for kind, _ in view._rows()}
 
-    assert kinds == {SEMAPHORE, MUTEX, MSGQ, MEM_SLAB}
-    assert len(view._rows()) == 6
+    assert kinds == {SEMAPHORE, MUTEX, MSGQ, MEM_SLAB, HEAP}
+    assert len(view._rows()) == 7
 
 
 def test_filter_cycles_through_types(controller, theme):
@@ -110,6 +123,14 @@ def test_filter_cycles_through_types(controller, theme):
     view.handle_input(SpecialCode.FILTER)
     assert view.filter_name == MSGQ
     assert {kind for kind, _ in view._rows()} == {MSGQ}
+
+    view.handle_input(SpecialCode.FILTER)
+    assert view.filter_name == ALLOCATORS
+    assert {kind for kind, _ in view._rows()} == {MEM_SLAB}
+
+    view.handle_input(SpecialCode.FILTER)
+    assert view.filter_name == HEAP
+    assert view._rows() == []
 
     view.handle_input(SpecialCode.FILTER)
     assert view.filter_name == MEM_SLAB
@@ -265,6 +286,7 @@ def test_empty_message_distinguishes_absent_from_filtered(controller, theme):
     controller.scraper.has_mutexes = False
     controller.scraper.has_msgqs = False
     controller.scraper.has_mem_slabs = False
+    controller.scraper.has_heaps = False
 
     assert "No statically declared" in view._empty_message()
 
@@ -420,7 +442,7 @@ def test_columns_shrink_to_fit_the_minimum_terminal(controller, theme):
 
 @pytest.mark.parametrize(
     ("presses", "expected_column"),
-    [(0, 0), (1, 1), (2, 3), (3, 0)],
+    [(0, 0), (1, 1), (2, 3), (3, 2), (4, 0)],
 )
 def test_sort_indicator_tracks_the_sorted_column(controller, theme, presses, expected_column):
     """The arrow marks the column the active sort key orders by."""
@@ -429,6 +451,19 @@ def test_sort_indicator_tracks_the_sorted_column(controller, theme, presses, exp
         view.handle_input(SpecialCode.SORT)
 
     assert view._sort_columns[view._current_sort_idx] == expected_column
+
+
+def test_the_last_sort_key_orders_every_type_by_its_bar(controller, theme):
+    """One key for how full a thing is, whatever the thing counts."""
+    controller.heaps_data = [_heap(free=0, used=4096)]
+    view = KernelObjectListView(controller, theme)
+    for _ in range(3):
+        view.handle_input(SpecialCode.SORT)
+
+    fills = [view._info.row_values(kind, obj)[0] for kind, obj in view._rows()]
+
+    assert fills == sorted(fills)
+    assert fills[-1] == pytest.approx(100.0)
 
 
 class _StubWin:
@@ -988,3 +1023,99 @@ def test_the_slab_detail_says_when_the_peak_is_not_tracked(controller, distinct_
     drawn = " ".join(text for _, _, text in win.writes)
     assert MemSlabDetailView._UNTRACKED in drawn
     assert "peak" not in drawn
+
+
+def _heap(
+    name: str = "bench_heap",
+    *,
+    free: int = 1536,
+    used: int = 2560,
+    peak: int = 2816,
+    waiters: tuple[str, ...] = (),
+) -> HeapInfo:
+    total = free + used
+    return HeapInfo(
+        name=name,
+        address=0x6000,
+        free_bytes=free,
+        allocated_bytes=used,
+        max_allocated_bytes=peak,
+        usage_percent=(used / total * 100.0) if total else 0.0,
+        chunks=None,
+        waiters=waiters,
+    )
+
+
+def test_the_allocator_filter_shows_heaps_and_slabs(controller, theme):
+    controller.heaps_data = [_heap()]
+    view = KernelObjectListView(controller, theme)
+
+    _filter_to(view, ALLOCATORS)
+
+    assert {kind for kind, _ in view._rows()} == {HEAP, MEM_SLAB}
+    assert view._AGGREGATE_LABELS[ALLOCATORS] == "All Allocators"
+
+
+def test_an_allocator_filter_counts_exhaustion_not_contention(controller, theme):
+    controller.heaps_data = [_heap(free=0)]
+    view = KernelObjectListView(controller, theme)
+    _filter_to(view, ALLOCATORS)
+
+    summary = view._summary(view._rows())
+
+    assert "1 exhausted" in summary
+    assert "contended" not in summary
+
+
+def test_a_heap_row_reads_bytes_out_over_its_size(controller, theme):
+    view = KernelObjectListView(controller, theme)
+
+    fill, label, waiters, attr = view._info.row_values(HEAP, _heap())
+
+    assert label == "2560/4096B"
+    assert fill == pytest.approx(62.5)
+    assert waiters == "-"
+    assert attr == 0
+
+
+def test_a_heap_with_nothing_free_carries_the_contended_color(controller, theme):
+    view = KernelObjectListView(controller, theme)
+
+    _, _, _, attr = view._info.row_values(HEAP, _heap(free=0, used=4096))
+
+    assert attr == view._info._contended_attr
+
+
+def test_a_heap_with_a_thread_waiting_for_memory_reads_busy(controller, theme):
+    view = KernelObjectListView(controller, theme)
+
+    _, _, waiters, attr = view._info.row_values(HEAP, _heap(waiters=("worker",)))
+
+    assert waiters.startswith("1")
+    assert attr == view._info._busy_attr
+
+
+def test_a_heap_carries_no_peak_mark(controller, theme):
+    """``max_allocated_bytes`` peaks the allocated bytes; the bar is not drawn on that axis."""
+    view = KernelObjectListView(controller, theme)
+    view._info.set_field_widths(5, 24, 22, 30)
+
+    marks: list[float | None] = []
+    view._info.state_bar.draw = lambda stdscr, y, x, pct, label=None, attr=None, mark=None: (
+        marks.append(mark)
+    )
+
+    view._info.draw(_StubWin(), 4, 0, HEAP, _heap())
+
+    assert marks == [None]
+
+
+def test_enter_on_a_heap_opens_its_own_view(controller, theme):
+    controller.heaps_data = [_heap()]
+    view = KernelObjectListView(controller, theme)
+    _filter_to(view, HEAP)
+
+    state = view.handle_input(SpecialCode.NEWLINE)
+
+    assert state is ZViewState.HEAPS_DETAIL_VIEW
+    assert controller.detailing_heap_address == 0x6000

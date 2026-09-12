@@ -13,25 +13,33 @@ from frontend.tui.views.base import (
     ZViewTUIAttributes,
     compute_flex_widths,
 )
-from frontend.tui.views.heap_list import HeapListView
 from frontend.tui.widgets import TUIBox, TUIHeapInfo
 
 
 class HeapDetailView(BaseStateView):
+    """One heap: its row of byte counts, and the fragmentation map of its chunks."""
+
+    SCHEMA = {
+        "Heap": 25,
+        "Free B": 7,
+        "Used B": 7,
+        "Heap Usage %": 27,
+    }
+    COLLUM_WIDTHS: list[int] = list(SCHEMA.values())
+
     def __init__(self, controller: Any, theme: ZViewTUIAttributes):
         super().__init__(controller, theme)
-        self._scheme = HeapListView.SCHEMA
+        self._scheme = self.SCHEMA
         self._graph_a_attr = theme.GRAPH_A
         self._frag_map_frame: TUIBox = TUIBox("Fragmentation Map", "", theme.GRAPH_B)
 
         bar_theme = (theme.PROGRESS_BAR_LOW, theme.PROGRESS_BAR_MEDIUM, theme.PROGRESS_BAR_HIGH)
         self._tui_heap_info: TUIHeapInfo = TUIHeapInfo(theme.CURSOR, theme.ACTIVE, bar_theme)
         self._tui_heap_info.set_field_widths(
-            HeapListView.COLLUM_WIDTHS[0],
-            HeapListView.COLLUM_WIDTHS[1],
-            HeapListView.COLLUM_WIDTHS[2],
-            HeapListView.COLLUM_WIDTHS[3],
-            HeapListView.COLLUM_WIDTHS[4],
+            self.COLLUM_WIDTHS[0],
+            self.COLLUM_WIDTHS[1],
+            self.COLLUM_WIDTHS[2],
+            self.COLLUM_WIDTHS[3],
         )
 
     @staticmethod
@@ -169,11 +177,11 @@ class HeapDetailView(BaseStateView):
         stdscr.refresh()
 
     def keybindings(self) -> list[Keybind]:
-        return [Keybind("<Enter>", "Back", "Return to the heap list")]
+        return [Keybind("<Enter>", "Back", "Return to the kernel objects list")]
 
     def handle_input(self, key: int) -> ZViewState | None:
         if key in (curses.KEY_ENTER, SpecialCode.NEWLINE, SpecialCode.RETURN):
-            return ZViewState.HEAP_LIST_VIEW
+            return ZViewState.KERNEL_OBJECT_LIST_VIEW
         elif key == SpecialCode.QUIT:
             self.controller.running = False
         return None

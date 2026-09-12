@@ -188,14 +188,8 @@ class ThreadListView(BaseStateView):
         ]
         # The footer shows the first three bindings only, so the view switches
         # come ahead of Refresh.
-        switches = []
-        if self.controller.scraper.has_heaps:
-            switches.append(Keybind("h", "Heaps", "Switch to the heaps view"))
-        if self.controller.scraper.has_semaphores or self.controller.scraper.has_mutexes:
-            switches.append(
-                Keybind("k", "Kernel objects", "Switch to the semaphores and mutexes view")
-            )
-        bindings[1:1] = switches
+        if self.controller.scraper.has_kernel_objects():
+            bindings[1:1] = [Keybind("k", "Kernel objects", "Switch to the kernel objects view")]
         return bindings
 
     def handle_input(self, key: int) -> ZViewState | None:
@@ -240,16 +234,8 @@ class ThreadListView(BaseStateView):
 
                 return None
 
-            case SpecialCode.HEAPS:
-                if not self.controller.scraper.has_heaps:
-                    return None
-
-                return ZViewState.HEAP_LIST_VIEW
-
             case SpecialCode.KERNEL_OBJECTS:
-                if not (
-                    self.controller.scraper.has_semaphores or self.controller.scraper.has_mutexes
-                ):
+                if not self.controller.scraper.has_kernel_objects():
                     return None
 
                 return ZViewState.KERNEL_OBJECT_LIST_VIEW

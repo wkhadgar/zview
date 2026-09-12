@@ -12,21 +12,25 @@ from frontend.tui.views.base import (
     ZViewState,
     ZViewTUIAttributes,
 )
-from frontend.tui.widgets import MEM_SLAB, MSGQ, MUTEX, SEMAPHORE, TUIKernelObjectInfo
+from frontend.tui.widgets import HEAP, MEM_SLAB, MSGQ, MUTEX, SEMAPHORE, TUIKernelObjectInfo
 
-__all__ = ["MEM_SLAB", "MSGQ", "MUTEX", "SEMAPHORE", "KernelObjectListView"]
+# Filter step covering every type that hands out memory.
+ALLOCATORS = "ALLOC"
+
+__all__ = ["ALLOCATORS", "HEAP", "MEM_SLAB", "MSGQ", "MUTEX", "SEMAPHORE", "KernelObjectListView"]
 
 
 class KernelObjectListView(BaseStateView):
     """
-    List of the semaphores, mutexes, message queues and memory slabs found
-    in the ELF.
+    List of the semaphores, mutexes, message queues, memory slabs and heaps
+    found in the ELF.
 
     Columns are type, name, a state bar and the wait queue. The bar shows
     count over limit for a semaphore, held or free for a mutex, used over
-    capacity for a queue and blocks out over the block count for a slab,
-    captioned with the count, the owner or the size. ``f`` filters by type,
-    ``Enter`` opens the detail view for the selected object.
+    capacity for a queue, blocks out over the block count for a slab and
+    bytes out over the size for a heap, captioned with the count, the owner
+    or the size. ``f`` filters by type, ``Enter`` opens the detail view for
+    the selected object.
     """
 
     # ``State`` is the bar column and absorbs the spare width.
@@ -34,15 +38,21 @@ class KernelObjectListView(BaseStateView):
     COLUMNS: list[str] = list(SCHEMA.keys())
     _BAR_COLUMN = 2
 
-    _FILTERS = ("ALL", SEMAPHORE, MUTEX, MSGQ, MEM_SLAB)
+    _FILTERS = ("ALL", SEMAPHORE, MUTEX, MSGQ, ALLOCATORS, HEAP, MEM_SLAB)
     # The aggregate row sums the filtered rows, so it is labelled by the filter.
     _AGGREGATE_LABELS = {
         "ALL": "All Objects",
         SEMAPHORE: "All Semaphores",
         MUTEX: "All Mutexes",
         MSGQ: "All Queues",
+        ALLOCATORS: "All Allocators",
+        HEAP: "All Heaps",
         MEM_SLAB: "All Slabs",
     }
+    # Types a filter step covers, for the steps that cover more than their own.
+    _FILTER_KINDS = {ALLOCATORS: (HEAP, MEM_SLAB)}
+    # An allocator out of room is exhausted, not contended.
+    _PRESSURE_WORDS = {ALLOCATORS: "exhausted", HEAP: "exhausted", MEM_SLAB: "exhausted"}
     _MAX_NAME = 34
     _MAX_LISTED_WAITERS = 3
     _UNKNOWN = "?"
@@ -66,25 +76,35 @@ class KernelObjectListView(BaseStateView):
             lambda row: (row[0], row[1].name),
             lambda row: row[1].name,
             lambda row: len(row[1].waiters or ()),
+            # Whatever its bar counts: a count, a depth, blocks or bytes.
+            lambda row: self._info.row_values(row[0], row[1])[0],
         ]
         # Column each sort key orders by, for the header indicator.
-        self._sort_columns = (0, 1, 3)
+        self._sort_columns = (0, 1, 3, 2)
 
     @property
     def filter_name(self) -> str:
         return self._FILTERS[self._filter_idx]
 
+    def _shows(self, kind: str) -> bool:
+        name = self.filter_name
+        if name == "ALL":
+            return True
+
+        return kind in self._FILTER_KINDS.get(name, (name,))
+
     def _rows(self) -> list[tuple[str, Any]]:
         """Typed, filtered and sorted rows backing the table."""
         rows: list[tuple[str, Any]] = []
-        if self.filter_name in ("ALL", SEMAPHORE):
-            rows += [(SEMAPHORE, sem) for sem in self.controller.semaphores_data]
-        if self.filter_name in ("ALL", MUTEX):
-            rows += [(MUTEX, mutex) for mutex in self.controller.mutexes_data]
-        if self.filter_name in ("ALL", MSGQ):
-            rows += [(MSGQ, msgq) for msgq in self.controller.msgqs_data]
-        if self.filter_name in ("ALL", MEM_SLAB):
-            rows += [(MEM_SLAB, slab) for slab in self.controller.mem_slabs_data]
+        for kind, objects in (
+            (SEMAPHORE, self.controller.semaphores_data),
+            (MUTEX, self.controller.mutexes_data),
+            (MSGQ, self.controller.msgqs_data),
+            (MEM_SLAB, self.controller.mem_slabs_data),
+            (HEAP, self.controller.heaps_data),
+        ):
+            if self._shows(kind):
+                rows += [(kind, obj) for obj in objects]
 
         return sorted(
             rows, key=self._sort_keys[self._current_sort_idx], reverse=self._invert_sorting
@@ -185,19 +205,20 @@ class KernelObjectListView(BaseStateView):
         return fill, self._summary(rows).strip(), cell
 
     def _is_contended(self, kind: str, obj: Any) -> bool:
-        """A mutex held with threads queued on it, a full queue or an exhausted slab."""
+        """A mutex held with threads queued on it, a full queue, or an allocator out of room."""
         if kind == MUTEX:
             return bool(obj.is_locked and obj.waiters)
         if kind == MSGQ:
             return obj.is_full
 
-        return kind == MEM_SLAB and obj.is_exhausted
+        return kind in (MEM_SLAB, HEAP) and obj.is_exhausted
 
     def _summary(self, rows: list[tuple[str, Any]]) -> str:
         contended = sum(1 for kind, obj in rows if self._is_contended(kind, obj))
         queued = sum(1 for _, obj in rows if obj.waiters)
 
-        summary = f" {len(rows)} objects | {contended} contended | {queued} with waiters"
+        word = self._PRESSURE_WORDS.get(self.filter_name, "contended")
+        summary = f" {len(rows)} objects | {contended} {word} | {queued} with waiters"
         if self.controller.waiters_unknown:
             # Stated once here instead of per row.
             summary += " | wait queues not observable (scalable waitq)"
@@ -211,6 +232,7 @@ class KernelObjectListView(BaseStateView):
             or scraper.has_mutexes
             or scraper.has_msgqs
             or scraper.has_mem_slabs
+            or scraper.has_heaps
         ):
             return " No statically declared kernel objects in this build."
 
@@ -219,7 +241,7 @@ class KernelObjectListView(BaseStateView):
     def keybindings(self) -> list[Keybind]:
         return [
             Keybind("<Enter>", "Detail", "Open detail view for the selected object"),
-            Keybind("f", "Filter", "Cycle the type filter (ALL, SEM, MTX)"),
+            Keybind("f", "Filter", "Cycle the type filter (ALL, SEM, MTX, MSG, ALLOC, HEP, SLB)"),
             Keybind("k", "Threads", "Switch back to the threads view"),
             Keybind("s", "Sort", "Cycle through sort keys"),
             Keybind("i", "Invert", "Reverse the current sort order"),
@@ -248,6 +270,10 @@ class KernelObjectListView(BaseStateView):
                 if kind == MEM_SLAB:
                     self.controller.detailing_mem_slab_address = obj.address
                     return ZViewState.MEM_SLAB_DETAIL_VIEW
+
+                if kind == HEAP:
+                    self.controller.detailing_heap_address = obj.address
+                    return ZViewState.HEAPS_DETAIL_VIEW
 
                 self.controller.detailing_semaphore_address = obj.address
                 return ZViewState.SEMAPHORE_DETAIL_VIEW

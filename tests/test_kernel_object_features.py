@@ -94,8 +94,13 @@ def test_a_scraper_reporting_no_features_is_left_alone():
 def test_nothing_is_polled_when_no_group_is_enabled():
     s = _scraper()
 
-    assert not s._has_kernel_objects()
+    assert not s.has_kernel_objects()
     assert s._poll_kernel_objects(queue.Queue()) == {}
+
+
+def test_a_build_with_only_heaps_still_has_objects_to_show():
+    """The objects view lists heaps, so the gate cannot rest on the other groups."""
+    assert _scraper(heaps=True).has_kernel_objects()
 
 
 def test_the_view_gate_skips_the_reads():

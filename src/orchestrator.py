@@ -217,8 +217,15 @@ class ZScraper:
 
         return tuple(features)
 
-    def _has_kernel_objects(self) -> bool:
-        return self.has_semaphores or self.has_mutexes or self.has_msgqs or self.has_mem_slabs
+    def has_kernel_objects(self) -> bool:
+        """True while any object group is live, so the objects view has rows to draw."""
+        return (
+            self.has_semaphores
+            or self.has_mutexes
+            or self.has_msgqs
+            or self.has_mem_slabs
+            or self.has_heaps
+        )
 
     def _poll_kernel_objects(self, data_queue: queue.Queue) -> dict:
         """
@@ -228,7 +235,7 @@ class ZScraper:
         ``waiters`` is ``None``.
         """
         frame: dict = {}
-        if not self.poll_kernel_objects or not self._has_kernel_objects():
+        if not self.poll_kernel_objects or not self.has_kernel_objects():
             return frame
 
         walk_waiters = self.waitq_flavor == "simple"

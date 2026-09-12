@@ -458,7 +458,6 @@ class TUIHeapInfo:
         self._heap_name_width = 30
         self._free_bytes_width = 8
         self._allocated_bytes_width = 8
-        self._watermark_width = 18
 
         self.usage_bar = TUIProgressBar(
             32,
@@ -467,13 +466,10 @@ class TUIHeapInfo:
             (90, bar_attributes[2]),
         )
 
-    def set_field_widths(
-        self, name: int, free_bytes: int, allocated_bytes: int, usage_bar: int, watermark: int
-    ):
+    def set_field_widths(self, name: int, free_bytes: int, allocated_bytes: int, usage_bar: int):
         self._heap_name_width = name
         self._free_bytes_width = free_bytes
         self._allocated_bytes_width = allocated_bytes
-        self._watermark_width = watermark
 
         self.usage_bar.width = usage_bar
 
@@ -502,22 +498,14 @@ class TUIHeapInfo:
         col_pos += self._allocated_bytes_width + 1
 
         # Heap Usage Progress Bar
-        heap_size = heap_info.allocated_bytes + heap_info.free_bytes
         self.usage_bar.draw(stdscr, y, col_pos, heap_info.usage_percent)
-        col_pos += self.usage_bar.width + 1
-
-        # Heap Watermark Bytes
-        watermark_bytes_display = _fit_str(
-            f"{heap_info.max_allocated_bytes} / {heap_size}",
-            self._watermark_width,
-        )
-        _addstr_clipped(stdscr, y, col_pos, watermark_bytes_display, screen_w)
 
 
 SEMAPHORE = "SEM"
 MUTEX = "MTX"
 MSGQ = "MSG"
 MEM_SLAB = "SLB"
+HEAP = "HEP"
 
 
 class TUIKernelObjectInfo:
@@ -611,6 +599,16 @@ class TUIKernelObjectInfo:
                 else (self._busy_attr if obj.waiters else 0)
             )
             return obj.fill_percent, label, cell, attr
+
+        if kind == HEAP:
+            label = f"{obj.allocated_bytes}/{obj.total_bytes}B"
+            # A heap with nothing free blocks the next allocation.
+            attr = (
+                self._contended_attr
+                if obj.is_exhausted
+                else (self._busy_attr if obj.waiters else 0)
+            )
+            return obj.usage_percent, label, cell, attr
 
         if not obj.is_locked:
             return 0.0, "FREE", cell, 0
