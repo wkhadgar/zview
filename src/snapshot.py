@@ -13,11 +13,14 @@ from backend.base import AbstractScraper
 from backend.recording import RecordingScraper
 from orchestrator import ZScraper
 
+# Every group a polling frame can carry, in the order they are emitted.
+_FRAME_GROUPS = ("threads", "heaps", "semaphores", "mutexes", "msgqs", "mem_slabs")
+
 
 def serialize_frame(frame: dict) -> dict:
     """Convert a polling frame's dataclasses into a JSON-serializable dict."""
     out: dict = {}
-    for key in ("threads", "heaps", "semaphores", "mutexes"):
+    for key in _FRAME_GROUPS:
         if key in frame:
             out[key] = [dataclasses.asdict(entry) for entry in frame[key]]
     return out

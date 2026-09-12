@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.base import HeapInfo, ThreadInfo, ThreadRuntime
+from backend.base import HeapInfo, MemSlabInfo, MsgqInfo, ThreadInfo, ThreadRuntime
 from backend.replay import ReplayScraper
 from snapshot import dump_single_frame, record_session, serialize_frame
 
@@ -54,6 +54,24 @@ def test_serialize_frame_produces_json_safe_dict():
     assert restored["threads"][0]["runtime"]["cpu"] == 1.0
     assert restored["heaps"][0]["free_bytes"] == 1024
     assert restored["heaps"][0]["chunks"] is None
+
+
+def test_serialize_frame_carries_every_object_group():
+    frame = {
+        "msgqs": [
+            MsgqInfo(name="q", address=0x4000, used_msgs=2, max_msgs=8, msg_size=16, waiters=())
+        ],
+        "mem_slabs": [
+            MemSlabInfo(
+                name="slab", address=0x5000, num_blocks=8, block_size=64, num_used=3, waiters=()
+            )
+        ],
+    }
+
+    out = json.loads(json.dumps(serialize_frame(frame)))
+
+    assert out["msgqs"][0]["used_msgs"] == 2
+    assert out["mem_slabs"][0]["num_used"] == 3
 
 
 def test_serialize_frame_keeps_runtime_key_as_none():
