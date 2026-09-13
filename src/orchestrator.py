@@ -14,7 +14,7 @@ from typing import Literal
 
 from backend.base import AbstractScraper, HeapInfo, ThreadInfo, ThreadRuntime
 from backend.elf_inspector import ElfInspector
-from backend.replay import ReplayComplete
+from backend.replay import ReplayComplete, ReplayMismatch
 from kernel import compat
 from kernel.heaps import walk_heap_fragmentation, walk_heap_waiters
 from kernel.layout import KernelLayout
@@ -85,6 +85,8 @@ class ZScraper:
         self._discover_kernel_object_addresses()
         self._restrict_features_to_recording()
 
+        # A recording covers every heap's chunk map or none of it; the poll
+        # finds out on its first read and backs off if there is none.
         if not self._m_scraper.is_live and self.has_heaps:
             self.capture_all_heap_chunks = True
 
@@ -653,6 +655,12 @@ class ZScraper:
                 if self.capture_all_heap_chunks or self.extra_info_heap_address == heap_struct:
                     try:
                         chunks = self.get_heap_fragmentation(heap_struct)
+                    except ReplayMismatch:
+                        # A recording taken without the chunk map has no such
+                        # read to serve. A drift leaves the cursor untouched,
+                        # so the session goes on without asking again.
+                        self.capture_all_heap_chunks = False
+                        self.extra_info_heap_address = None
                     except Exception as e:
                         data_queue.put(
                             {"error": f"Error reading sparsity for {heap_name}: {e}"},

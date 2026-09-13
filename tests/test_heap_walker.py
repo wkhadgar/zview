@@ -264,6 +264,27 @@ def test_a_heap_without_a_resolved_queue_reports_no_waiter_list():
     assert poller._poll_heaps(queue.Queue())[0].waiters is None
 
 
+def test_a_recording_without_a_chunk_map_stops_asking_for_one():
+    """A drift leaves the replay cursor untouched, so the heap is still reported."""
+    from backend.replay import ReplayMismatch
+
+    def drift(_address):
+        raise ReplayMismatch("Replay drift at index 19: expected end_batch, got read_bytes.")
+
+    quiet_queue = {_HEAP + _WAIT_Q: _HEAP + _WAIT_Q}
+    poller = _heap_poller({**_STATS, **quiet_queue}, wait_q=_WAIT_Q)
+    poller.capture_all_heap_chunks = True
+    poller.get_heap_fragmentation = drift
+    reported: queue.Queue = queue.Queue()
+
+    heap = poller._poll_heaps(reported)[0]
+
+    assert heap.chunks is None
+    assert heap.free_bytes == 1536
+    assert not poller.capture_all_heap_chunks
+    assert reported.empty()
+
+
 def test_a_recording_that_never_walked_the_queue_reports_no_waiter_list():
     """Replay matches a read sequence, so a feature the recording lacks must not be read."""
     poller = _heap_poller(_STATS, wait_q=_WAIT_Q)
