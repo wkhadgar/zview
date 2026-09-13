@@ -11,7 +11,6 @@ import pytest
 from frontend.tui.views.base import BaseStateView, Keybind, ZViewTUIAttributes
 from frontend.tui.views.fatal_error import FatalErrorView
 from frontend.tui.views.heap_detail import HeapDetailView
-from frontend.tui.views.heap_list import HeapListView
 from frontend.tui.views.thread_detail import ThreadDetailView
 from frontend.tui.views.thread_list import ThreadListView
 
@@ -34,16 +33,7 @@ def test_thread_list_footer_truncates_at_max_with_ellipsis(controller, theme):
     hint = view._footer_hint().rstrip()
     parts = [p.strip() for p in hint.split("|")]
     assert parts[0] == "Help: ?"
-    assert parts[1:4] == ["Detail: <Enter>", "Heaps: h", "Kernel objects: k"]
-    assert parts[-1] == "…"
-
-
-def test_heap_list_footer_overflow(controller, theme):
-    """4 view bindings overflow the cap of 3 -> trailing overflow indicator."""
-    view = HeapListView(controller, theme)
-    hint = view._footer_hint().rstrip()
-    parts = [p.strip() for p in hint.split("|")]
-    assert parts[0] == "Help: ?"
+    assert parts[1:3] == ["Detail: <Enter>", "Kernel objects: k"]
     assert parts[-1] == "…"
 
 
@@ -52,9 +42,9 @@ def test_thread_detail_footer_minimal(controller, theme):
     assert view._footer_hint() == "Help: ? | Back: <Enter> "
 
 
-def test_heap_detail_footer_minimal(controller, theme):
+def test_heap_detail_footer_matches_the_other_object_views(controller, theme):
     view = HeapDetailView(controller, theme)
-    assert view._footer_hint() == "Help: ? | Back: <Enter> "
+    assert view._footer_hint() == "Help: ? | Back: <Esc> | Objects: k "
 
 
 def test_fatal_error_footer_is_help_gateway_only(controller, theme):
@@ -172,24 +162,12 @@ def test_compute_flex_widths_empty_items_is_safe():
 
 import curses  # noqa: E402
 
-from backend.base import HeapInfo, ThreadInfo  # noqa: E402
+from backend.base import ThreadInfo  # noqa: E402
 from frontend.tui.views.base import SpecialCode, ZViewState  # noqa: E402
 
 
 def _make_thread(name: str, addr: int = 0x1000) -> ThreadInfo:
     return ThreadInfo(address=addr, stack_start=0, stack_size=1024, name=name, runtime=None)
-
-
-def _make_heap(name: str, addr: int = 0x2000) -> HeapInfo:
-    return HeapInfo(
-        name=name,
-        address=addr,
-        free_bytes=100,
-        allocated_bytes=50,
-        max_allocated_bytes=80,
-        usage_percent=33.0,
-        chunks=None,
-    )
 
 
 def test_thread_list_handle_input_arrow_keys_move_cursor(controller, theme):
@@ -215,11 +193,6 @@ def test_thread_list_handle_input_invert_flips_order(controller, theme):
     assert view._invert_sorting != initial
 
 
-def test_thread_list_handle_input_heaps_transitions_when_supported(controller, theme):
-    view = ThreadListView(controller, theme)
-    assert view.handle_input(SpecialCode.HEAPS) is ZViewState.HEAP_LIST_VIEW
-
-
 def test_thread_list_handle_input_enter_with_no_threads_stays_put(controller, theme):
     """ENTER on an empty list must not crash or transition."""
     controller.threads_data = []
@@ -243,45 +216,6 @@ def test_thread_list_handle_input_quit_sets_running_false(controller, theme):
     assert controller.running is False
 
 
-def test_heap_list_handle_input_arrow_keys_move_cursor(controller, theme):
-    view = HeapListView(controller, theme)
-    view.cursor = 2
-    view.handle_input(curses.KEY_DOWN)
-    assert view.cursor == 3
-    view.handle_input(curses.KEY_UP)
-    assert view.cursor == 2
-
-
-def test_heap_list_handle_input_sort_and_invert(controller, theme):
-    view = HeapListView(controller, theme)
-    initial_sort = view._current_sort_idx
-    initial_inv = view._invert_sorting
-    view.handle_input(SpecialCode.SORT)
-    view.handle_input(SpecialCode.INVERSE)
-    assert view._current_sort_idx != initial_sort
-    assert view._invert_sorting != initial_inv
-
-
-def test_heap_list_handle_input_h_returns_to_threads(controller, theme):
-    view = HeapListView(controller, theme)
-    assert view.handle_input(SpecialCode.HEAPS) is ZViewState.THREAD_LIST_VIEW
-
-
-def test_heap_list_handle_input_enter_with_no_heaps_stays_put(controller, theme):
-    controller.heaps_data = []
-    view = HeapListView(controller, theme)
-    assert view.handle_input(SpecialCode.NEWLINE) is None
-
-
-def test_heap_list_handle_input_enter_selects_and_transitions(controller, theme):
-    controller.heaps_data = [_make_heap("h1", 0x1000), _make_heap("h2", 0x2000)]
-    view = HeapListView(controller, theme)
-    view.cursor = 0
-    state = view.handle_input(SpecialCode.NEWLINE)
-    assert state is ZViewState.HEAPS_DETAIL_VIEW
-    assert controller.detailing_heap_address in {0x1000, 0x2000}
-
-
 def test_thread_detail_handle_input_enter_returns_to_list(controller, theme):
     view = ThreadDetailView(controller, theme)
     assert view.handle_input(SpecialCode.NEWLINE) is ZViewState.THREAD_LIST_VIEW
@@ -294,9 +228,9 @@ def test_thread_detail_handle_input_quit(controller, theme):
     assert controller.running is False
 
 
-def test_heap_detail_handle_input_enter_returns_to_list(controller, theme):
+def test_heap_detail_handle_input_enter_returns_to_the_objects_list(controller, theme):
     view = HeapDetailView(controller, theme)
-    assert view.handle_input(SpecialCode.NEWLINE) is ZViewState.HEAP_LIST_VIEW
+    assert view.handle_input(SpecialCode.NEWLINE) is ZViewState.KERNEL_OBJECT_LIST_VIEW
 
 
 def test_heap_detail_handle_input_quit(controller, theme):

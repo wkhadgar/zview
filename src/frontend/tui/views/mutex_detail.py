@@ -86,7 +86,9 @@ class MutexDetailView(KernelObjectDetailView):
         )
 
         self._draw_history(stdscr, width, mutex.address)
-        self._draw_wait_queue(stdscr, self._QUEUE_ROW, height, width, waiters)
+        # A column beside a three-row strip would hold one name.
+        queue_h = max(3, height - 2 - self._QUEUE_ROW)
+        self._queue.draw(stdscr, self._QUEUE_ROW, 0, queue_h, width, waiters)
 
         self._render_status(stdscr, width, height - 2)
         stdscr.refresh()

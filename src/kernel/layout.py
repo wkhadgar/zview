@@ -35,6 +35,8 @@ class KernelLayout:
     heap_allocated_bytes: int | None = None
     heap_max_allocated_bytes: int | None = None
     heap_end_chunk: int | None = None
+    # Only on a heap found as a k_heap.
+    heap_wait_q: int | None = None
 
     # Optional: kernel objects. Resolved per group.
     sem_wait_q: int | None = None

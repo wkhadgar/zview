@@ -2,10 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import queue
 import struct
 
 import pytest
 
+from kernel.heaps import walk_heap_waiters
 from orchestrator import ZScraper
 
 
@@ -142,3 +144,156 @@ def test_big_endian_16bit_walk():
     assert walker.get_heap_fragmentation(0x1000) == [
         {"used": True, "size": 16},
     ]
+
+
+class FakeWaitQueueScraper:
+    """Word-addressed stand-in for the ``k_heap`` wait queue reads."""
+
+    def __init__(self, words: dict[int, int]):
+        self._words = words
+        self.endianess = "<"
+
+    def read32(self, at: int, amount: int = 1):
+        try:
+            return tuple(self._words[at + 4 * i] for i in range(amount))
+        except KeyError as e:
+            raise AssertionError(f"unexpected read32 @ 0x{at:X}") from e
+
+
+# k_heap: a sys_heap at offset 0, the wait queue behind it.
+_HEAP = 0x8000
+_WAIT_Q = 12
+_QNODE = 0
+
+
+def test_a_quiet_heap_has_no_waiters():
+    scraper = FakeWaitQueueScraper({_HEAP + _WAIT_Q: _HEAP + _WAIT_Q})
+
+    assert walk_heap_waiters(scraper, _HEAP, _WAIT_Q, _QNODE) == ()
+
+
+def test_threads_waiting_for_memory_are_named():
+    first, second = 0x3000, 0x3100
+    scraper = FakeWaitQueueScraper(
+        {
+            _HEAP + _WAIT_Q: first,
+            first: second,
+            second: _HEAP + _WAIT_Q,
+        }
+    )
+
+    waiters = walk_heap_waiters(
+        scraper, _HEAP, _WAIT_Q, _QNODE, {first: "worker", second: "logger"}
+    )
+
+    assert waiters == ("worker", "logger")
+
+
+def test_an_unnamed_waiter_falls_back_to_its_address():
+    thread = 0x3000
+    scraper = FakeWaitQueueScraper({_HEAP + _WAIT_Q: thread, thread: _HEAP + _WAIT_Q})
+
+    assert walk_heap_waiters(scraper, _HEAP, _WAIT_Q, _QNODE) == ("thread @ 0x3000",)
+
+
+class FakeHeapMemory:
+    """Word-addressed stand-in covering the reads one heap poll makes."""
+
+    def __init__(self, words: dict[int, int]):
+        self._words = words
+        self.endianess = "<"
+        self.is_connected = True
+
+    def read32(self, at: int, amount: int = 1):
+        try:
+            return tuple(self._words[at + 4 * i] for i in range(amount))
+        except KeyError as e:
+            raise AssertionError(f"unexpected read32 @ 0x{at:X}") from e
+
+
+def _heap_poller(words: dict[int, int], *, wait_q: int | None, flavor: str = "simple") -> ZScraper:
+    """``ZScraper`` seeded with one heap and nothing else."""
+    from kernel.layout import KernelLayout
+
+    poller = object.__new__(ZScraper)
+    poller._m_scraper = FakeHeapMemory(words)
+    poller._layout = KernelLayout(
+        threads_head=0,
+        thread_next=0,
+        stack_start=0,
+        stack_size=0,
+        heap_free_bytes=4,
+        heap_allocated_bytes=8,
+        heap_max_allocated_bytes=12,
+        heap_end_chunk=0,
+        heap_wait_q=wait_q,
+        thread_qnode=0,
+    )
+    poller._k_heap_addresses = {"bench_heap": [_HEAP]}
+    poller.capture_all_heap_chunks = False
+    poller.extra_info_heap_address = None
+    poller.waitq_flavor = flavor
+    poller.has_heap_waiters = True
+    poller._all_threads_info = {}
+    return poller
+
+
+_SYS_HEAP = 0x9000
+# The k_heap's first word points at the z_heap the stats live in.
+_STATS = {_HEAP: _SYS_HEAP, _SYS_HEAP + 4: 1536, _SYS_HEAP + 8: 2560, _SYS_HEAP + 12: 2816}
+
+
+def test_a_polled_heap_reports_the_threads_waiting_for_memory():
+    thread = 0x3000
+    poller = _heap_poller(
+        {**_STATS, _HEAP + _WAIT_Q: thread, thread: _HEAP + _WAIT_Q},
+        wait_q=_WAIT_Q,
+    )
+    poller._all_threads_info = {1: type("T", (), {"address": thread, "name": "worker"})()}
+
+    heaps = poller._poll_heaps(queue.Queue())
+
+    assert heaps[0].waiters == ("worker",)
+    assert heaps[0].free_bytes == 1536
+
+
+def test_a_heap_without_a_resolved_queue_reports_no_waiter_list():
+    """``waiters`` is None, not empty: nothing was walked."""
+    poller = _heap_poller(_STATS, wait_q=None)
+
+    assert poller._poll_heaps(queue.Queue())[0].waiters is None
+
+
+def test_a_recording_without_a_chunk_map_stops_asking_for_one():
+    """A drift leaves the replay cursor untouched, so the heap is still reported."""
+    from backend.replay import ReplayMismatch
+
+    def drift(_address):
+        raise ReplayMismatch("Replay drift at index 19: expected end_batch, got read_bytes.")
+
+    quiet_queue = {_HEAP + _WAIT_Q: _HEAP + _WAIT_Q}
+    poller = _heap_poller({**_STATS, **quiet_queue}, wait_q=_WAIT_Q)
+    poller.capture_all_heap_chunks = True
+    poller.get_heap_fragmentation = drift
+    reported: queue.Queue = queue.Queue()
+
+    heap = poller._poll_heaps(reported)[0]
+
+    assert heap.chunks is None
+    assert heap.free_bytes == 1536
+    assert not poller.capture_all_heap_chunks
+    assert reported.empty()
+
+
+def test_a_recording_that_never_walked_the_queue_reports_no_waiter_list():
+    """Replay matches a read sequence, so a feature the recording lacks must not be read."""
+    poller = _heap_poller(_STATS, wait_q=_WAIT_Q)
+    poller.has_heap_waiters = False
+
+    assert poller._poll_heaps(queue.Queue())[0].waiters is None
+
+
+def test_a_scalable_wait_queue_is_left_unwalked():
+    poller = _heap_poller(_STATS, wait_q=_WAIT_Q, flavor="scalable")
+
+    assert poller._poll_heaps(queue.Queue())[0].waiters is None

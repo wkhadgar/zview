@@ -95,6 +95,12 @@ HEAP_FIELDS: FieldTable = {
     "heap_end_chunk": ((("z_heap", "end_chunk"),),),
 }
 
+# A k_heap wraps its sys_heap with a wait queue. Resolved on its own: a heap
+# found as a sys_heap has no queue.
+HEAP_OPTIONAL_FIELDS: FieldTable = {
+    "heap_wait_q": ((("k_heap", "wait_q"),),),
+}
+
 # --- Synchronization primitives ----------------------------------------------
 
 SEMAPHORE_FIELDS: FieldTable = {

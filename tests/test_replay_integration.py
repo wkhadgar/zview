@@ -76,6 +76,16 @@ def test_replay_produces_frames(replay_run):
     assert valid, "Replay produced no valid frames"
 
 
+def test_replay_reads_only_what_the_recording_holds(replay_run):
+    """
+    A recording replays a read sequence, so a group added later must be gated
+    on the recording declaring it; an ungated read drifts every frame.
+    """
+    frames, _ = replay_run
+
+    assert [f["error"] for f in frames if "error" in f] == []
+
+
 def test_thread_shape(replay_run):
     """Every emitted thread has a non-empty name and a positive stack size."""
     frames, _ = replay_run

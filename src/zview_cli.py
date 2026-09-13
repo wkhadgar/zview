@@ -259,7 +259,8 @@ def _do_dump(args) -> int:
         for h in frame.get("heaps", []):
             print(
                 f"heap {h.name:20s} free={h.free_bytes} "
-                f"alloc={h.allocated_bytes} max={h.max_allocated_bytes}"
+                f"alloc={h.allocated_bytes} max={h.max_allocated_bytes} "
+                f"waiters={_waiters(h.waiters)}"
             )
         for s in frame.get("semaphores", []):
             print(f"sem  {s.name:20s} {s.count}/{s.limit}  waiters={_waiters(s.waiters)}")
@@ -268,6 +269,17 @@ def _do_dump(args) -> int:
             print(
                 f"mtx  {m.name:20s} {'LOCKED' if m.is_locked else 'FREE':6s} {state} "
                 f"waiters={_waiters(m.waiters)}"
+            )
+        for q in frame.get("msgqs", []):
+            print(
+                f"msgq {q.name:20s} {q.used_msgs}/{q.max_msgs} x {q.msg_size}B "
+                f"waiters={_waiters(q.waiters)}"
+            )
+        for sl in frame.get("mem_slabs", []):
+            peak = "-" if sl.max_used is None else sl.max_used
+            print(
+                f"slab {sl.name:20s} {sl.num_used}/{sl.num_blocks} x {sl.block_size}B "
+                f"peak={peak} waiters={_waiters(sl.waiters)}"
             )
     return 0
 

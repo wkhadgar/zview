@@ -21,7 +21,6 @@ class MemSlabDetailView(KernelObjectDetailView):
     # boxes add what it cannot show.
     _INFO_TITLES = (("Address", 2), ("Block size", 1), ("Peak", 1))
     _GRAPH_ROW = KernelObjectDetailView._INFO_ROW + KernelObjectDetailView._INFO_BOX_HEIGHT
-    _GRAPH_HEIGHT = 9
     _UNTRACKED = "not tracked"
 
     def _target(self) -> MemSlabInfo | None:
@@ -54,11 +53,9 @@ class MemSlabDetailView(KernelObjectDetailView):
             ],
         )
 
-        # The graph gives back height when the terminal is short, so the wait
-        # queue always has room below it.
-        graph_h = max(3, min(self._GRAPH_HEIGHT, height - self._GRAPH_ROW - 5))
-        self._draw_usage_graph(stdscr, width, slab, graph_h)
-        self._draw_wait_queue(stdscr, self._GRAPH_ROW + graph_h, height, width, slab.waiters)
+        panels = self._panels(height, width, self._GRAPH_ROW)
+        self._draw_usage_graph(stdscr, panels.graph_w, slab, panels.graph_h)
+        self._draw_wait_queue(stdscr, panels, slab.waiters)
 
         self._render_status(stdscr, width, height - 2)
         stdscr.refresh()

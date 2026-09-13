@@ -7,7 +7,7 @@ import curses
 import textwrap
 from typing import NamedTuple
 
-from backend.base import HeapInfo, MutexState, ThreadInfo, ThreadRuntime
+from backend.base import MutexState, ThreadInfo, ThreadRuntime
 
 
 def _truncate_str(text: str, max_size: int) -> str:
@@ -444,80 +444,70 @@ class TUIThreadInfo:
         _addstr_clipped(stdscr, y, col_pos, watermark_bytes_display, screen_w)
 
 
-class TUIHeapInfo:
-    def __init__(
-        self,
-        selected_attribute: int,
-        default_attribute: int,
-        bar_attributes: tuple[int, int, int],
-    ):
-        self._selected_attribute: int = selected_attribute
-        self._default_attribute: int = default_attribute
+class TUIWaitQueue:
+    """
+    Panel listing the threads queued on an object, as a tree inside a box.
 
-        # These are nice values to default to
-        self._heap_name_width = 30
-        self._free_bytes_width = 8
-        self._allocated_bytes_width = 8
-        self._watermark_width = 18
+    ``None`` waiters is not an empty queue: it means the layout could not be
+    walked. Waiters past the panel's height collapse into a count.
+    """
 
-        self.usage_bar = TUIProgressBar(
-            32,
-            bar_attributes[0],
-            (75, bar_attributes[1]),
-            (90, bar_attributes[2]),
-        )
+    _UNWALKABLE = "not observable on this build (CONFIG_WAITQ_SCALABLE)"
+    _EMPTY = "empty"
 
-    def set_field_widths(
-        self, name: int, free_bytes: int, allocated_bytes: int, usage_bar: int, watermark: int
-    ):
-        self._heap_name_width = name
-        self._free_bytes_width = free_bytes
-        self._allocated_bytes_width = allocated_bytes
-        self._watermark_width = watermark
-
-        self.usage_bar.width = usage_bar
+    def __init__(self, label_attr: int, title: str = "Wait queue"):
+        self._label_attr = label_attr
+        self._box = TUIBox(title, "", 0)
 
     def draw(
-        self, stdscr: curses.window, y: int, x: int, heap_info: HeapInfo, selected: bool = False
-    ):
-        col_pos = x
-        _, screen_w = stdscr.getmaxyx()
+        self,
+        stdscr: curses.window,
+        y: int,
+        x: int,
+        height: int,
+        width: int,
+        waiters: tuple[str, ...] | None,
+    ) -> None:
+        # The last screen row belongs to the footer, and a box needs three rows
+        # for its own borders.
+        screen_h, _ = stdscr.getmaxyx()
+        box_h = min(max(3, height), screen_h - 1 - y)
+        if box_h < 3:
+            return
 
-        # Heap name
-        heap_name_display = _truncate_str(heap_info.name, self._heap_name_width)
-        heap_name_attr = self._selected_attribute if selected else self._default_attribute
-        _addstr_clipped(stdscr, y, col_pos, heap_name_display, screen_w, heap_name_attr)
-        col_pos += self._heap_name_width + 1
+        self._box.draw(stdscr, y, x, box_h, width)
 
-        # Free bytes
-        free_bytes_display = _fit_str(str(heap_info.free_bytes), self._free_bytes_width)
-        _addstr_clipped(stdscr, y, col_pos, free_bytes_display, screen_w)
-        col_pos += self._free_bytes_width + 1
+        inner_w = width - 4
+        if inner_w <= 0:
+            return
 
-        # Allocated bytes
-        allocated_bytes_display = _fit_str(
-            str(heap_info.allocated_bytes), self._allocated_bytes_width
-        )
-        _addstr_clipped(stdscr, y, col_pos, allocated_bytes_display, screen_w)
-        col_pos += self._allocated_bytes_width + 1
+        text_x = x + 2
+        if waiters is None:
+            stdscr.addstr(y + 1, text_x, self._UNWALKABLE[:inner_w], self._label_attr)
+            return
 
-        # Heap Usage Progress Bar
-        heap_size = heap_info.allocated_bytes + heap_info.free_bytes
-        self.usage_bar.draw(stdscr, y, col_pos, heap_info.usage_percent)
-        col_pos += self.usage_bar.width + 1
+        if not waiters:
+            stdscr.addstr(y + 1, text_x, self._EMPTY[:inner_w], self._label_attr)
+            return
 
-        # Heap Watermark Bytes
-        watermark_bytes_display = _fit_str(
-            f"{heap_info.max_allocated_bytes} / {heap_size}",
-            self._watermark_width,
-        )
-        _addstr_clipped(stdscr, y, col_pos, watermark_bytes_display, screen_w)
+        last_row = y + box_h - 2
+        for idx, waiter in enumerate(waiters):
+            row = y + 1 + idx
+            if row > last_row:
+                # Replaces the last waiter row, so it covers the whole row.
+                more = f"... {len(waiters) - idx + 1} more"
+                stdscr.addstr(last_row, text_x, more.ljust(inner_w)[:inner_w])
+                break
+
+            branch = "└─" if idx == len(waiters) - 1 else "├─"
+            stdscr.addstr(row, text_x, f"{branch} {waiter}"[:inner_w])
 
 
 SEMAPHORE = "SEM"
 MUTEX = "MTX"
 MSGQ = "MSG"
 MEM_SLAB = "SLB"
+HEAP = "HEP"
 
 
 class TUIKernelObjectInfo:
@@ -611,6 +601,16 @@ class TUIKernelObjectInfo:
                 else (self._busy_attr if obj.waiters else 0)
             )
             return obj.fill_percent, label, cell, attr
+
+        if kind == HEAP:
+            label = f"{obj.allocated_bytes}/{obj.total_bytes}B"
+            # A heap with nothing free blocks the next allocation.
+            attr = (
+                self._contended_attr
+                if obj.is_exhausted
+                else (self._busy_attr if obj.waiters else 0)
+            )
+            return obj.usage_percent, label, cell, attr
 
         if not obj.is_locked:
             return 0.0, "FREE", cell, 0

@@ -30,7 +30,6 @@ from frontend.tui.views.base import (
 )
 from frontend.tui.views.fatal_error import FatalErrorView
 from frontend.tui.views.heap_detail import HeapDetailView
-from frontend.tui.views.heap_list import HeapListView
 from frontend.tui.views.kernel_object_list import KernelObjectListView
 from frontend.tui.views.mem_slab_detail import MemSlabDetailView
 from frontend.tui.views.msgq_detail import MsgqDetailView
@@ -164,7 +163,6 @@ class ZView:
             ZViewState.FATAL_ERROR: FatalErrorView(self, theme),
             ZViewState.THREAD_LIST_VIEW: ThreadListView(self, theme),
             ZViewState.THREAD_DETAIL_VIEW: ThreadDetailView(self, theme),
-            ZViewState.HEAP_LIST_VIEW: HeapListView(self, theme),
             ZViewState.HEAPS_DETAIL_VIEW: HeapDetailView(self, theme),
             ZViewState.KERNEL_OBJECT_LIST_VIEW: KernelObjectListView(self, theme),
             ZViewState.MUTEX_DETAIL_VIEW: MutexDetailView(self, theme),
@@ -388,13 +386,6 @@ class ZView:
                         new_pool.append(idle_t)
                     self.scraper.thread_pool = new_pool
 
-                self.purge_queue()
-
-            case ZViewState.HEAP_LIST_VIEW:
-                if live:
-                    self.scraper.extra_info_heap_address = None
-                    self.scraper.thread_pool = []
-                    self.scraper.poll_kernel_objects = False
                 self.purge_queue()
 
             case (

@@ -84,6 +84,50 @@ def test_dump_replay_human_readable(monkeypatch, capsys):
     assert "stack=" in out and "watermark=" in out
 
 
+def test_dump_prints_every_group_it_polled(monkeypatch, capsys):
+    """The text dump covers what the JSON one carries, groups added later included."""
+    from backend.base import HeapInfo, MemSlabInfo, MsgqInfo
+
+    frame = {
+        "heaps": [
+            HeapInfo(
+                name="bench_heap",
+                address=0x5000,
+                free_bytes=768,
+                allocated_bytes=768,
+                max_allocated_bytes=1536,
+                usage_percent=50.0,
+                chunks=None,
+                waiters=("heap_waiter_id",),
+            )
+        ],
+        "msgqs": [
+            MsgqInfo(
+                name="bench_q", address=0x4000, used_msgs=8, max_msgs=8, msg_size=4, waiters=()
+            )
+        ],
+        "mem_slabs": [
+            MemSlabInfo(
+                name="bench_slab",
+                address=0x6000,
+                num_blocks=8,
+                block_size=64,
+                num_used=6,
+                max_used=7,
+                waiters=("slab_id",),
+            )
+        ],
+    }
+    monkeypatch.setattr(zview_cli, "dump_single_frame", lambda *a, **kw: frame)
+
+    rc, out, _ = _invoke(monkeypatch, capsys, ["dump", "-e", str(_ELF), "-i", str(_FIXTURE)])
+
+    assert rc == 0
+    assert "msgq bench_q              8/8 x 4B waiters=-" in out
+    assert "slab bench_slab           6/8 x 64B peak=7 waiters=slab_id" in out
+    assert "waiters=heap_waiter_id" in out
+
+
 def test_dump_frame_arg_skips_to_requested_frame(monkeypatch, capsys):
     """--frame 3 emits a different frame than --frame 1."""
     rc1, out1, _ = _invoke(

@@ -78,6 +78,16 @@ class HeapInfo:
     max_allocated_bytes: int
     usage_percent: float
     chunks: list[dict] | None
+    # ``None``: the wait queue is not walkable, or the heap is not a ``k_heap``.
+    waiters: tuple[str, ...] | None = None
+
+    @property
+    def total_bytes(self) -> int:
+        return self.allocated_bytes + self.free_bytes
+
+    @property
+    def is_exhausted(self) -> bool:
+        return self.total_bytes > 0 and self.free_bytes == 0
 
 
 @dataclass(frozen=True)

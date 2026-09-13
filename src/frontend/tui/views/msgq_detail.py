@@ -22,7 +22,6 @@ class MsgqDetailView(KernelObjectDetailView):
     # boxes add what it cannot show.
     _INFO_TITLES = (("Address", 2), ("Capacity", 1), ("Message size", 1))
     _GRAPH_ROW = KernelObjectDetailView._INFO_ROW + KernelObjectDetailView._INFO_BOX_HEIGHT
-    _GRAPH_HEIGHT = 9
 
     def _target(self) -> MsgqInfo | None:
         address = self.controller.detailing_msgq_address
@@ -50,11 +49,9 @@ class MsgqDetailView(KernelObjectDetailView):
             [f"0x{msgq.address:X}", str(msgq.max_msgs), f"{msgq.msg_size} B"],
         )
 
-        # The graph gives back height when the terminal is short, so the wait
-        # queue always has room below it.
-        graph_h = max(3, min(self._GRAPH_HEIGHT, height - self._GRAPH_ROW - 5))
-        self._draw_depth_graph(stdscr, width, msgq, graph_h)
-        self._draw_wait_queue(stdscr, self._GRAPH_ROW + graph_h, height, width, msgq.waiters)
+        panels = self._panels(height, width, self._GRAPH_ROW)
+        self._draw_depth_graph(stdscr, panels.graph_w, msgq, panels.graph_h)
+        self._draw_wait_queue(stdscr, panels, msgq.waiters)
 
         self._render_status(stdscr, width, height - 2)
         stdscr.refresh()
