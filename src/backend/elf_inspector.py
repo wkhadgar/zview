@@ -26,7 +26,13 @@ from elftools.elf.sections import SymbolTableSection
 _CACHE_HMAC_KEY = hashlib.sha256(str(Path.home()).encode()).digest()
 _HMAC_SIZE = 32  # SHA-256 digest length in bytes
 
-_CACHE_SCHEMA_VERSION = 2
+_CACHE_SCHEMA_VERSION = 4
+
+# DWARF location opcodes: an object's own address, and the frame and register
+# forms a function local takes.
+_DW_OP_ADDR = 0x03
+_DW_OP_FBREG = 0x91
+_DW_OP_REGISTER_RANGE = range(0x50, 0x90)
 
 
 class ElfInspector:
@@ -54,9 +60,12 @@ class ElfInspector:
 
         self._symbols_address: dict[str, list[int]] = {}
         self._symbols_size: dict[str, list[int]] = {}
+        self._symbols_is_object: dict[str, list[bool]] = {}
         self._struct_sizes: dict[str, int] = {}
         self._struct_members: dict[str, dict[str, int]] = {}
         self._struct_variables: dict[str, list[str]] = {}
+        self._struct_addresses: dict[str, dict[str, list[int]]] = {}
+        self._struct_declarations: dict[str, list[str]] = {}
         self._elfclass = 0
         self._little_endian = True
 
@@ -134,9 +143,12 @@ class ElfInspector:
             self._elfclass = data["elf_class"]
             self._symbols_address = data["sym_addr"]
             self._symbols_size = data["sym_size"]
+            self._symbols_is_object = data["sym_is_obj"]
             self._struct_sizes = data["struct_sizes"]
             self._struct_members = data["struct_members"]
             self._struct_variables = data["struct_vars"]
+            self._struct_addresses = data["struct_addrs"]
+            self._struct_declarations = data["struct_decls"]
             return True
 
         except (EOFError, ValueError, TypeError, KeyError, OSError):
@@ -157,9 +169,12 @@ class ElfInspector:
             "elf_class": self._elfclass,
             "sym_addr": self._symbols_address,
             "sym_size": self._symbols_size,
+            "sym_is_obj": self._symbols_is_object,
             "struct_sizes": self._struct_sizes,
             "struct_members": self._struct_members,
             "struct_vars": self._struct_variables,
+            "struct_addrs": self._struct_addresses,
+            "struct_decls": self._struct_declarations,
         }
 
         tmp = self._cache_file.with_suffix(".tmp")
@@ -217,6 +232,27 @@ class ElfInspector:
             if type_die.tag in ("DW_TAG_structure_type", "DW_TAG_union_type"):
                 self._collect_members(type_die, struct_name, full_loc)
 
+    def _variable_address(self, die, address_size: int) -> tuple[int | None, bool]:
+        """
+        ``(address, is static)`` from a variable DIE's ``DW_AT_location``.
+
+        A frame or register location is not static. A location that is absent,
+        or in a form this does not decode, is static with an unknown address.
+        """
+        location = die.attributes.get("DW_AT_location")
+        if location is None or not isinstance(location.value, list) or not location.value:
+            return None, True
+
+        expression = bytes(location.value)
+        opcode = expression[0]
+        if opcode == _DW_OP_ADDR and len(expression) == 1 + address_size:
+            order = "little" if self._little_endian else "big"
+            return int.from_bytes(expression[1:], order), True
+        if opcode == _DW_OP_FBREG or opcode in _DW_OP_REGISTER_RANGE:
+            return None, False
+
+        return None, True
+
     def _perform_single_pass_scan(self):
         """
         Executes a sweep of the ELF and DWARF tree.
@@ -236,16 +272,21 @@ class ElfInspector:
                         continue
                     self._symbols_address.setdefault(name, []).append(sym.entry["st_value"])
                     self._symbols_size.setdefault(name, []).append(sym.entry["st_size"])
+                    self._symbols_is_object.setdefault(name, []).append(
+                        sym.entry["st_info"]["type"] == "STT_OBJECT"
+                        and sym.entry["st_shndx"] not in ("SHN_UNDEF", "SHN_ABS")
+                    )
 
             if not elf.has_dwarf_info():
                 raise ValueError("ELF file lacks DWARF debug information.")
 
             dwarf = elf.get_dwarf_info()
             offset_to_struct: dict[int, str] = {}
-            pending_vars: list[tuple[str, int]] = []
+            pending_vars: list[tuple[str, int, int | None, bool]] = []
 
             for CU in dwarf.iter_CUs():
                 cu_offset = CU.cu_offset
+                address_size = CU.header["address_size"]
                 for die in CU.iter_DIEs():
                     if die.tag == "DW_TAG_structure_type":
                         name_attr = die.attributes.get("DW_AT_name")
@@ -272,15 +313,25 @@ class ElfInspector:
                             var_name = name_attr.value.decode(errors="ignore")
                             # DWARF type references are relative to the CU start.
                             type_offset = type_attr.value + cu_offset
-                            pending_vars.append((var_name, type_offset))
+                            address, is_static = self._variable_address(die, address_size)
+                            pending_vars.append((var_name, type_offset, address, is_static))
 
             # Variable-to-struct resolution is deferred to a second loop over
             # pending_vars because DWARF type references may point forward in the
             # stream relative to the variable DIE's position.
-            for var_name, type_offset in pending_vars:
+            for var_name, type_offset, address, is_static in pending_vars:
                 if type_offset in offset_to_struct:
                     struct_name = offset_to_struct[type_offset]
                     self._struct_variables.setdefault(struct_name, []).append(var_name)
+
+                    if address is not None:
+                        addresses = self._struct_addresses.setdefault(struct_name, {}).setdefault(
+                            var_name, []
+                        )
+                        if address not in addresses:
+                            addresses.append(address)
+                    elif is_static:
+                        self._struct_declarations.setdefault(struct_name, []).append(var_name)
 
     def get_symbol_info(self, symbol_name: str, info: Literal["address", "size"]) -> list[int]:
         """
@@ -355,3 +406,44 @@ class ElfInspector:
         if struct_name not in self._struct_variables:
             return None
         return list(dict.fromkeys(self._struct_variables[struct_name]))
+
+    def find_struct_instances(self, struct_name: str) -> dict[str, list[int]]:
+        """
+        Map ``{name: addresses}`` for every global instance of the named struct.
+
+        A variable's own DWARF location answers first, which separates
+        same-named statics across translation units. A name known only through
+        a declaration, such as ``k_sys_work_q``, comes from the symbol table
+        instead, where only a defined data symbol sized like the struct counts.
+        A function local is not an instance. Order follows DWARF discovery.
+        """
+        located = self._struct_addresses.get(struct_name, {})
+        declared = set(self._struct_declarations.get(struct_name, []))
+
+        found: dict[str, list[int]] = {}
+        for name in self.find_struct_variable_names(struct_name) or []:
+            if name in located:
+                found[name] = list(located[name])
+            elif name in declared:
+                addresses = self._object_symbols(name, struct_name)
+                if addresses:
+                    found[name] = addresses
+
+        return found
+
+    def _object_symbols(self, name: str, struct_name: str) -> list[int]:
+        """Addresses of the defined data symbols named ``name`` sized like the struct."""
+        if struct_name not in self._struct_sizes:
+            return []
+        struct_size = self._struct_sizes[struct_name]
+
+        return [
+            address
+            for address, size, is_object in zip(
+                self._symbols_address.get(name, []),
+                self._symbols_size.get(name, []),
+                self._symbols_is_object.get(name, []),
+                strict=True,
+            )
+            if is_object and size in (0, struct_size)
+        ]
