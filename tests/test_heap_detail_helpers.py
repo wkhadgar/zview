@@ -175,6 +175,7 @@ def _heap_controller(waiters=("worker",), used_chunks=8, free=256):
         waiters=waiters,
     )
     controller = MagicMock()
+    controller.scraper.decl_site.return_value = None
     controller.heaps_data = [heap]
     controller.detailing_heap_address = 0x5000
     controller.status_message = "Running"

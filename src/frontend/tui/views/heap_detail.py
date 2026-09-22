@@ -18,7 +18,7 @@ class HeapDetailView(KernelObjectDetailView):
     much of the bytes it covers are in use.
     """
 
-    _INFO_TITLES = (("Address", 2), ("Free", 1), ("Used", 1))
+    _INFO_TITLES = (("Location", 2), ("Free", 1), ("Used", 1))
     _MAP_ROW = KernelObjectDetailView._INFO_ROW + KernelObjectDetailView._INFO_BOX_HEIGHT
     _UNCAPTURED = "chunk map not captured for this frame"
 
@@ -49,7 +49,7 @@ class HeapDetailView(KernelObjectDetailView):
             stdscr,
             self._INFO_ROW,
             width,
-            [f"0x{heap.address:X}", f"{heap.free_bytes} B", f"{heap.allocated_bytes} B"],
+            [self._site(heap.address), f"{heap.free_bytes} B", f"{heap.allocated_bytes} B"],
         )
 
         panels = self._panels(height, width, self._MAP_ROW)

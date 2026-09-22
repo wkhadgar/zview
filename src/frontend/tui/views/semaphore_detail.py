@@ -19,7 +19,7 @@ class SemaphoreDetailView(KernelObjectDetailView):
 
     # The title row already carries count over limit and the waiters, so the
     # boxes add what it cannot show.
-    _INFO_TITLES = (("Address", 2), ("Limit", 1))
+    _INFO_TITLES = (("Location", 2), ("Limit", 1))
     _GRAPH_ROW = KernelObjectDetailView._INFO_ROW + KernelObjectDetailView._INFO_BOX_HEIGHT
 
     def _target(self) -> SemaphoreInfo | None:
@@ -45,7 +45,7 @@ class SemaphoreDetailView(KernelObjectDetailView):
             stdscr,
             self._INFO_ROW,
             width,
-            [f"0x{sem.address:X}", str(sem.limit)],
+            [self._site(sem.address), str(sem.limit)],
         )
 
         panels = self._panels(height, width, self._GRAPH_ROW)

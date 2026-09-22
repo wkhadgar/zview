@@ -19,7 +19,7 @@ class MemSlabDetailView(KernelObjectDetailView):
 
     # The title row already carries used over capacity and the waiters, so the
     # boxes add what it cannot show.
-    _INFO_TITLES = (("Address", 2), ("Block size", 1), ("Peak", 1))
+    _INFO_TITLES = (("Location", 2), ("Block size", 1), ("Peak", 1))
     _GRAPH_ROW = KernelObjectDetailView._INFO_ROW + KernelObjectDetailView._INFO_BOX_HEIGHT
     _UNTRACKED = "not tracked"
 
@@ -47,7 +47,7 @@ class MemSlabDetailView(KernelObjectDetailView):
             self._INFO_ROW,
             width,
             [
-                f"0x{slab.address:X}",
+                self._site(slab.address),
                 f"{slab.block_size} B ({slab.total_bytes} B total)",
                 self._peak_text(slab),
             ],

@@ -26,7 +26,7 @@ from elftools.elf.sections import SymbolTableSection
 _CACHE_HMAC_KEY = hashlib.sha256(str(Path.home()).encode()).digest()
 _HMAC_SIZE = 32  # SHA-256 digest length in bytes
 
-_CACHE_SCHEMA_VERSION = 4
+_CACHE_SCHEMA_VERSION = 5
 
 # DWARF location opcodes: an object's own address, and the frame and register
 # forms a function local takes.
@@ -66,6 +66,9 @@ class ElfInspector:
         self._struct_variables: dict[str, list[str]] = {}
         self._struct_addresses: dict[str, dict[str, list[int]]] = {}
         self._struct_declarations: dict[str, list[str]] = {}
+        self._decl_sites: dict[int, tuple[int, int, int]] = {}
+        self._function_sites: dict[int, tuple[int, int, int]] = {}
+        self._resolved_files: dict[tuple[int, int], str] = {}
         self._elfclass = 0
         self._little_endian = True
 
@@ -149,6 +152,8 @@ class ElfInspector:
             self._struct_variables = data["struct_vars"]
             self._struct_addresses = data["struct_addrs"]
             self._struct_declarations = data["struct_decls"]
+            self._decl_sites = data["decl_sites"]
+            self._function_sites = data["function_sites"]
             return True
 
         except (EOFError, ValueError, TypeError, KeyError, OSError):
@@ -175,6 +180,8 @@ class ElfInspector:
             "struct_vars": self._struct_variables,
             "struct_addrs": self._struct_addresses,
             "struct_decls": self._struct_declarations,
+            "decl_sites": self._decl_sites,
+            "function_sites": self._function_sites,
         }
 
         tmp = self._cache_file.with_suffix(".tmp")
@@ -253,6 +260,15 @@ class ElfInspector:
 
         return None, True
 
+    @staticmethod
+    def _declaration_site(die, cu_offset: int) -> tuple[int, int, int] | None:
+        """``(file index, line, CU offset)`` of a DIE's declaration, if it carries one."""
+        file_attr = die.attributes.get("DW_AT_decl_file")
+        line_attr = die.attributes.get("DW_AT_decl_line")
+        if file_attr is None or line_attr is None:
+            return None
+        return file_attr.value, line_attr.value, cu_offset
+
     def _perform_single_pass_scan(self):
         """
         Executes a sweep of the ELF and DWARF tree.
@@ -315,6 +331,18 @@ class ElfInspector:
                             type_offset = type_attr.value + cu_offset
                             address, is_static = self._variable_address(die, address_size)
                             pending_vars.append((var_name, type_offset, address, is_static))
+                            if address is not None:
+                                site = self._declaration_site(die, cu_offset)
+                                if site is not None:
+                                    self._decl_sites[address] = site
+
+                    elif die.tag == "DW_TAG_subprogram":
+                        low_pc = die.attributes.get("DW_AT_low_pc")
+                        site = self._declaration_site(die, cu_offset)
+                        # A function the linker dropped keeps a DIE at zero.
+                        if low_pc and low_pc.value and site is not None:
+                            # Thumb code pointers carry bit 0 set.
+                            self._function_sites[low_pc.value & ~1] = site
 
             # Variable-to-struct resolution is deferred to a second loop over
             # pending_vars because DWARF type references may point forward in the
@@ -406,6 +434,78 @@ class ElfInspector:
         if struct_name not in self._struct_variables:
             return None
         return list(dict.fromkeys(self._struct_variables[struct_name]))
+
+    def decl_site(self, address: int) -> tuple[str, int] | None:
+        """``(path, line)`` where the object at ``address`` is declared, if known."""
+        return self._resolve_site(self._decl_sites.get(address))
+
+    def function_site(self, address: int) -> tuple[str, int] | None:
+        """``(path, line)`` where the function at ``address`` is defined, if known."""
+        if not address:
+            return None
+        return self._resolve_site(self._function_sites.get(address & ~1))
+
+    def _resolve_site(self, site: tuple[int, int, int] | None) -> tuple[str, int] | None:
+        """Turn a stored ``(file index, line, CU offset)`` into a path and a line."""
+        if site is None:
+            return None
+
+        file_index, line, cu_offset = site
+        key = (cu_offset, file_index)
+        if key not in self._resolved_files:
+            path = self._read_file_name(cu_offset, file_index)
+            if path is None:
+                return None
+            self._resolved_files[key] = path
+
+        return self._resolved_files[key], line
+
+    def _read_file_name(self, cu_offset: int, file_index: int) -> str | None:
+        """
+        The path of a CU's file table entry, read from the ELF on demand.
+
+        A line program at version 5 indexes its file table from zero, an older
+        one from one, where directory zero is the compilation directory.
+        """
+        try:
+            with open(self._path, "rb") as file:
+                dwarf = ELFFile(file).get_dwarf_info()
+                cu = next((c for c in dwarf.iter_CUs() if c.cu_offset == cu_offset), None)
+                if cu is None:
+                    return None
+
+                header = dwarf.line_program_for_CU(cu).header
+                version_5 = header["version"] >= 5
+                entries = header["file_names"] if version_5 else header["file_entry"]
+                index = file_index - (0 if version_5 else 1)
+                if not 0 <= index < len(entries):
+                    return None
+
+                entry = entries[index]
+                name = entry.name.decode(errors="ignore")
+                if name.startswith("/"):
+                    return name
+
+                directory = self._directory_name(cu, header, entry.dir_index, version_5)
+                return f"{directory}/{name}" if directory else name
+        except (OSError, KeyError, AttributeError, StopIteration):
+            return None
+
+    @staticmethod
+    def _directory_name(cu, header, dir_index: int, version_5: bool) -> str | None:
+        """The directory of a file table entry, by the indexing its version uses."""
+        directories = header["include_directory"]
+        if not version_5 and dir_index == 0:
+            comp_dir = cu.get_top_DIE().attributes.get("DW_AT_comp_dir")
+            return comp_dir.value.decode(errors="ignore") if comp_dir else None
+
+        index = dir_index if version_5 else dir_index - 1
+        if not 0 <= index < len(directories):
+            return None
+
+        entry = directories[index]
+        raw = entry if isinstance(entry, bytes) else entry.name
+        return raw.decode(errors="ignore")
 
     def find_struct_instances(self, struct_name: str) -> dict[str, list[int]]:
         """

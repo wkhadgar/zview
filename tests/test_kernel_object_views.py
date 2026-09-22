@@ -40,6 +40,9 @@ def distinct_theme() -> ZViewTUIAttributes:
 @pytest.fixture
 def controller() -> MagicMock:
     c = MagicMock()
+    # The ELF answers for a site; these objects come from nowhere on disk.
+    c.scraper.decl_site.return_value = None
+    c.scraper.function_site.return_value = None
     c.scraper.has_semaphores = True
     c.scraper.has_mutexes = True
     c.scraper.has_msgqs = True
@@ -1159,3 +1162,23 @@ def test_a_narrow_terminal_draws_the_queue_under_the_graph(controller, theme):
     titles = [(y, x) for y, x, text in win.writes if text.startswith("┌Wait queue")]
     assert titles and all(x == 0 for _, x in titles)
     assert titles[0][0] > view._GRAPH_ROW
+
+
+def test_a_detail_view_names_where_the_object_is_declared(controller, theme):
+    controller.scraper.decl_site.return_value = ("/home/dev/ws/app/src/main.c", 264)
+    controller.detailing_semaphore_address = 0x2000
+    view = SemaphoreDetailView(controller, theme)
+
+    win = _render(view)
+
+    assert any("app/src/main.c:264 (0x2000)" in text for _, _, text in win.writes)
+
+
+def test_a_detail_view_falls_back_to_the_address(controller, theme):
+    """An object the ELF has no site for keeps the address it always showed."""
+    controller.detailing_semaphore_address = 0x2000
+    view = SemaphoreDetailView(controller, theme)
+
+    win = _render(view)
+
+    assert any(text.startswith("0x2000") for _, _, text in win.writes)
