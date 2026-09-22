@@ -13,7 +13,7 @@ import enum
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import ClassVar, Literal
 
 
 class ProbeError(Exception):
@@ -156,6 +156,60 @@ class MemSlabInfo:
     @property
     def total_bytes(self) -> int:
         return self.num_blocks * self.block_size
+
+
+@dataclass(frozen=True)
+class WorkqInfo:
+    """Snapshot of a Zephyr ``k_work_q``."""
+
+    _STARTED: ClassVar[int] = 1 << 0
+    _BUSY: ClassVar[int] = 1 << 1
+    _DRAIN: ClassVar[int] = 1 << 2
+    _PLUGGED: ClassVar[int] = 1 << 3
+
+    name: str
+    address: int
+    flags: int
+    # The item being run has left the list.
+    pending: tuple[str, ...] = ()
+    pending_truncated: bool = False
+    thread_name: str | None = None
+    waiters: tuple[str, ...] | None = None
+
+    @property
+    def depth(self) -> int:
+        return len(self.pending)
+
+    @property
+    def is_started(self) -> bool:
+        return bool(self.flags & self._STARTED)
+
+    @property
+    def is_busy(self) -> bool:
+        """Running a handler, which an empty pending list does not rule out."""
+        return bool(self.flags & self._BUSY)
+
+    @property
+    def is_draining(self) -> bool:
+        return bool(self.flags & self._DRAIN)
+
+    @property
+    def is_plugged(self) -> bool:
+        return bool(self.flags & self._PLUGGED)
+
+    @property
+    def states(self) -> tuple[str, ...]:
+        """The state flags set, as words, in bit order."""
+        return tuple(
+            word
+            for is_set, word in (
+                (self.is_started, "started"),
+                (self.is_busy, "busy"),
+                (self.is_draining, "draining"),
+                (self.is_plugged, "plugged"),
+            )
+            if is_set
+        )
 
 
 class MutexState(enum.IntEnum):

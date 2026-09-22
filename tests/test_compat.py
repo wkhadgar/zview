@@ -247,6 +247,7 @@ def test_kernel_object_registry_is_coherent():
         "msgqs",
         "events",
         "mem_slabs",
+        "workqs",
         "work",
     }
 
