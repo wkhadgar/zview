@@ -12,7 +12,23 @@ Real-time system observability for Zephyr RTOS, delivered over SWD.
 
 ## Prerequisites
 
-To properly analyze your Zephyr app, your ELF binary must be compiled with specific Kconfig options enabled:
+ZView reads what the build left in the ELF, so your app has to be built with a
+few Kconfig options. They ship as snippets:
+
+```
+# Everything ZView reads
+west build -S zview
+
+# Only what it cannot work without, for a tight image
+west build -S zview-minimal
+```
+
+<details>
+<summary><strong>Setting the options by hand</strong></summary>
+<br>
+
+A build that does not go through `west build` can carry the same options in its
+own `prj.conf`:
 
 ```
 ## prj.conf
@@ -26,6 +42,12 @@ CONFIG_THREAD_RUNTIME_STATS=y              # Enables CPU usage tracking
 CONFIG_SYS_HEAP_RUNTIME_STATS=y            # Enables heap runtime stats and fragmentation map
 CONFIG_MEM_SLAB_TRACE_MAX_UTILIZATION=y    # Enables the memory slab peak
 ```
+
+> **Note:** `-S zview` needs Zephyr v3.0 or newer, where every option it names
+> exists. An undefined symbol in a Kconfig fragment aborts the build, so an
+> older tree wants `-S zview-minimal`, whose three options are much older.
+
+</details>
 
 ## Installation
 
