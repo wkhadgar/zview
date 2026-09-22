@@ -4,6 +4,7 @@ import json
 import sys
 
 from backend.gdb import GDBScraper
+from backend.image import ImageMismatch, verify_target_image
 from backend.jlink import JLinkScraper
 from backend.nrfutil import NrfutilScraper
 from backend.pyocd import PyOCDScraper
@@ -196,6 +197,7 @@ def _build_live_backend(args):
 
 def _do_live(args) -> int:
     with _build_live_backend(args) as backend:
+        verify_target_image(backend, args.elf_file)
         scraper = ZScraper(backend, args.elf_file)
         if not scraper.has_names:
             print("NO thread names available (CONFIG_THREAD_NAME=n)", file=sys.stderr)
@@ -305,7 +307,12 @@ def main(
     configure_logging()
     raw = sys.argv[1:] if argv is None else argv
     args = _parse_args(_normalize_argv(raw), prog=prog, subcommand_epilogs=subcommand_epilogs)
-    return dispatch(args)
+
+    try:
+        return dispatch(args)
+    except ImageMismatch as mismatch:
+        print(f"zview: {mismatch}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ import threading
 import time
 
 from backend.base import AbstractScraper
+from backend.image import verify_target_image
 from backend.recording import RecordingScraper
 from orchestrator import ZScraper
 
@@ -45,6 +46,8 @@ def dump_single_frame(
         timeout = max(5.0, frame * max(period, 0.1) * 5.0)
 
     with backend:
+        if backend.is_live:
+            verify_target_image(backend, elf_path)
         scraper = ZScraper(backend, elf_path)
         scraper.update_available_threads()
         scraper.reset_thread_pool()
@@ -91,6 +94,11 @@ def record_session(
     """
     if duration is None and frames is None:
         raise ValueError("record_session requires either duration or frames bound")
+
+    # Checked on the bare backend, so the read stays out of the recording.
+    if backend.is_live:
+        backend.connect()
+        verify_target_image(backend, elf_path)
 
     recorder = RecordingScraper(backend, out_path)
     # Built before connect: the header is written there, and the constructor
