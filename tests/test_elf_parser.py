@@ -146,3 +146,37 @@ def test_a_declared_instance_still_resolves(parser):
     instances = parser.find_struct_instances("k_thread")
 
     assert instances["z_main_thread"] == parser.get_symbol_info("z_main_thread", "address")
+
+
+def test_an_object_carries_the_site_it_is_declared_at(parser):
+    address = parser.find_struct_instances("k_heap")["my_kernel_heap"][0]
+
+    path, line = parser.decl_site(address)
+
+    assert path.endswith("samples/basic/sys_heap/src/main.c")
+    assert line == 21
+
+
+def test_a_function_carries_the_site_it_is_defined_at(parser):
+    """A Thumb pointer's low bit is not part of the address."""
+    address = parser.get_symbol_info("main", "address")[0]
+
+    assert parser.function_site(address) == parser.function_site(address | 1)
+    path, line = parser.function_site(address)
+    assert path.endswith("samples/basic/sys_heap/src/main.c")
+    assert line == 83
+
+
+def test_an_address_with_no_site_resolves_to_nothing(parser):
+    """A function the linker dropped keeps a DIE at zero, which is not a site."""
+    assert parser.decl_site(0x1) is None
+    assert parser.function_site(0) is None
+    assert parser.function_site(0x1) is None
+
+
+def test_a_site_survives_the_cache(elf_path):
+    """The sites ride in the cached scan, so a second session needs no rescan."""
+    first = ElfInspector(str(elf_path))
+    address = first.find_struct_instances("k_heap")["my_kernel_heap"][0]
+
+    assert ElfInspector(str(elf_path)).decl_site(address) == first.decl_site(address)
