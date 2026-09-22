@@ -1,5 +1,9 @@
 name: zview
 
+build:
+  settings:
+    snippet_root: .
+
 package-managers:
   pip:
     requirement-files:
