@@ -555,6 +555,8 @@ def tui_run(stdscr, scraper: ZScraper, inspection_period):
         :param inspection_period: Period for inspection, in seconds.
     """
     app = ZView(scraper, stdscr)
+    for notice in scraper.absent_features():
+        app.report(notice)
 
     try:
         app.run(inspection_period)

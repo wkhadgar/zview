@@ -95,7 +95,8 @@ class TUIProgressBar:
         else:
             bar_color_attr = self._low_threshold_attr
 
-        completed_chars = int(self._bar_width * (percentage / 100))
+        # Clamped, so a corrupted reading cannot run the fill past the track.
+        completed_chars = int(self._bar_width * (min(max(percentage, 0.0), 100.0) / 100))
         stdscr.addstr(y, x, "│" + "·" * self._bar_width + "│")
         x += 1
 

@@ -137,12 +137,10 @@ class ZScraper:
 
     def _discover_heap_addresses(self) -> None:
         """Populate ``_k_heap_addresses`` from ``k_heap`` globals; clears ``has_heaps`` if none."""
-        elf = self._elf_inspector
-        names = elf.find_struct_variable_names("k_heap") or []
-        if not names:
+        self._k_heap_addresses = self._elf_inspector.find_struct_instances("k_heap")
+        if not self._k_heap_addresses:
             self.has_heaps = False
             return
-        self._k_heap_addresses = {n: elf.get_symbol_info(n, "address") for n in names}
         self.extra_info_heap_address: int | None = None
 
     def _discover_kernel_object_addresses(self) -> None:
@@ -173,15 +171,9 @@ class ZScraper:
         Map ``{symbol: addresses}`` for every global instance of ``struct_name``.
 
         Only statically declared objects (``K_SEM_DEFINE`` and friends) have a
-        symbol. A DWARF variable with no symbol address is skipped.
+        symbol. A DWARF variable with no matching data symbol is skipped.
         """
-        elf = self._elf_inspector
-        found: dict[str, list[int]] = {}
-        for name in elf.find_struct_variable_names(struct_name) or []:
-            with contextlib.suppress(LookupError):
-                found[name] = elf.get_symbol_info(name, "address")
-
-        return found
+        return self._elf_inspector.find_struct_instances(struct_name)
 
     def _restrict_features_to_recording(self) -> None:
         """
@@ -218,6 +210,18 @@ class ZScraper:
                 features.append(name)
 
         return tuple(features)
+
+    def absent_features(self) -> tuple[str, ...]:
+        """One notice per capability the build's Kconfig leaves out."""
+        return tuple(
+            notice
+            for enabled, notice in (
+                (self.has_names, "Warning: no thread names (CONFIG_THREAD_NAME=n)"),
+                (self.has_usage, "Warning: no cpu stats (CONFIG_THREAD_RUNTIME_STATS=n)"),
+                (self.has_heaps, "Warning: no heap stats (CONFIG_SYS_HEAP_RUNTIME_STATS=n)"),
+            )
+            if not enabled
+        )
 
     def has_kernel_objects(self) -> bool:
         """True while any object group is live, so the objects view has rows to draw."""

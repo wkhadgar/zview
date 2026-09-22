@@ -375,3 +375,13 @@ class _AttrWin(_StrictWin):
         if y >= self.height or x + len(text) > self.width:
             raise curses.error("addwstr() returned ERR")
         self.writes.append((y, x, text, attr))
+
+
+def test_absent_kconfig_features_are_logged(app):
+    """The notices the CLI prints before curses starts also belong in the log."""
+    for notice in ("Warning: no thread names (CONFIG_THREAD_NAME=n)",):
+        app.report(notice)
+
+    assert [(e.text, e.level) for e in app.messages] == [
+        ("Warning: no thread names (CONFIG_THREAD_NAME=n)", "warning")
+    ]

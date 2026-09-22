@@ -108,3 +108,23 @@ def test_the_view_gate_skips_the_reads():
     s.poll_kernel_objects = False
 
     assert s._poll_kernel_objects(queue.Queue()) == {}
+
+
+def test_absent_features_name_the_kconfig_they_need():
+    s = _scraper()
+    s.has_names = False
+    s.has_usage = True
+    s.has_heaps = False
+
+    assert s.absent_features() == (
+        "Warning: no thread names (CONFIG_THREAD_NAME=n)",
+        "Warning: no heap stats (CONFIG_SYS_HEAP_RUNTIME_STATS=n)",
+    )
+
+
+def test_a_full_build_has_no_notices():
+    s = _scraper(heaps=True)
+    s.has_names = True
+    s.has_usage = True
+
+    assert s.absent_features() == ()
