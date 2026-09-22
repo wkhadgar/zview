@@ -65,6 +65,11 @@ class ZScraper:
         # feature: a recording taken before it has no such read to replay.
         self.has_heap_waiters: bool = True
         self.capture_all_heap_chunks: bool = False
+        # The thread metadata bytes in one read, and the entry pointer read
+        # once per thread. A recording taken before that holds one read per
+        # field per frame, so replaying it keeps asking that way.
+        self.merged_thread_meta: bool = True
+        self._thread_entry_cache: dict[int, int] = {}
         # Set False by the TUI outside the kernel objects view; dump and record
         # leave it on.
         self.poll_kernel_objects: bool = True
@@ -194,10 +199,11 @@ class ZScraper:
         self.has_msgqs = self.has_msgqs and "msgqs" in features
         self.has_mem_slabs = self.has_mem_slabs and "mem_slabs" in features
         self.has_heap_waiters = self.has_heap_waiters and "heap_waiters" in features
+        self.merged_thread_meta = "merged_thread_meta" in features
 
     def active_features(self) -> tuple[str, ...]:
         """The features this session polls, as recorded in a recording header."""
-        features = ["threads"]
+        features = ["threads", "merged_thread_meta"]
         for enabled, name in (
             (self.has_heaps, "heaps"),
             (self.has_semaphores, "semaphores"),
@@ -325,6 +331,8 @@ class ZScraper:
 
     def reset_thread_pool(self):
         self.thread_pool = list(self.all_threads.values())
+        # A rebuilt list can hand the same address to a different thread.
+        self._thread_entry_cache.clear()
 
     def reset_runtime_state(self) -> None:
         """Clear watermark/cycle caches; baselines are re-seeded by the next poll."""
@@ -522,24 +530,72 @@ class ZScraper:
             "entry_point": None,
             "entry_symbol": None,
         }
-        layout = self._layout
-        scraper = self._m_scraper
         try:
-            if layout.thread_priority is not None:
-                raw = scraper.read8(thread.address + layout.thread_priority)[0]
-                meta["priority"] = raw - 256 if raw >= 0x80 else raw  # signed 8-bit
-            if layout.thread_state is not None:
-                meta["state"] = scraper.read8(thread.address + layout.thread_state)[0]
-            if layout.thread_user_options is not None:
-                meta["user_options"] = scraper.read8(thread.address + layout.thread_user_options)[0]
-            if layout.thread_entry is not None:
-                entry = scraper.read32(thread.address + layout.thread_entry)[0]
+            meta.update(
+                self._read_meta_span(thread)
+                if self.merged_thread_meta
+                else self._read_meta_fields(thread)
+            )
+            entry = self._read_thread_entry(thread)
+            if entry is not None:
                 meta["entry_point"] = entry
                 meta["entry_symbol"] = self._resolve_entry_symbol(entry)
         except Exception:
             # Per-frame read fault on metadata is non-fatal: leave fields ``None``.
             pass
         return meta
+
+    # The metadata bytes, by their offset in the layout.
+    _META_BYTES = (
+        ("priority", "thread_priority"),
+        ("state", "thread_state"),
+        ("user_options", "thread_user_options"),
+    )
+
+    def _read_meta_span(self, thread: ThreadInfo) -> dict:
+        """The metadata bytes in one read: they sit within a few bytes of each other."""
+        offsets = {
+            name: offset
+            for name, attribute in self._META_BYTES
+            if (offset := getattr(self._layout, attribute)) is not None
+        }
+        if not offsets:
+            return {}
+
+        base = min(offsets.values())
+        raw = self._m_scraper.read8(thread.address + base, max(offsets.values()) - base + 1)
+
+        values = {name: raw[offset - base] for name, offset in offsets.items()}
+        if "priority" in values:
+            values["priority"] = self._signed_priority(values["priority"])
+        return values
+
+    def _read_meta_fields(self, thread: ThreadInfo) -> dict:
+        """The metadata bytes one read apiece, as a recording made that way expects."""
+        values = {}
+        for name, attribute in self._META_BYTES:
+            offset = getattr(self._layout, attribute)
+            if offset is not None:
+                values[name] = self._m_scraper.read8(thread.address + offset)[0]
+        if "priority" in values:
+            values["priority"] = self._signed_priority(values["priority"])
+        return values
+
+    @staticmethod
+    def _signed_priority(raw: int) -> int:
+        """A Zephyr priority is a signed 8-bit value: cooperative ones are negative."""
+        return raw - 256 if raw >= 0x80 else raw
+
+    def _read_thread_entry(self, thread: ThreadInfo) -> int | None:
+        """The entry pointer, read once per thread: it is fixed while the thread lives."""
+        if self._layout.thread_entry is None:
+            return None
+        if self.merged_thread_meta and thread.address in self._thread_entry_cache:
+            return self._thread_entry_cache[thread.address]
+
+        entry = self._m_scraper.read32(thread.address + self._layout.thread_entry)[0]
+        self._thread_entry_cache[thread.address] = entry
+        return entry
 
     def _resolve_entry_symbol(self, addr: int) -> str | None:
         """Cache-backed reverse symbol lookup for a function pointer."""

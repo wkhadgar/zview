@@ -406,3 +406,78 @@ def test_cpu_share_cannot_exceed_the_total_it_divides(elf_path):
 
     assert burst.runtime.cpu_normalized == 100.0
     assert burst.runtime.cpu == 100.0
+
+
+def _meta_scraper(elf_path) -> tuple[ZScraper, list[tuple[str, int, int]]]:
+    """``ZScraper`` over a recording scraper stand-in that logs every read it serves."""
+    from dataclasses import replace as dc_replace
+
+    reads: list[tuple[str, int, int]] = []
+
+    class _Logging(MagicMock):
+        def read8(self, at, amount=1):
+            reads.append(("read8", at, amount))
+            return [0x7F] * amount
+
+        def read32(self, at, amount=1):
+            reads.append(("read32", at, amount))
+            return [0xDEAD] * amount
+
+    scraper = ZScraper(_Logging(is_connected=True), elf_path=elf_path, max_threads=2)
+    scraper._layout = dc_replace(
+        scraper._layout,
+        thread_priority=14,
+        thread_state=16,
+        thread_user_options=12,
+        thread_entry=112,
+    )
+    return scraper, reads
+
+
+def test_thread_metadata_bytes_come_in_one_read(elf_path):
+    """``user_options``, ``prio`` and ``state`` sit within one span of the struct."""
+    scraper, reads = _meta_scraper(elf_path)
+    thread = ThreadInfo(address=0x2000, stack_start=0, stack_size=0, name="t", runtime=None)
+
+    meta = scraper._read_thread_meta(thread)
+
+    assert [r for r in reads if r[0] == "read8"] == [("read8", 0x2000 + 12, 5)]
+    assert (meta["user_options"], meta["priority"], meta["state"]) == (0x7F, 0x7F, 0x7F)
+
+
+def test_the_entry_pointer_is_read_once_per_thread(elf_path):
+    scraper, reads = _meta_scraper(elf_path)
+    thread = ThreadInfo(address=0x2000, stack_start=0, stack_size=0, name="t", runtime=None)
+
+    for _ in range(4):
+        scraper._read_thread_meta(thread)
+
+    assert [r for r in reads if r[0] == "read32"] == [("read32", 0x2000 + 112, 1)]
+
+
+def test_a_rebuilt_thread_pool_reads_the_entry_again(elf_path):
+    """The address can belong to another thread after the list is walked again."""
+    scraper, reads = _meta_scraper(elf_path)
+    thread = ThreadInfo(address=0x2000, stack_start=0, stack_size=0, name="t", runtime=None)
+
+    scraper._read_thread_meta(thread)
+    scraper.reset_thread_pool()
+    scraper._read_thread_meta(thread)
+
+    assert len([r for r in reads if r[0] == "read32"]) == 2
+
+
+def test_a_legacy_recording_reads_each_metadata_field_apiece(elf_path):
+    scraper, reads = _meta_scraper(elf_path)
+    scraper.merged_thread_meta = False
+    thread = ThreadInfo(address=0x2000, stack_start=0, stack_size=0, name="t", runtime=None)
+
+    for _ in range(2):
+        scraper._read_thread_meta(thread)
+
+    assert [r for r in reads if r[0] == "read8"] == [
+        ("read8", 0x2000 + 14, 1),
+        ("read8", 0x2000 + 16, 1),
+        ("read8", 0x2000 + 12, 1),
+    ] * 2
+    assert len([r for r in reads if r[0] == "read32"]) == 2
