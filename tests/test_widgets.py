@@ -8,7 +8,7 @@ import curses
 
 import pytest
 
-from frontend.tui.widgets import TUIGraph, _addstr_clipped
+from frontend.tui.widgets import TUIGraph, TUIProgressBar, _addstr_clipped
 
 
 @pytest.fixture
@@ -83,3 +83,31 @@ def test_addstr_clipped_swallows_curses_error():
 
     # No assertion needed; test passes if no exception bubbles up.
     _addstr_clipped(_ExplodingStdscr(), 0, 0, "x", screen_w=80)
+
+
+class _FakeBarStdscr(_FakeStdscr):
+    """``_FakeStdscr`` that also accepts the attribute calls a bar makes."""
+
+    def attron(self, _attr: int) -> None:
+        pass
+
+    def attroff(self, _attr: int) -> None:
+        pass
+
+
+def _bar_blocks(percentage: float) -> tuple[int, int]:
+    """``(filled cells, rightmost column touched)`` for a 12-wide bar."""
+    stdscr = _FakeBarStdscr()
+    bar = TUIProgressBar(12, 0, (101.0, 0), (102.0, 0))
+    bar.draw(stdscr, 0, 0, percentage, label="x", attr=0)
+
+    blocks = max((len(text) for _, _, text, _ in stdscr.calls if set(text) == {"█"}), default=0)
+    rightmost = max(x + len(text) for _, x, text, _ in stdscr.calls)
+    return blocks, rightmost
+
+
+def test_a_bar_fills_no_further_than_its_track():
+    """A corrupted reading (a huge count over a small limit) stays inside the bar."""
+    blocks, rightmost = _bar_blocks(3_000_000_000.0)
+    assert blocks == 10  # width 12, minus the two edge characters
+    assert rightmost <= 12
