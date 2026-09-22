@@ -199,12 +199,8 @@ def _do_live(args) -> int:
     with _build_live_backend(args) as backend:
         verify_target_image(backend, args.elf_file)
         scraper = ZScraper(backend, args.elf_file)
-        if not scraper.has_names:
-            print("NO thread names available (CONFIG_THREAD_NAME=n)", file=sys.stderr)
-        if not scraper.has_usage:
-            print("NO cpu stats available (CONFIG_THREAD_RUNTIME_STATS=n)", file=sys.stderr)
-        if not scraper.has_heaps:
-            print("NO heap stats available (CONFIG_SYS_HEAP_RUNTIME_STATS=n)", file=sys.stderr)
+        for notice in scraper.absent_features():
+            print(notice, file=sys.stderr)
         curses.wrapper(tui_run, scraper, args.period)
     return 0
 

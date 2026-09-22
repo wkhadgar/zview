@@ -211,6 +211,18 @@ class ZScraper:
 
         return tuple(features)
 
+    def absent_features(self) -> tuple[str, ...]:
+        """One notice per capability the build's Kconfig leaves out."""
+        return tuple(
+            notice
+            for enabled, notice in (
+                (self.has_names, "Warning: no thread names (CONFIG_THREAD_NAME=n)"),
+                (self.has_usage, "Warning: no cpu stats (CONFIG_THREAD_RUNTIME_STATS=n)"),
+                (self.has_heaps, "Warning: no heap stats (CONFIG_SYS_HEAP_RUNTIME_STATS=n)"),
+            )
+            if not enabled
+        )
+
     def has_kernel_objects(self) -> bool:
         """True while any object group is live, so the objects view has rows to draw."""
         return (
