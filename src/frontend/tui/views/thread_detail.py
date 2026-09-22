@@ -15,7 +15,7 @@ from frontend.tui.views.base import (
     compute_flex_widths,
 )
 from frontend.tui.views.thread_list import ThreadListView
-from frontend.tui.widgets import TUIBox, TUIGraph, TUIThreadInfo
+from frontend.tui.widgets import SiteValue, TUIBox, TUIGraph, TUIThreadInfo
 
 
 def _format_priority(thread: ThreadInfo) -> str:
@@ -26,14 +26,6 @@ def _format_options(thread: ThreadInfo) -> str:
     return f"0x{thread.user_options:02x}" if thread.user_options is not None else "-"
 
 
-def _format_entry(thread: ThreadInfo) -> str:
-    if not thread.entry_point:
-        return "-"
-    if thread.entry_symbol:
-        return f"{thread.entry_symbol} (0x{thread.entry_point:08x})"
-    return f"0x{thread.entry_point:08x}"
-
-
 class ThreadDetailView(BaseStateView):
     _INFO_BOX_HEIGHT = 3
 
@@ -42,7 +34,7 @@ class ThreadDetailView(BaseStateView):
     _INFO_BOXES: tuple[tuple[str, int, Any], ...] = (
         ("Priority", 1, _format_priority),
         ("Options", 1, _format_options),
-        ("Entry", 3, _format_entry),
+        ("Entry", 3, None),
     )
 
     def __init__(self, controller: Any, theme: ZViewTUIAttributes):
@@ -72,6 +64,13 @@ class ThreadDetailView(BaseStateView):
         self._current_thread_name: str | None = None
         self._usages: dict[str, list[int]] = {"cpu": [], "load": []}
 
+    def _entry_cell(self, thread: ThreadInfo) -> str | SiteValue:
+        """The entry function, with the source site the ELF gives for it."""
+        if not thread.entry_point:
+            return "-"
+        site = self.controller.scraper.function_site(thread.entry_point)
+        return SiteValue(site, thread.entry_point, thread.entry_symbol)
+
     def _draw_info_boxes(
         self, stdscr: curses.window, y: int, width: int, thread: ThreadInfo
     ) -> None:
@@ -87,10 +86,11 @@ class ThreadDetailView(BaseStateView):
             is_last = idx == len(self._INFO_BOXES) - 1
             box_w = (width - x) if is_last else (width * weight) // total_weight
             box.draw(stdscr, y, x, self._INFO_BOX_HEIGHT, box_w)
-            value = fmt(thread)
+            value = fmt(thread) if fmt else self._entry_cell(thread)
             inner_w = box_w - 4  # 2 border cells + 2 padding cells
             if inner_w > 0:
-                stdscr.addstr(y + 1, x + 2, value.ljust(inner_w)[:inner_w])
+                text = value.render(inner_w) if isinstance(value, SiteValue) else value
+                stdscr.addstr(y + 1, x + 2, text.ljust(inner_w)[:inner_w])
             x += box_w
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:

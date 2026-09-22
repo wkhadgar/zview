@@ -39,6 +39,37 @@ def _addstr_clipped(
             stdscr.addstr(y, x, text, attr)
 
 
+class SiteValue(NamedTuple):
+    """
+    An info box value naming where its address comes from in the source.
+
+    ``symbol`` prefixes the cell, for a value that already reads as a name.
+    """
+
+    site: tuple[str, int] | None
+    address: int
+    symbol: str | None = None
+
+    # Path parts to show, widest first.
+    _DEPTHS = (3, 2, 1)
+
+    def render(self, width: int) -> str:
+        """The widest form that fits ``width``, down to the address alone."""
+        prefix = f"{self.symbol} " if self.symbol else ""
+        address = f"0x{self.address:08x}" if self.symbol else f"0x{self.address:X}"
+
+        if self.site is not None:
+            path, line = self.site
+            parts = path.split("/")
+            at = "@ " if self.symbol else ""
+            for depth in self._DEPTHS:
+                text = f"{prefix}{at}{'/'.join(parts[-depth:])}:{line} ({address})"
+                if len(text) <= width:
+                    return text
+
+        return f"{prefix}({address})" if self.symbol else address
+
+
 class TUIProgressBar:
     def __init__(
         self,

@@ -8,7 +8,7 @@ import curses
 
 import pytest
 
-from frontend.tui.widgets import TUIGraph, TUIProgressBar, _addstr_clipped
+from frontend.tui.widgets import SiteValue, TUIGraph, TUIProgressBar, _addstr_clipped
 
 
 @pytest.fixture
@@ -111,3 +111,31 @@ def test_a_bar_fills_no_further_than_its_track():
     blocks, rightmost = _bar_blocks(3_000_000_000.0)
     assert blocks == 10  # width 12, minus the two edge characters
     assert rightmost <= 12
+
+
+_SITE = ("/home/dev/ws/app/src/main.c", 264)
+
+
+def test_a_site_cell_shows_three_path_parts_when_they_fit():
+    assert SiteValue(_SITE, 0x20000190).render(40) == "app/src/main.c:264 (0x20000190)"
+
+
+def test_a_site_cell_drops_path_parts_to_fit():
+    assert SiteValue(_SITE, 0x20000190).render(29) == "src/main.c:264 (0x20000190)"
+    assert SiteValue(_SITE, 0x20000190).render(25) == "main.c:264 (0x20000190)"
+
+
+def test_a_site_cell_falls_back_to_the_address_alone():
+    assert SiteValue(_SITE, 0x20000190).render(12) == "0x20000190"
+
+
+def test_a_cell_without_a_site_is_the_address():
+    assert SiteValue(None, 0x20000190).render(40) == "0x20000190"
+
+
+def test_a_symbol_prefixes_the_cell():
+    site = ("/home/dev/ws/zephyr/lib/os/thread_entry.c", 36)
+    cell = SiteValue(site, 0x10001A49, "z_thread_entry")
+
+    assert cell.render(60) == "z_thread_entry @ lib/os/thread_entry.c:36 (0x10001a49)"
+    assert cell.render(30) == "z_thread_entry (0x10001a49)"

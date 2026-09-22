@@ -20,7 +20,7 @@ class MsgqDetailView(KernelObjectDetailView):
 
     # The title row already carries used over capacity and the waiters, so the
     # boxes add what it cannot show.
-    _INFO_TITLES = (("Address", 2), ("Capacity", 1), ("Message size", 1))
+    _INFO_TITLES = (("Location", 2), ("Capacity", 1), ("Message size", 1))
     _GRAPH_ROW = KernelObjectDetailView._INFO_ROW + KernelObjectDetailView._INFO_BOX_HEIGHT
 
     def _target(self) -> MsgqInfo | None:
@@ -46,7 +46,7 @@ class MsgqDetailView(KernelObjectDetailView):
             stdscr,
             self._INFO_ROW,
             width,
-            [f"0x{msgq.address:X}", str(msgq.max_msgs), f"{msgq.msg_size} B"],
+            [self._site(msgq.address), str(msgq.max_msgs), f"{msgq.msg_size} B"],
         )
 
         panels = self._panels(height, width, self._GRAPH_ROW)

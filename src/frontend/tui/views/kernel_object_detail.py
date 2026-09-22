@@ -16,7 +16,7 @@ from frontend.tui.views.base import (
     ZViewTUIAttributes,
 )
 from frontend.tui.views.kernel_object_list import KernelObjectListView
-from frontend.tui.widgets import TUIBox, TUIKernelObjectInfo, TUIWaitQueue
+from frontend.tui.widgets import SiteValue, TUIBox, TUIKernelObjectInfo, TUIWaitQueue
 
 
 class Panels(NamedTuple):
@@ -84,7 +84,7 @@ class KernelObjectDetailView(BaseStateView):
         self._info.draw(stdscr, self._OBJECT_ROW, 0, kind, obj)
 
     def _draw_info_boxes(
-        self, stdscr: curses.window, y: int, width: int, values: list[str]
+        self, stdscr: curses.window, y: int, width: int, values: list[str | SiteValue]
     ) -> None:
         """Lay the info boxes side by side, sized by their relative weights."""
         weights = [weight for _, weight in self._INFO_TITLES]
@@ -100,8 +100,13 @@ class KernelObjectDetailView(BaseStateView):
 
             inner_w = box_w - 4  # 2 border cells + 2 padding cells
             if inner_w > 0:
-                stdscr.addstr(y + 1, x + 2, value.ljust(inner_w)[:inner_w])
+                text = value.render(inner_w) if isinstance(value, SiteValue) else value
+                stdscr.addstr(y + 1, x + 2, text.ljust(inner_w)[:inner_w])
             x += box_w
+
+    def _site(self, address: int) -> SiteValue:
+        """The object's address, with the source site the ELF gives for it."""
+        return SiteValue(self.controller.scraper.decl_site(address), address)
 
     def _panels(self, height: int, width: int, top: int) -> Panels:
         """

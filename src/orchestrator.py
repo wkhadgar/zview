@@ -229,6 +229,14 @@ class ZScraper:
             if not enabled
         )
 
+    def decl_site(self, address: int) -> tuple[str, int] | None:
+        """``(path, line)`` where the object at ``address`` is declared, if known."""
+        return self._elf_inspector.decl_site(address)
+
+    def function_site(self, address: int) -> tuple[str, int] | None:
+        """``(path, line)`` where the function at ``address`` is defined, if known."""
+        return self._elf_inspector.function_site(address)
+
     def has_kernel_objects(self) -> bool:
         """True while any object group is live, so the objects view has rows to draw."""
         return (

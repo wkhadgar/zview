@@ -32,7 +32,7 @@ class MutexDetailView(KernelObjectDetailView):
 
     # The title row already carries state and waiters, so the boxes add what
     # it cannot show.
-    _INFO_TITLES = (("Address", 2), ("Depth", 1), ("Owner", 3))
+    _INFO_TITLES = (("Location", 2), ("Depth", 1), ("Owner", 3))
     _HISTORY_ROW = KernelObjectDetailView._INFO_ROW + KernelObjectDetailView._INFO_BOX_HEIGHT
     _HISTORY_HEIGHT = 3
     _QUEUE_ROW = _HISTORY_ROW + _HISTORY_HEIGHT
@@ -82,7 +82,7 @@ class MutexDetailView(KernelObjectDetailView):
             stdscr,
             self._INFO_ROW,
             width,
-            [f"0x{mutex.address:X}", str(mutex.lock_count), owner],
+            [self._site(mutex.address), str(mutex.lock_count), owner],
         )
 
         self._draw_history(stdscr, width, mutex.address)
