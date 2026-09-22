@@ -1,4 +1,3 @@
 name: zview-minimal
-description: Builds only what ZView cannot work without, for a tight image.
 append:
   EXTRA_CONF_FILE: zview-minimal.conf
