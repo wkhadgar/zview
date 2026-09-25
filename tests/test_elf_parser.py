@@ -180,3 +180,22 @@ def test_a_site_survives_the_cache(elf_path):
     address = first.find_struct_instances("k_heap")["my_kernel_heap"][0]
 
     assert ElfInspector(str(elf_path)).decl_site(address) == first.decl_site(address)
+
+
+@pytest.fixture
+def extern_sites():
+    """
+    Host build with version 5 line tables, from three files:
+
+    s.h:2  ``extern struct k_sem same_line_sem;``
+    b.c:2  ``struct k_sem same_line_sem;``, the same line number as its declaration
+    a.c:2  ``extern struct k_sem same_file_sem;``, then a.c:4 defines it
+    a.c:6  ``main``
+    """
+    return ElfInspector(str(Path(__file__).parent / "fixtures" / "extern_sites.elf"))
+
+
+def test_a_version_5_line_table_resolves_a_function(extern_sites):
+    path, line = extern_sites.function_site(extern_sites.get_symbol_info("main", "address")[0])
+
+    assert (path, line) == ("/src/a.c", 6)

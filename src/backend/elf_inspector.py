@@ -476,7 +476,7 @@ class ElfInspector:
 
                 header = dwarf.line_program_for_CU(cu).header
                 version_5 = header["version"] >= 5
-                entries = header["file_names"] if version_5 else header["file_entry"]
+                entries = header["file_entry"]
                 index = file_index - (0 if version_5 else 1)
                 if not 0 <= index < len(entries):
                     return None
