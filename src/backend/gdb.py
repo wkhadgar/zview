@@ -153,15 +153,34 @@ class GDBScraper(AbstractScraper):
 
             return buffer[start + 1 : end]
 
+    # Largest read per packet: its hex reply fits the 4 KB buffer of QEMU's
+    # stub, and the larger ones of OpenOCD and J-Link.
+    _MAX_READ_BYTES = 1024
+
     def _read_mem_raw(self, addr: int, length: int) -> bytes:
         """
-        Execute ``m<addr>,<length>`` and return the decoded byte string.
-        Raises ``ProbeReadTimeout``, ``ProbeReadError``, or ``ProbeReadMalformed``
-        when the reply is missing, rejected, or undecodable.
+        Read ``length`` bytes at ``addr`` over as many ``m`` packets as it takes.
+
+        A stub may answer with fewer bytes than asked, so each packet starts
+        where the last reply ended. Raises ``ProbeReadTimeout``,
+        ``ProbeReadError``, or ``ProbeReadMalformed`` when a reply is missing,
+        rejected, undecodable or empty.
         """
         if self.sock is None:
             raise ConnectionError("No GDB server connected.")
 
+        data = bytearray()
+        while len(data) < length:
+            at = addr + len(data)
+            chunk = self._read_mem_packet(at, min(length - len(data), self._MAX_READ_BYTES))
+            if not chunk:
+                raise ProbeReadMalformed(f"Empty reply reading {hex(at)}.")
+            data += chunk
+
+        return bytes(data)
+
+    def _read_mem_packet(self, addr: int, length: int) -> bytes:
+        """Execute one ``m<addr>,<length>`` and return the bytes it decoded, at most ``length``."""
         self._send_packet(f'm{addr:x},{length:x}'.encode())
 
         try:
@@ -176,9 +195,6 @@ class GDBScraper(AbstractScraper):
             raw = bytes.fromhex(resp.decode('ascii'))
         except ValueError as e:
             raise ProbeReadMalformed(f"Malformed hex response at {hex(addr)}: {resp!r}") from e
-
-        if len(raw) < length:
-            raw += b'\x00' * (length - len(raw))
 
         return raw[:length]
 

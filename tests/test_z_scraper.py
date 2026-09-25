@@ -365,6 +365,67 @@ def test_read_mem_raw_happy_path_returns_decoded_bytes():
     assert result == b"\xde\xad\xbe\xef"
 
 
+def _serving(memory: dict[int, int], reply_cap: int | None = None):
+    """
+    ``_read_response`` stand-in answering each ``m`` packet from ``memory``.
+
+    ``reply_cap`` answers with at most that many bytes, as a stub may.
+    """
+    packets: list[tuple[int, int]] = []
+
+    def send(data: bytes) -> None:
+        addr, length = (int(field, 16) for field in data[1:].decode().split(","))
+        packets.append((addr, length))
+
+    def respond() -> bytes:
+        addr, length = packets[-1]
+        served = length if reply_cap is None else min(length, reply_cap)
+        return bytes(memory.get(addr + i, 0) for i in range(served)).hex().encode()
+
+    return packets, send, respond
+
+
+def test_a_read_past_the_packet_size_goes_out_in_pieces():
+    """A heap's chunk map read reaches past what one packet can carry on QEMU."""
+    scraper = _make_gdb_with_mock_sock()
+    memory = {0x2000 + i: i & 0xFF for i in range(2112)}
+    packets, send, respond = _serving(memory)
+
+    with (
+        patch.object(GDBScraper, "_send_packet", side_effect=send),
+        patch.object(GDBScraper, "_read_response", side_effect=respond),
+    ):
+        data = scraper._read_mem_raw(0x2000, 2112)
+
+    assert packets == [(0x2000, 1024), (0x2400, 1024), (0x2800, 64)]
+    assert data == bytes(i & 0xFF for i in range(2112))
+
+
+def test_a_short_reply_is_read_on_from_where_it_stopped():
+    """A stub may answer with fewer bytes than asked; they are not zeros."""
+    scraper = _make_gdb_with_mock_sock()
+    memory = {0x1000 + i: 0xA0 + i for i in range(8)}
+    packets, send, respond = _serving(memory, reply_cap=3)
+
+    with (
+        patch.object(GDBScraper, "_send_packet", side_effect=send),
+        patch.object(GDBScraper, "_read_response", side_effect=respond),
+    ):
+        data = scraper._read_mem_raw(0x1000, 8)
+
+    assert data == bytes(0xA0 + i for i in range(8))
+    assert [addr for addr, _ in packets] == [0x1000, 0x1003, 0x1006]
+
+
+def test_an_empty_reply_is_malformed():
+    scraper = _make_gdb_with_mock_sock()
+    with (
+        patch.object(GDBScraper, "_read_response", return_value=b""),
+        pytest.raises(ProbeReadMalformed, match="Empty reply"),
+    ):
+        scraper._read_mem_raw(0x1000, 16)
+
+
 def test_cpu_share_cannot_exceed_the_total_it_divides(elf_path):
     """A thread reading more cycles than the global counter caps at 100%."""
     mock_meta_scraper = MagicMock()
