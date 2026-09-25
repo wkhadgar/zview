@@ -26,7 +26,7 @@ from elftools.elf.sections import SymbolTableSection
 _CACHE_HMAC_KEY = hashlib.sha256(str(Path.home()).encode()).digest()
 _HMAC_SIZE = 32  # SHA-256 digest length in bytes
 
-_CACHE_SCHEMA_VERSION = 5
+_CACHE_SCHEMA_VERSION = 6
 
 # DWARF location opcodes: an object's own address, and the frame and register
 # forms a function local takes.
@@ -244,7 +244,8 @@ class ElfInspector:
         ``(address, is static)`` from a variable DIE's ``DW_AT_location``.
 
         A frame or register location is not static. A location that is absent,
-        or in a form this does not decode, is static with an unknown address.
+        at zero, or in a form this does not decode, is static with an unknown
+        address.
         """
         location = die.attributes.get("DW_AT_location")
         if location is None or not isinstance(location.value, list) or not location.value:
@@ -254,17 +255,30 @@ class ElfInspector:
         opcode = expression[0]
         if opcode == _DW_OP_ADDR and len(expression) == 1 + address_size:
             order = "little" if self._little_endian else "big"
-            return int.from_bytes(expression[1:], order), True
+            # The linker leaves the location of an object it dropped at zero.
+            return int.from_bytes(expression[1:], order) or None, True
         if opcode == _DW_OP_FBREG or opcode in _DW_OP_REGISTER_RANGE:
             return None, False
 
         return None, True
 
     @staticmethod
-    def _declaration_site(die, cu_offset: int) -> tuple[int, int, int] | None:
-        """``(file index, line, CU offset)`` of a DIE's declaration, if it carries one."""
+    def _declaration_site(die, cu_offset: int, declaration=None) -> tuple[int, int, int] | None:
+        """
+        ``(file index, line, CU offset)`` of a DIE's declaration, if it carries one.
+
+        A definition leaves out the file or the line it shares with its
+        ``declaration``, which then supplies it.
+        """
         file_attr = die.attributes.get("DW_AT_decl_file")
         line_attr = die.attributes.get("DW_AT_decl_line")
+        if declaration is not None:
+            if file_attr is None:
+                file_attr = declaration.attributes.get("DW_AT_decl_file")
+                cu_offset = declaration.cu.cu_offset
+            if line_attr is None:
+                line_attr = declaration.attributes.get("DW_AT_decl_line")
+
         if file_attr is None or line_attr is None:
             return None
         return file_attr.value, line_attr.value, cu_offset
@@ -323,16 +337,27 @@ class ElfInspector:
                         self._collect_members(die, struct_name, base_offset=0)
 
                     elif die.tag == "DW_TAG_variable":
-                        name_attr = die.attributes.get("DW_AT_name")
-                        type_attr = die.attributes.get("DW_AT_type")
+                        # The definition of an object declared extern keeps
+                        # its address, and its name and type stay on the
+                        # declaration it points to.
+                        named = die
+                        if (
+                            "DW_AT_name" not in die.attributes
+                            and "DW_AT_specification" in die.attributes
+                        ):
+                            named = die.get_DIE_from_attribute("DW_AT_specification")
+
+                        name_attr = named.attributes.get("DW_AT_name")
+                        type_attr = named.attributes.get("DW_AT_type")
                         if name_attr and type_attr:
                             var_name = name_attr.value.decode(errors="ignore")
                             # DWARF type references are relative to the CU start.
-                            type_offset = type_attr.value + cu_offset
+                            type_offset = type_attr.value + named.cu.cu_offset
                             address, is_static = self._variable_address(die, address_size)
                             pending_vars.append((var_name, type_offset, address, is_static))
                             if address is not None:
-                                site = self._declaration_site(die, cu_offset)
+                                declaration = named if named is not die else None
+                                site = self._declaration_site(die, cu_offset, declaration)
                                 if site is not None:
                                     self._decl_sites[address] = site
 
@@ -513,8 +538,8 @@ class ElfInspector:
 
         A variable's own DWARF location answers first, which separates
         same-named statics across translation units. A name known only through
-        a declaration, such as ``k_sys_work_q``, comes from the symbol table
-        instead, where only a defined data symbol sized like the struct counts.
+        a declaration comes from the symbol table instead, where only a defined
+        data symbol sized like the struct counts.
         A function local is not an instance. Order follows DWARF discovery.
         """
         located = self._struct_addresses.get(struct_name, {})
