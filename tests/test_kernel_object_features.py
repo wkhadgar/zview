@@ -5,7 +5,7 @@
 """Coverage for the kernel-object feature list a recording carries."""
 
 import queue
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from orchestrator import ZScraper
 
@@ -18,6 +18,7 @@ def _scraper(**enabled: bool) -> ZScraper:
     s.has_mutexes = enabled.get("mutexes", False)
     s.has_msgqs = enabled.get("msgqs", False)
     s.has_mem_slabs = enabled.get("mem_slabs", False)
+    s.has_workqs = enabled.get("workqs", False)
     s.has_heap_waiters = enabled.get("heap_waiters", s.has_heaps)
     s.poll_kernel_objects = True
     return s
@@ -149,3 +150,49 @@ def test_a_recording_that_declares_the_merged_reads_replays_them():
     s._restrict_features_to_recording()
 
     assert s.merged_thread_meta
+
+
+def test_work_queues_are_a_recorded_feature():
+    """Their reads sit in every frame, so a recording has to say it holds them."""
+    assert "workqs" in _scraper(workqs=True).active_features()
+    assert "workqs" not in _scraper().active_features()
+
+
+def test_a_recording_without_work_queues_does_not_replay_them():
+    s = _scraper(workqs=True, semaphores=True)
+    s._m_scraper = MagicMock(is_live=False, features=("threads", "semaphores"))
+
+    s._restrict_features_to_recording()
+
+    assert not s.has_workqs
+    assert s.has_semaphores
+
+
+def test_a_build_with_only_work_queues_has_objects_to_show():
+    assert _scraper(workqs=True).has_kernel_objects()
+
+
+def test_the_poll_reads_the_work_queues_last():
+    """Appended after the other groups, so a recording's earlier reads keep their order."""
+    s = _scraper(semaphores=True, workqs=True)
+    s._m_scraper = MagicMock()
+    s._elf_inspector = MagicMock()
+    s._layout = MagicMock()
+    s._k_sem_addresses = {"sem": [0x100]}
+    s._k_mutex_addresses = s._k_msgq_addresses = s._k_mem_slab_addresses = {}
+    s._k_workq_addresses = {"k_sys_work_q": [0x200]}
+    s.waitq_flavor = "simple"
+    s._thread_names = lambda: {}
+    order: list[str] = []
+
+    def walker(key):
+        return lambda *_a, **_kw: order.append(key) or {key: key}
+
+    with (
+        patch("orchestrator.walk_semaphores", walker("semaphores")),
+        patch("orchestrator.walk_workqs", walker("workqs")),
+    ):
+        frame = s._poll_kernel_objects(queue.Queue())
+
+    assert order == ["semaphores", "workqs"]
+    assert frame == {"semaphores": ["semaphores"], "workqs": ["workqs"]}
