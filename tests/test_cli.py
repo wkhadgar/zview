@@ -86,7 +86,7 @@ def test_dump_replay_human_readable(monkeypatch, capsys):
 
 def test_dump_prints_every_group_it_polled(monkeypatch, capsys):
     """The text dump covers what the JSON one carries, groups added later included."""
-    from backend.base import HeapInfo, MemSlabInfo, MsgqInfo
+    from backend.base import HeapInfo, MemSlabInfo, MsgqInfo, WorkqInfo
 
     frame = {
         "heaps": [
@@ -117,6 +117,17 @@ def test_dump_prints_every_group_it_polled(monkeypatch, capsys):
                 waiters=("slab_id",),
             )
         ],
+        "workqs": [
+            WorkqInfo(
+                name="bench_workq",
+                address=0x7000,
+                flags=0b11,
+                pending=("trail_work (work_handler)",),
+                thread_name="bench_workq",
+                waiters=(),
+            ),
+            WorkqInfo(name="idle_q", address=0x7100, flags=0, waiters=None),
+        ],
     }
     monkeypatch.setattr(zview_cli, "dump_single_frame", lambda *a, **kw: frame)
 
@@ -126,6 +137,11 @@ def test_dump_prints_every_group_it_polled(monkeypatch, capsys):
     assert "msgq bench_q              8/8 x 4B waiters=-" in out
     assert "slab bench_slab           6/8 x 64B peak=7 waiters=slab_id" in out
     assert "waiters=heap_waiter_id" in out
+    assert (
+        "wkq  bench_workq          1 pending flags=started,busy thread=bench_workq "
+        "items=trail_work (work_handler) waiters=-"
+    ) in out
+    assert "wkq  idle_q               0 pending flags=- thread=- items=- waiters=unknown" in out
 
 
 def test_dump_frame_arg_skips_to_requested_frame(monkeypatch, capsys):

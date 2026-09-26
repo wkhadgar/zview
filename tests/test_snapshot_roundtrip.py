@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.base import HeapInfo, MemSlabInfo, MsgqInfo, ThreadInfo, ThreadRuntime
+from backend.base import HeapInfo, MemSlabInfo, MsgqInfo, ThreadInfo, ThreadRuntime, WorkqInfo
 from backend.replay import ReplayScraper
 from snapshot import dump_single_frame, record_session, serialize_frame
 
@@ -66,12 +66,24 @@ def test_serialize_frame_carries_every_object_group():
                 name="slab", address=0x5000, num_blocks=8, block_size=64, num_used=3, waiters=()
             )
         ],
+        "workqs": [
+            WorkqInfo(
+                name="bench_workq",
+                address=0x6000,
+                flags=0b11,
+                pending=("trail_work (work_handler)",),
+                thread_name="bench_workq",
+                waiters=(),
+            )
+        ],
     }
 
     out = json.loads(json.dumps(serialize_frame(frame)))
 
     assert out["msgqs"][0]["used_msgs"] == 2
     assert out["mem_slabs"][0]["num_used"] == 3
+    assert out["workqs"][0]["pending"] == ["trail_work (work_handler)"]
+    assert out["workqs"][0]["flags"] == 0b11
 
 
 def test_serialize_frame_keeps_runtime_key_as_none():

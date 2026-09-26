@@ -15,7 +15,7 @@ from backend.recording import RecordingScraper
 from orchestrator import ZScraper
 
 # Every group a polling frame can carry, in the order they are emitted.
-_FRAME_GROUPS = ("threads", "heaps", "semaphores", "mutexes", "msgqs", "mem_slabs")
+_FRAME_GROUPS = ("threads", "heaps", "semaphores", "mutexes", "msgqs", "mem_slabs", "workqs")
 
 
 def serialize_frame(frame: dict) -> dict:
