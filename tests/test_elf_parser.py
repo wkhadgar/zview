@@ -105,7 +105,7 @@ def test_a_function_local_is_not_an_instance():
 
 
 def test_a_name_known_only_by_declaration_comes_from_the_symbol_table():
-    """``k_sys_work_q`` is declared in every user of it and located in none."""
+    """A build that emits no definition for a declared name still lists it."""
     inspector = _inspector(
         ["sys_sem"],
         declarations=["sys_sem"],
@@ -141,11 +141,21 @@ def test_a_located_instance_carries_its_dwarf_address(parser):
     }
 
 
-def test_a_declared_instance_still_resolves(parser):
-    """``z_main_thread`` has no DWARF location in a Zephyr build."""
+def test_an_object_declared_extern_resolves_through_its_definition(parser):
+    """``z_main_thread``'s definition names nothing and points at its declaration."""
     instances = parser.find_struct_instances("k_thread")
 
     assert instances["z_main_thread"] == parser.get_symbol_info("z_main_thread", "address")
+
+
+def test_an_object_declared_extern_carries_its_definition_site(parser):
+    """The site is the definition's own line, not the header that declares it."""
+    address = parser.get_symbol_info("z_main_thread", "address")[0]
+
+    path, line = parser.decl_site(address)
+
+    assert path.endswith("kernel/init.c")
+    assert line == 56
 
 
 def test_an_object_carries_the_site_it_is_declared_at(parser):
@@ -170,6 +180,7 @@ def test_a_function_carries_the_site_it_is_defined_at(parser):
 def test_an_address_with_no_site_resolves_to_nothing(parser):
     """A function the linker dropped keeps a DIE at zero, which is not a site."""
     assert parser.decl_site(0x1) is None
+    assert parser.decl_site(0) is None
     assert parser.function_site(0) is None
     assert parser.function_site(0x1) is None
 
@@ -180,3 +191,44 @@ def test_a_site_survives_the_cache(elf_path):
     address = first.find_struct_instances("k_heap")["my_kernel_heap"][0]
 
     assert ElfInspector(str(elf_path)).decl_site(address) == first.decl_site(address)
+
+
+def test_an_object_the_linker_dropped_is_not_an_instance(parser):
+    """Its definition keeps a location at zero, and no symbol backs it."""
+    assert "z_malloc_heap_mutex" in parser.find_struct_variable_names("sys_mutex")
+    assert "z_malloc_heap_mutex" not in parser.find_struct_instances("sys_mutex")
+
+
+@pytest.fixture
+def extern_sites():
+    """
+    Host build with version 5 line tables, from three files:
+
+    s.h:2  ``extern struct k_sem same_line_sem;``
+    b.c:2  ``struct k_sem same_line_sem;``, the same line number as its declaration
+    a.c:2  ``extern struct k_sem same_file_sem;``, then a.c:4 defines it
+    a.c:6  ``main``
+    """
+    return ElfInspector(str(Path(__file__).parent / "fixtures" / "extern_sites.elf"))
+
+
+def _site(inspector: ElfInspector, name: str) -> tuple[str, int]:
+    address = inspector.find_struct_instances("k_sem")[name][0]
+    path, line = inspector.decl_site(address)
+    return path.rsplit("/", 1)[-1], line
+
+
+def test_a_definition_in_its_declarations_file_takes_that_file(extern_sites):
+    """GCC leaves the file off a definition that shares it with the declaration."""
+    assert _site(extern_sites, "same_file_sem") == ("a.c", 4)
+
+
+def test_a_definition_on_its_declarations_line_takes_that_line(extern_sites):
+    """GCC leaves the line off a definition whose number matches the declaration's."""
+    assert _site(extern_sites, "same_line_sem") == ("b.c", 2)
+
+
+def test_a_version_5_line_table_resolves_a_function(extern_sites):
+    path, line = extern_sites.function_site(extern_sites.get_symbol_info("main", "address")[0])
+
+    assert (path, line) == ("/src/a.c", 6)
