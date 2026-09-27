@@ -309,9 +309,9 @@ class KernelObjectListView(BaseStateView):
                     self.controller.detailing_heap_address = obj.address
                     return ZViewState.HEAPS_DETAIL_VIEW
 
-                # No detail view for work queues.
                 if kind == WORKQ:
-                    return None
+                    self.controller.detailing_workq_address = obj.address
+                    return ZViewState.WORKQ_DETAIL_VIEW
 
                 self.controller.detailing_semaphore_address = obj.address
                 return ZViewState.SEMAPHORE_DETAIL_VIEW

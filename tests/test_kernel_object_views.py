@@ -32,6 +32,7 @@ from frontend.tui.views.mem_slab_detail import MemSlabDetailView
 from frontend.tui.views.msgq_detail import MsgqDetailView
 from frontend.tui.views.mutex_detail import MutexDetailView
 from frontend.tui.views.semaphore_detail import SemaphoreDetailView
+from frontend.tui.views.workq_detail import WorkqDetailView
 from frontend.tui.widgets import WORKQ
 
 
@@ -324,7 +325,7 @@ def test_work_queues_are_listed_with_the_other_objects(controller, theme):
     assert (WORKQ, controller.workqs_data[0]) in view._rows()
 
 
-def test_enter_on_a_work_queue_stays_in_the_list(controller, theme):
+def test_enter_on_a_work_queue_opens_its_detail_view(controller, theme):
     """Semaphores are Enter's fallthrough, so a work queue must not reach it."""
     controller.semaphores_data = controller.mutexes_data = []
     controller.msgqs_data = controller.mem_slabs_data = []
@@ -332,7 +333,8 @@ def test_enter_on_a_work_queue_stays_in_the_list(controller, theme):
     controller.detailing_semaphore_address = None
     view = KernelObjectListView(controller, theme)
 
-    assert view.handle_input(SpecialCode.NEWLINE) is None
+    assert view.handle_input(SpecialCode.NEWLINE) == ZViewState.WORKQ_DETAIL_VIEW
+    assert controller.detailing_workq_address == 0x7000
     assert controller.detailing_semaphore_address is None
 
 
@@ -1008,6 +1010,72 @@ def test_the_queue_detail_says_when_the_queue_is_gone(controller, theme):
     view.render(win, 24, 209)
 
     assert any("no longer being reported" in text for _, _, text in win.writes)
+
+
+def _busy_workq(**fields) -> WorkqInfo:
+    """``bench_workq`` running a handler with two items behind it."""
+    values = {
+        "name": "bench_workq",
+        "address": 0x7000,
+        "flags": 0b0011,
+        "pending": ("tick_work (work_handler)", "trail_work (work_handler)"),
+        "thread_name": "bench_workq",
+        "waiters": (),
+    }
+    return WorkqInfo(**(values | fields))
+
+
+def test_the_work_queue_detail_shows_thread_flags_and_backlog(controller, theme):
+    controller.workqs_data = [_busy_workq()]
+    controller.workq_history = {0x7000: [0, 2, 1]}
+    controller.detailing_workq_address = 0x7000
+    view = WorkqDetailView(controller, theme)
+
+    drawn = " ".join(text for _, _, text in _render(view).writes)
+
+    assert "started,busy" in drawn
+    assert "0 to 2 pending" in drawn
+    assert "trail_work (work_handler)" in drawn
+
+
+def test_pending_items_sit_above_the_drain_waiters(controller, theme):
+    """The drain waiters take a third of the 16 side rows, the items the rest."""
+    controller.workqs_data = [_busy_workq(waiters=("drainer",))]
+    controller.detailing_workq_address = 0x7000
+    view = WorkqDetailView(controller, theme)
+
+    writes = _render(view, height=24, width=209).writes
+
+    assert [(y, x) for y, x, t in writes if t.startswith("┌Pending")] == [(6, 169)]
+    assert [(y, x) for y, x, t in writes if t.startswith("┌Drain waiters")] == [(17, 169)]
+    assert any("drainer" in t for y, _, t in writes if y > 17)
+
+
+def test_a_cut_walk_ends_the_pending_panel_in_an_ellipsis(controller, theme):
+    controller.workqs_data = [_busy_workq(pending_truncated=True)]
+    controller.detailing_workq_address = 0x7000
+    view = WorkqDetailView(controller, theme)
+
+    assert any(t == "└─ ..." for _, _, t in _render(view).writes)
+
+
+def test_a_short_column_gives_the_pending_items_all_of_it(controller, theme):
+    """Four side rows cannot hold two boxes, and the header row names the waiters."""
+    controller.workqs_data = [_busy_workq()]
+    controller.detailing_workq_address = 0x7000
+    view = WorkqDetailView(controller, theme)
+
+    writes = _render(view, height=12, width=209).writes
+
+    assert any(t.startswith("┌Pending") for _, _, t in writes)
+    assert not any(t.startswith("┌Drain waiters") for _, _, t in writes)
+
+
+def test_the_work_queue_detail_says_when_the_queue_is_gone(controller, theme):
+    controller.detailing_workq_address = 0x9999
+    view = WorkqDetailView(controller, theme)
+
+    assert any("no longer being reported" in t for _, _, t in _render(view).writes)
 
 
 def test_mem_slab_row_shows_usage_block_size_and_peak(controller, theme):

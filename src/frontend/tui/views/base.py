@@ -84,6 +84,7 @@ class ZViewState(enum.Enum):
     SEMAPHORE_DETAIL_VIEW = 8
     MSGQ_DETAIL_VIEW = 9
     MEM_SLAB_DETAIL_VIEW = 10
+    WORKQ_DETAIL_VIEW = 11
 
 
 class BaseStateView:

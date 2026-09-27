@@ -38,6 +38,7 @@ from frontend.tui.views.mutex_detail import MutexDetailView
 from frontend.tui.views.semaphore_detail import SemaphoreDetailView
 from frontend.tui.views.thread_detail import ThreadDetailView
 from frontend.tui.views.thread_list import ThreadListView
+from frontend.tui.views.workq_detail import WorkqDetailView
 from frontend.tui.widgets import PopupRow, TUIPopup
 from orchestrator import ZScraper
 
@@ -137,6 +138,7 @@ class ZView:
         self.detailing_semaphore_address: int | None = None
         self.detailing_msgq_address: int | None = None
         self.detailing_mem_slab_address: int | None = None
+        self.detailing_workq_address: int | None = None
         # Wait queues are walkable only in the dlist (simple) flavor.
         self.waiters_unknown: bool = scraper.waitq_flavor != "simple"
         self.idle_thread: ThreadInfo | None = None
@@ -172,6 +174,7 @@ class ZView:
             ZViewState.SEMAPHORE_DETAIL_VIEW: SemaphoreDetailView(self, theme),
             ZViewState.MSGQ_DETAIL_VIEW: MsgqDetailView(self, theme),
             ZViewState.MEM_SLAB_DETAIL_VIEW: MemSlabDetailView(self, theme),
+            ZViewState.WORKQ_DETAIL_VIEW: WorkqDetailView(self, theme),
         }
 
         # The opening view is the thread list. A replay keeps polling whatever
@@ -397,6 +400,7 @@ class ZView:
                 | ZViewState.SEMAPHORE_DETAIL_VIEW
                 | ZViewState.MSGQ_DETAIL_VIEW
                 | ZViewState.MEM_SLAB_DETAIL_VIEW
+                | ZViewState.WORKQ_DETAIL_VIEW
             ):
                 if live:
                     # This view reads only the primitives.
