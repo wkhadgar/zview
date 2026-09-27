@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from backend.base import HeapInfo, ThreadInfo
+from backend.base import HeapInfo, ThreadInfo, WorkqInfo
 from frontend.tui.views.base import ZViewState
 from frontend.zview_tui import ZView
 
@@ -26,6 +26,8 @@ def app() -> ZView:
     a.mutexes_data = []
     a.mutex_history = {}
     a.sem_history = {}
+    a.workqs_data = []
+    a.workq_history = {}
     a.status_message = ""
     a.messages = deque(maxlen=64)
     a.update_count = 0
@@ -77,6 +79,17 @@ def test_process_data_running_status_increments_with_threads_payload(app):
     assert app.status_message.startswith("Running")
     assert app.threads_data == threads
     assert app.update_count == 1
+
+
+def test_a_frame_with_work_queues_records_their_backlog(app):
+    """A frame without the group keeps the last list and adds no sample."""
+    workq = WorkqInfo(name="bench_workq", address=0x6000, flags=0b11, pending=("trail_work",))
+
+    app.process_data({"threads": [], "workqs": [workq]})
+    app.process_data({"threads": []})
+
+    assert app.workqs_data == [workq]
+    assert list(app.workq_history[0x6000]) == [1]
 
 
 def test_process_data_idle_thread_pulled_into_dedicated_field(app):

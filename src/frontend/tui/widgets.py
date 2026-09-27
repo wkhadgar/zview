@@ -540,6 +540,7 @@ MUTEX = "MTX"
 MSGQ = "MSG"
 MEM_SLAB = "SLB"
 HEAP = "HEP"
+WORKQ = "WKQ"
 
 
 class TUIKernelObjectInfo:
@@ -643,6 +644,33 @@ class TUIKernelObjectInfo:
                 else (self._busy_attr if obj.waiters else 0)
             )
             return obj.usage_percent, label, cell, attr
+
+        if kind == WORKQ:
+            # First match wins, in both tables.
+            label = next(
+                word
+                for applies, word in (
+                    (obj.is_busy, "BUSY"),
+                    (obj.is_started, "IDLE"),
+                    (True, "NOT STARTED"),
+                )
+                if applies
+            )
+            if obj.depth:
+                more = "+" if obj.pending_truncated else ""
+                label += f" ● {obj.depth}{more} pending"
+            attr = next(
+                color
+                for applies, color in (
+                    # Plugged or draining, it refuses submissions from outside.
+                    (obj.is_plugged, self._contended_attr),
+                    (obj.is_draining, self._contended_attr),
+                    (bool(obj.depth or obj.waiters), self._busy_attr),
+                    (True, 0),
+                )
+                if applies
+            )
+            return (100.0 if obj.is_busy else 0.0), label, cell, attr
 
         if not obj.is_locked:
             return 0.0, "FREE", cell, 0

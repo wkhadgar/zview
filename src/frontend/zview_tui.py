@@ -19,6 +19,7 @@ from backend.base import (
     MutexState,
     SemaphoreInfo,
     ThreadInfo,
+    WorkqInfo,
 )
 from frontend.tui.views.base import (
     Any,
@@ -114,11 +115,13 @@ class ZView:
         self.msgqs_data: list[MsgqInfo] = []
         self.mem_slabs_data: list[MemSlabInfo] = []
         self.mutexes_data: list[MutexInfo] = []
+        self.workqs_data: list[WorkqInfo] = []
         # One sample per frame per object, for the detail views.
         self.mutex_history: dict[int, deque[MutexState]] = {}
         self.sem_history: dict[int, deque[int]] = {}
         self.msgq_history: dict[int, deque[int]] = {}
         self.mem_slab_history: dict[int, deque[int]] = {}
+        self.workq_history: dict[int, deque[int]] = {}
         self.status_message: str = ""
         # One entry per reported message, newest last.
         self.messages: deque[LogEntry] = deque(maxlen=_MESSAGE_LOG_SIZE)
@@ -482,6 +485,9 @@ class ZView:
             if "mem_slabs" in data:
                 self.mem_slabs_data = data["mem_slabs"]
                 self._record_usage(self.mem_slabs_data)
+            if "workqs" in data:
+                self.workqs_data = data["workqs"]
+                self._record_backlog(self.workqs_data)
 
     def _record_counts(self, semaphores: list[SemaphoreInfo]) -> None:
         """Append one count sample per semaphore, per frame."""
@@ -500,6 +506,12 @@ class ZView:
         for slab in slabs:
             history = self.mem_slab_history.setdefault(slab.address, deque(maxlen=256))
             history.append(slab.num_used)
+
+    def _record_backlog(self, workqs: list[WorkqInfo]) -> None:
+        """Append one pending-depth sample per work queue, per frame."""
+        for workq in workqs:
+            history = self.workq_history.setdefault(workq.address, deque(maxlen=256))
+            history.append(workq.depth)
 
     def _record_contention(self, mutexes: list[MutexInfo]) -> None:
         """
