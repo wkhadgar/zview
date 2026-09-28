@@ -43,9 +43,8 @@ CONFIG_SYS_HEAP_RUNTIME_STATS=y            # Enables heap runtime stats and frag
 CONFIG_MEM_SLAB_TRACE_MAX_UTILIZATION=y    # Enables the memory slab peak
 ```
 
-> **Note:** `-S zview` needs Zephyr v3.0 or newer, where every option it names
-> exists. An undefined symbol in a Kconfig fragment aborts the build, so an
-> older tree wants `-S zview-minimal`, whose three options are much older.
+> **Note:** snippets need Zephyr v3.4.0 or newer. On an older tree, set the
+> options in `prj.conf` instead.
 
 </details>
 
