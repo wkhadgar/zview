@@ -7,6 +7,7 @@ import struct
 
 import pytest
 
+from backend.base import ProbeReadError
 from kernel.heaps import walk_heap_waiters
 from orchestrator import ZScraper
 
@@ -283,6 +284,58 @@ def test_a_recording_without_a_chunk_map_stops_asking_for_one():
     assert heap.free_bytes == 1536
     assert not poller.capture_all_heap_chunks
     assert reported.empty()
+
+
+class LiveHeapRefusingChunkMap(FakeHeapMemory):
+    """A live heap whose chunk map read the stub refuses, as QEMU's did at 2 KB."""
+
+    def connect(self) -> None:
+        pass
+
+    def disconnect(self) -> None:
+        pass
+
+    def begin_batch(self) -> None:
+        pass
+
+    def end_batch(self) -> None:
+        pass
+
+    def read_bytes(self, at: int, amount: int) -> bytes:
+        raise ProbeReadError(f"GDB error at 0x{at:X}: E22")
+
+
+def test_a_chunk_map_the_live_stub_refused_replays_frame_after_frame(tmp_path):
+    """Replay meets the refusal where the live session did, so later frames still line up."""
+    from backend.recording import RecordingScraper
+    from backend.replay import ReplayScraper
+
+    # 264 chunks of 8 bytes: the 2112 byte read of the talk's recording.
+    words = {**_STATS, _HEAP + _WAIT_Q: _HEAP + _WAIT_Q, _SYS_HEAP: 264}
+    path = tmp_path / "refused.ndjson.gz"
+
+    live = _heap_poller(words, wait_q=_WAIT_Q)
+    live.capture_all_heap_chunks = True
+    with RecordingScraper(LiveHeapRefusingChunkMap(words), path) as recorder:
+        live._m_scraper = recorder
+        for _ in range(3):
+            recorder.begin_batch()
+            live._poll_heaps(queue.Queue())
+            recorder.end_batch()
+
+    replayed = _heap_poller(words, wait_q=_WAIT_Q)
+    replayed.capture_all_heap_chunks = True
+    reported: queue.Queue = queue.Queue()
+    with ReplayScraper(path, honor_timing=False) as replay:
+        replayed._m_scraper = replay
+        for _ in range(3):
+            replay.begin_batch()
+            assert replayed._poll_heaps(reported)[0].free_bytes == 1536
+            replay.end_batch()
+
+    assert [reported.get()["error"] for _ in range(reported.qsize())] == [
+        "Error reading sparsity for bench_heap: GDB error at 0x9000: E22"
+    ] * 3
 
 
 def test_a_recording_that_never_walked_the_queue_reports_no_waiter_list():

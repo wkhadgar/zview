@@ -10,13 +10,26 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
-from backend.base import AbstractScraper
+from backend.base import (
+    AbstractScraper,
+    ProbeReadError,
+    ProbeReadFailure,
+    ProbeReadMalformed,
+    ProbeReadTimeout,
+)
 from backend.recording import SCHEMA_VERSION
 
 # Schema /2 has no feature list in its header; its read stream covers threads
 # and heaps only.
-SUPPORTED_SCHEMAS = (SCHEMA_VERSION, "zview-recording/2")
+SUPPORTED_SCHEMAS = (SCHEMA_VERSION, "zview-recording/3", "zview-recording/2")
 LEGACY_FEATURES = ("threads", "heaps")
+
+# A recorded read failure is raised again as the probe error it was, and as a
+# ProbeReadError when it came from outside those.
+_READ_FAILURES = {
+    cls.__name__: cls
+    for cls in (ProbeReadFailure, ProbeReadTimeout, ProbeReadError, ProbeReadMalformed)
+}
 
 
 class ReplayError(Exception):
@@ -96,7 +109,8 @@ class ReplayScraper(AbstractScraper):
         """
         Advance cursor and return the entry's stored result.
         Raises ReplayMismatch on op/args drift, ReplayExhausted past end,
-        ReplayComplete when ``op == 'begin_batch'`` lands on a trailing ``disconnect``.
+        ReplayComplete when ``op == 'begin_batch'`` lands on a trailing ``disconnect``,
+        and the recorded read failure for an entry that holds one.
         """
         if self._cursor >= len(self._entries):
             raise ReplayExhausted(f"Recording exhausted before op {op}({args}).")
@@ -119,6 +133,12 @@ class ReplayScraper(AbstractScraper):
             self._pace_to(entry.get("t"))
 
         self._cursor += 1
+        if "error" in entry:
+            kind, message = entry["error"]["kind"], entry["error"]["message"]
+            if kind not in _READ_FAILURES:
+                raise ProbeReadError(f"{kind}: {message}")
+            raise _READ_FAILURES[kind](message)
+
         return entry.get("result")
 
     def _pace_to(self, recording_t: float | None) -> None:
