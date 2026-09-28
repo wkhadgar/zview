@@ -12,25 +12,42 @@ from frontend.tui.views.base import (
     ZViewState,
     ZViewTUIAttributes,
 )
-from frontend.tui.widgets import HEAP, MEM_SLAB, MSGQ, MUTEX, SEMAPHORE, TUIKernelObjectInfo
+from frontend.tui.widgets import (
+    HEAP,
+    MEM_SLAB,
+    MSGQ,
+    MUTEX,
+    SEMAPHORE,
+    WORKQ,
+    TUIKernelObjectInfo,
+)
 
 # Filter step covering every type that hands out memory.
 ALLOCATORS = "ALLOC"
 
-__all__ = ["ALLOCATORS", "HEAP", "MEM_SLAB", "MSGQ", "MUTEX", "SEMAPHORE", "KernelObjectListView"]
+__all__ = [
+    "ALLOCATORS",
+    "HEAP",
+    "MEM_SLAB",
+    "MSGQ",
+    "MUTEX",
+    "SEMAPHORE",
+    "WORKQ",
+    "KernelObjectListView",
+]
 
 
 class KernelObjectListView(BaseStateView):
     """
-    List of the semaphores, mutexes, message queues, memory slabs and heaps
-    found in the ELF.
+    List of the semaphores, mutexes, message queues, memory slabs, heaps and
+    work queues found in the ELF.
 
     Columns are type, name, a state bar and the wait queue. The bar shows
     count over limit for a semaphore, held or free for a mutex, used over
-    capacity for a queue, blocks out over the block count for a slab and
-    bytes out over the size for a heap, captioned with the count, the owner
-    or the size. ``f`` filters by type, ``Enter`` opens the detail view for
-    the selected object.
+    capacity for a queue, blocks out over the block count for a slab, bytes
+    out over the size for a heap, and busy or idle for a work queue, captioned
+    with the count, the owner, the size or the backlog. ``f`` filters by type,
+    ``Enter`` opens the detail view for the selected object.
     """
 
     # ``State`` is the bar column and absorbs the spare width.
@@ -38,7 +55,7 @@ class KernelObjectListView(BaseStateView):
     COLUMNS: list[str] = list(SCHEMA.keys())
     _BAR_COLUMN = 2
 
-    _FILTERS = ("ALL", SEMAPHORE, MUTEX, MSGQ, ALLOCATORS, HEAP, MEM_SLAB)
+    _FILTERS = ("ALL", SEMAPHORE, MUTEX, MSGQ, ALLOCATORS, HEAP, MEM_SLAB, WORKQ)
     # The aggregate row sums the filtered rows, so it is labelled by the filter.
     _AGGREGATE_LABELS = {
         "ALL": "All Objects",
@@ -48,11 +65,18 @@ class KernelObjectListView(BaseStateView):
         ALLOCATORS: "All Allocators",
         HEAP: "All Heaps",
         MEM_SLAB: "All Slabs",
+        WORKQ: "All Work Queues",
     }
     # Types a filter step covers, for the steps that cover more than their own.
     _FILTER_KINDS = {ALLOCATORS: (HEAP, MEM_SLAB)}
-    # An allocator out of room is exhausted, not contended.
-    _PRESSURE_WORDS = {ALLOCATORS: "exhausted", HEAP: "exhausted", MEM_SLAB: "exhausted"}
+    # An allocator out of room is exhausted, and a work queue turning work away
+    # is refusing, not contended.
+    _PRESSURE_WORDS = {
+        ALLOCATORS: "exhausted",
+        HEAP: "exhausted",
+        MEM_SLAB: "exhausted",
+        WORKQ: "refusing",
+    }
     _MAX_NAME = 34
     _MAX_LISTED_WAITERS = 3
     _UNKNOWN = "?"
@@ -102,6 +126,7 @@ class KernelObjectListView(BaseStateView):
             (MSGQ, self.controller.msgqs_data),
             (MEM_SLAB, self.controller.mem_slabs_data),
             (HEAP, self.controller.heaps_data),
+            (WORKQ, self.controller.workqs_data),
         ):
             if self._shows(kind):
                 rows += [(kind, obj) for obj in objects]
@@ -194,7 +219,7 @@ class KernelObjectListView(BaseStateView):
         pressured = sum(
             1
             for kind, obj in rows
-            if obj.waiters or (kind == MUTEX and obj.is_locked) or self._is_contended(kind, obj)
+            if obj.waiters or self._is_in_use(kind, obj) or self._is_contended(kind, obj)
         )
         fill = (pressured / len(rows) * 100.0) if rows else 0.0
 
@@ -204,12 +229,26 @@ class KernelObjectListView(BaseStateView):
 
         return fill, self._summary(rows).strip(), cell
 
+    def _is_in_use(self, kind: str, obj: Any) -> bool:
+        """A held mutex, or a work queue running a handler or holding work."""
+        if kind == MUTEX:
+            return obj.is_locked
+        if kind == WORKQ:
+            return obj.is_busy or bool(obj.depth)
+
+        return False
+
     def _is_contended(self, kind: str, obj: Any) -> bool:
-        """A mutex held with threads queued on it, a full queue, or an allocator out of room."""
+        """
+        A mutex held with threads queued on it, a full queue, an allocator out of
+        room, or a work queue refusing submissions.
+        """
         if kind == MUTEX:
             return bool(obj.is_locked and obj.waiters)
         if kind == MSGQ:
             return obj.is_full
+        if kind == WORKQ:
+            return obj.is_plugged or obj.is_draining
 
         return kind in (MEM_SLAB, HEAP) and obj.is_exhausted
 
@@ -226,14 +265,7 @@ class KernelObjectListView(BaseStateView):
         return summary
 
     def _empty_message(self) -> str:
-        scraper = self.controller.scraper
-        if not (
-            scraper.has_semaphores
-            or scraper.has_mutexes
-            or scraper.has_msgqs
-            or scraper.has_mem_slabs
-            or scraper.has_heaps
-        ):
+        if not self.controller.scraper.has_kernel_objects():
             return " No statically declared kernel objects in this build."
 
         return f" No {self.filter_name} objects."
@@ -241,7 +273,9 @@ class KernelObjectListView(BaseStateView):
     def keybindings(self) -> list[Keybind]:
         return [
             Keybind("<Enter>", "Detail", "Open detail view for the selected object"),
-            Keybind("f", "Filter", "Cycle the type filter (ALL, SEM, MTX, MSG, ALLOC, HEP, SLB)"),
+            Keybind(
+                "f", "Filter", "Cycle the type filter (ALL, SEM, MTX, MSG, ALLOC, HEP, SLB, WKQ)"
+            ),
             Keybind("k", "Threads", "Switch back to the threads view"),
             Keybind("s", "Sort", "Cycle through sort keys"),
             Keybind("i", "Invert", "Reverse the current sort order"),
@@ -274,6 +308,10 @@ class KernelObjectListView(BaseStateView):
                 if kind == HEAP:
                     self.controller.detailing_heap_address = obj.address
                     return ZViewState.HEAPS_DETAIL_VIEW
+
+                if kind == WORKQ:
+                    self.controller.detailing_workq_address = obj.address
+                    return ZViewState.WORKQ_DETAIL_VIEW
 
                 self.controller.detailing_semaphore_address = obj.address
                 return ZViewState.SEMAPHORE_DETAIL_VIEW

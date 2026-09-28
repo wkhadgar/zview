@@ -42,8 +42,6 @@ _VERSION_HEADER = Path("include") / "generated" / "zephyr" / "version.h"
 _VERSION_PATTERN = re.compile(r'#define\s+KERNEL_VERSION_STRING\s+"([^"]+)"')
 _VERSION_SEARCH_DEPTH = 4
 
-# --- Threads -----------------------------------------------------------------
-
 # Required for thread walking.
 THREAD_FIELDS: FieldTable = {
     "threads_head": ((("z_kernel", "threads"),),),
@@ -57,7 +55,7 @@ THREAD_NAME_FIELDS: FieldTable = {
     "thread_name": ((("k_thread", "name"),),),
 }
 
-# CONFIG_THREAD_RUNTIME_STATS. z_kernel.usage exists from v3.7.0; on v3.0 and
+# CONFIG_THREAD_RUNTIME_STATS. z_kernel.usage exists from v3.5.0; on v3.0 and
 # v3.3 this group does not resolve.
 USAGE_FIELDS: FieldTable = {
     "cpu_usage": ((("z_kernel", "usage"),),),
@@ -84,9 +82,7 @@ THREAD_QNODE_FIELDS: FieldTable = {
     "thread_qnode": ((("k_thread", "base"), ("_thread_base", "qnode_dlist")),),
 }
 
-# --- Heaps -------------------------------------------------------------------
-
-# CONFIG_SYS_HEAP_RUNTIME_STATS. max_allocated_bytes exists from v3.3.0; on
+# CONFIG_SYS_HEAP_RUNTIME_STATS. max_allocated_bytes exists from v3.1.0; on
 # v3.0 this group does not resolve.
 HEAP_FIELDS: FieldTable = {
     "heap_free_bytes": ((("z_heap", "free_bytes"),),),
@@ -100,8 +96,6 @@ HEAP_FIELDS: FieldTable = {
 HEAP_OPTIONAL_FIELDS: FieldTable = {
     "heap_wait_q": ((("k_heap", "wait_q"),),),
 }
-
-# --- Synchronization primitives ----------------------------------------------
 
 SEMAPHORE_FIELDS: FieldTable = {
     "sem_wait_q": ((("k_sem", "wait_q"),),),
@@ -127,7 +121,7 @@ EVENT_FIELDS: FieldTable = {
     "event_events": ((("k_event", "events"),),),
 }
 
-# The counters moved into a ``k_mem_slab_info`` sub-struct in v3.7.0; v3.0 and
+# The counters moved into a ``k_mem_slab_info`` sub-struct in v3.5.0; v3.0 and
 # v3.3 carry them directly on k_mem_slab.
 MEM_SLAB_FIELDS: FieldTable = {
     "mem_slab_wait_q": ((("k_mem_slab", "wait_q"),),),
@@ -152,9 +146,22 @@ MEM_SLAB_OPTIONAL_FIELDS: FieldTable = {
 
 # k_work has no wait queue; pending work sits on its queue's list.
 WORK_FIELDS: FieldTable = {
+    "work_node": ((("k_work", "node"),),),
     "work_handler": ((("k_work", "handler"),),),
     "work_queue": ((("k_work", "queue"),),),
     "work_flags": ((("k_work", "flags"),),),
+}
+
+# thread_id, not the embedded thread: k_work_q.thread is deprecated.
+WORKQ_FIELDS: FieldTable = {
+    "workq_thread_id": ((("k_work_q", "thread_id"),),),
+    "workq_pending": ((("k_work_q", "pending"),),),
+    "workq_flags": ((("k_work_q", "flags"),),),
+}
+
+# Threads blocked in k_work_queue_drain. notifyq holds the queue's own thread.
+WORKQ_OPTIONAL_FIELDS: FieldTable = {
+    "workq_drainq": ((("k_work_q", "drainq"),),),
 }
 
 
@@ -177,6 +184,7 @@ KERNEL_OBJECTS: dict[str, ObjectSpec] = {
     "msgqs": ObjectSpec("MSG", "k_msgq", MSGQ_FIELDS),
     "events": ObjectSpec("EVT", "k_event", EVENT_FIELDS),
     "mem_slabs": ObjectSpec("SLB", "k_mem_slab", MEM_SLAB_FIELDS, MEM_SLAB_OPTIONAL_FIELDS),
+    "workqs": ObjectSpec("WKQ", "k_work_q", WORKQ_FIELDS, WORKQ_OPTIONAL_FIELDS),
     "work": ObjectSpec("WRK", "k_work", WORK_FIELDS),
 }
 

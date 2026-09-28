@@ -23,6 +23,7 @@ from kernel.msgqs import walk_msgqs
 from kernel.mutexes import walk_mutexes
 from kernel.semaphores import walk_semaphores
 from kernel.threads import walk_thread_list
+from kernel.workqs import walk_workqs
 
 logger = logging.getLogger("zview.scraper")
 
@@ -61,6 +62,7 @@ class ZScraper:
         self.has_mutexes: bool = True
         self.has_msgqs: bool = True
         self.has_mem_slabs: bool = True
+        self.has_workqs: bool = True
         # The heap wait queue walk reads per heap per frame, so it is its own
         # feature: a recording taken before it has no such read to replay.
         self.has_heap_waiters: bool = True
@@ -118,6 +120,9 @@ class ZScraper:
             (compat.MUTEX_FIELDS, "has_mutexes"),
             (compat.MSGQ_FIELDS, "has_msgqs"),
             (compat.MEM_SLAB_FIELDS, "has_mem_slabs"),
+            # A queue's pending items are k_work nodes, so both must resolve.
+            (compat.WORKQ_FIELDS, "has_workqs"),
+            (compat.WORK_FIELDS, "has_workqs"),
         ):
             if (extras := compat.resolve_fields(elf, group)) is not None:
                 fields.update(extras)
@@ -129,6 +134,7 @@ class ZScraper:
         fields.update(compat.resolve_optional_fields(elf, compat.THREAD_QNODE_FIELDS))
         fields.update(compat.resolve_optional_fields(elf, compat.MEM_SLAB_OPTIONAL_FIELDS))
         fields.update(compat.resolve_optional_fields(elf, compat.HEAP_OPTIONAL_FIELDS))
+        fields.update(compat.resolve_optional_fields(elf, compat.WORKQ_OPTIONAL_FIELDS))
 
         return KernelLayout(**fields)
 
@@ -154,6 +160,7 @@ class ZScraper:
         self._k_mutex_addresses: dict[str, list[int]] = {}
         self._k_msgq_addresses: dict[str, list[int]] = {}
         self._k_mem_slab_addresses: dict[str, list[int]] = {}
+        self._k_workq_addresses: dict[str, list[int]] = {}
 
         if self.has_semaphores:
             self._k_sem_addresses = self._discover_struct_instances("k_sem")
@@ -170,6 +177,10 @@ class ZScraper:
         if self.has_mem_slabs:
             self._k_mem_slab_addresses = self._discover_struct_instances("k_mem_slab")
             self.has_mem_slabs = bool(self._k_mem_slab_addresses)
+
+        if self.has_workqs:
+            self._k_workq_addresses = self._discover_struct_instances("k_work_q")
+            self.has_workqs = bool(self._k_workq_addresses)
 
     def _discover_struct_instances(self, struct_name: str) -> dict[str, list[int]]:
         """
@@ -198,6 +209,7 @@ class ZScraper:
         self.has_mutexes = self.has_mutexes and "mutexes" in features
         self.has_msgqs = self.has_msgqs and "msgqs" in features
         self.has_mem_slabs = self.has_mem_slabs and "mem_slabs" in features
+        self.has_workqs = self.has_workqs and "workqs" in features
         self.has_heap_waiters = self.has_heap_waiters and "heap_waiters" in features
         self.merged_thread_meta = "merged_thread_meta" in features
 
@@ -211,6 +223,7 @@ class ZScraper:
             (self.has_msgqs, "msgqs"),
             (self.has_mem_slabs, "mem_slabs"),
             (self.has_heaps and self.has_heap_waiters, "heap_waiters"),
+            (self.has_workqs, "workqs"),
         ):
             if enabled:
                 features.append(name)
@@ -245,6 +258,7 @@ class ZScraper:
             or self.has_msgqs
             or self.has_mem_slabs
             or self.has_heaps
+            or self.has_workqs
         )
 
     def _poll_kernel_objects(self, data_queue: queue.Queue) -> dict:
@@ -266,6 +280,7 @@ class ZScraper:
             (self.has_mutexes, "mutexes", walk_mutexes, self._k_mutex_addresses),
             (self.has_msgqs, "msgqs", walk_msgqs, self._k_msgq_addresses),
             (self.has_mem_slabs, "mem_slabs", walk_mem_slabs, self._k_mem_slab_addresses),
+            (self.has_workqs, "workqs", walk_workqs, self._k_workq_addresses),
         ):
             if not enabled:
                 continue

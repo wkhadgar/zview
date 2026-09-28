@@ -19,6 +19,7 @@ from backend.base import (
     MutexState,
     SemaphoreInfo,
     ThreadInfo,
+    WorkqInfo,
 )
 from frontend.tui.views.base import (
     Any,
@@ -37,6 +38,7 @@ from frontend.tui.views.mutex_detail import MutexDetailView
 from frontend.tui.views.semaphore_detail import SemaphoreDetailView
 from frontend.tui.views.thread_detail import ThreadDetailView
 from frontend.tui.views.thread_list import ThreadListView
+from frontend.tui.views.workq_detail import WorkqDetailView
 from frontend.tui.widgets import PopupRow, TUIPopup
 from orchestrator import ZScraper
 
@@ -114,11 +116,13 @@ class ZView:
         self.msgqs_data: list[MsgqInfo] = []
         self.mem_slabs_data: list[MemSlabInfo] = []
         self.mutexes_data: list[MutexInfo] = []
+        self.workqs_data: list[WorkqInfo] = []
         # One sample per frame per object, for the detail views.
         self.mutex_history: dict[int, deque[MutexState]] = {}
         self.sem_history: dict[int, deque[int]] = {}
         self.msgq_history: dict[int, deque[int]] = {}
         self.mem_slab_history: dict[int, deque[int]] = {}
+        self.workq_history: dict[int, deque[int]] = {}
         self.status_message: str = ""
         # One entry per reported message, newest last.
         self.messages: deque[LogEntry] = deque(maxlen=_MESSAGE_LOG_SIZE)
@@ -134,6 +138,7 @@ class ZView:
         self.detailing_semaphore_address: int | None = None
         self.detailing_msgq_address: int | None = None
         self.detailing_mem_slab_address: int | None = None
+        self.detailing_workq_address: int | None = None
         # Wait queues are walkable only in the dlist (simple) flavor.
         self.waiters_unknown: bool = scraper.waitq_flavor != "simple"
         self.idle_thread: ThreadInfo | None = None
@@ -169,6 +174,7 @@ class ZView:
             ZViewState.SEMAPHORE_DETAIL_VIEW: SemaphoreDetailView(self, theme),
             ZViewState.MSGQ_DETAIL_VIEW: MsgqDetailView(self, theme),
             ZViewState.MEM_SLAB_DETAIL_VIEW: MemSlabDetailView(self, theme),
+            ZViewState.WORKQ_DETAIL_VIEW: WorkqDetailView(self, theme),
         }
 
         # The opening view is the thread list. A replay keeps polling whatever
@@ -394,6 +400,7 @@ class ZView:
                 | ZViewState.SEMAPHORE_DETAIL_VIEW
                 | ZViewState.MSGQ_DETAIL_VIEW
                 | ZViewState.MEM_SLAB_DETAIL_VIEW
+                | ZViewState.WORKQ_DETAIL_VIEW
             ):
                 if live:
                     # This view reads only the primitives.
@@ -482,6 +489,9 @@ class ZView:
             if "mem_slabs" in data:
                 self.mem_slabs_data = data["mem_slabs"]
                 self._record_usage(self.mem_slabs_data)
+            if "workqs" in data:
+                self.workqs_data = data["workqs"]
+                self._record_backlog(self.workqs_data)
 
     def _record_counts(self, semaphores: list[SemaphoreInfo]) -> None:
         """Append one count sample per semaphore, per frame."""
@@ -500,6 +510,12 @@ class ZView:
         for slab in slabs:
             history = self.mem_slab_history.setdefault(slab.address, deque(maxlen=256))
             history.append(slab.num_used)
+
+    def _record_backlog(self, workqs: list[WorkqInfo]) -> None:
+        """Append one pending-depth sample per work queue, per frame."""
+        for workq in workqs:
+            history = self.workq_history.setdefault(workq.address, deque(maxlen=256))
+            history.append(workq.depth)
 
     def _record_contention(self, mutexes: list[MutexInfo]) -> None:
         """

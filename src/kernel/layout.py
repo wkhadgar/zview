@@ -59,6 +59,16 @@ class KernelLayout:
     # Only on a build with CONFIG_MEM_SLAB_TRACE_MAX_UTILIZATION.
     mem_slab_max_used: int | None = None
 
+    workq_thread_id: int | None = None
+    workq_pending: int | None = None
+    workq_flags: int | None = None
+    workq_drainq: int | None = None
+
+    work_node: int | None = None
+    work_handler: int | None = None
+    work_queue: int | None = None
+    work_flags: int | None = None
+
     # _thread_base.qnode_dlist within k_thread: the link a queued thread is
     # threaded by.
     thread_qnode: int | None = None

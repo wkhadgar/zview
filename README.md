@@ -43,9 +43,8 @@ CONFIG_SYS_HEAP_RUNTIME_STATS=y            # Enables heap runtime stats and frag
 CONFIG_MEM_SLAB_TRACE_MAX_UTILIZATION=y    # Enables the memory slab peak
 ```
 
-> **Note:** `-S zview` needs Zephyr v3.0 or newer, where every option it names
-> exists. An undefined symbol in a Kconfig fragment aborts the build, so an
-> older tree wants `-S zview-minimal`, whose three options are much older.
+> **Note:** snippets need Zephyr v3.4.0 or newer. On an older tree, set the
+> options in `prj.conf` instead.
 
 </details>
 
@@ -161,8 +160,8 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
   The status row is reclaimed by the poll heartbeat, so this is where messages stay readable.
 * **ENTER**: Get details for the selected thread or kernel object (hit ENTER again to return).
 * **S / I**: Sort the data and invert the sorting order.
-* **k**: Access the **Kernel Objects** view listing semaphores, mutexes, message queues, memory slabs and heaps (hit k again to return).
-* **f**: In the kernel objects view, cycle the type filter (ALL, SEM, MTX, MSG, ALLOC, HEP, SLB).
+* **k**: Access the **Kernel Objects** view listing semaphores, mutexes, message queues, memory slabs, heaps and work queues (hit k again to return).
+* **f**: In the kernel objects view, cycle the type filter (ALL, SEM, MTX, MSG, ALLOC, HEP, SLB, WKQ).
 * **r**: Soft refresh, re-walks the kernel thread list and clears runtime baselines.
 * **R**: Full reconnect, tears down the polling thread, disconnects the probe, reconnects, and resumes.
 
@@ -184,11 +183,11 @@ A thread carries its CPU and load graphs, building up live as it is polled.
 
 ### Watch your kernel objects
 
-Press **k** for every statically declared `k_sem`, `k_mutex`, `k_msgq`, `k_mem_slab` and
-`k_heap`: semaphore counts with their waiter lists, mutexes with the thread that holds
-each lock, queues with their fill level, and slabs and heaps with what they have handed
-out. **f** cycles the type filter, and the aggregate row on top sums whatever the filter
-leaves.
+Press **k** for every statically declared `k_sem`, `k_mutex`, `k_msgq`, `k_mem_slab`,
+`k_heap` and `k_work_q`: semaphore counts with their waiter lists, mutexes with the thread
+that holds each lock, queues with their fill level, slabs and heaps with what they have
+handed out, and work queues with the work waiting to run. **f** cycles the type filter,
+and the aggregate row on top sums whatever the filter leaves.
 
 ![Kernel objects list](docs/assets/kernel_objects.gif)
 
@@ -217,6 +216,10 @@ A slab plots the blocks it has out against the blocks it owns, with its peak mar
 A heap plots the bytes it has out against the bytes it accounts for, and opens onto a map of its allocated chunks in address order, with the threads waiting for memory beside it.
 
 ![Heap detail](docs/assets/heap_detail.gif)
+
+A work queue plots its backlog beside the items waiting to run and the threads draining it.
+
+![Work queue detail](docs/assets/workq_detail.gif)
 
 </details>
 

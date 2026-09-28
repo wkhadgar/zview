@@ -9,7 +9,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backend.base import HeapInfo, MemSlabInfo, MsgqInfo, MutexInfo, MutexState, SemaphoreInfo
+from backend.base import (
+    HeapInfo,
+    MemSlabInfo,
+    MsgqInfo,
+    MutexInfo,
+    MutexState,
+    SemaphoreInfo,
+    WorkqInfo,
+)
 from frontend.tui.views.base import SpecialCode, ZViewState, ZViewTUIAttributes
 from frontend.tui.views.kernel_object_list import (
     ALLOCATORS,
@@ -24,6 +32,8 @@ from frontend.tui.views.mem_slab_detail import MemSlabDetailView
 from frontend.tui.views.msgq_detail import MsgqDetailView
 from frontend.tui.views.mutex_detail import MutexDetailView
 from frontend.tui.views.semaphore_detail import SemaphoreDetailView
+from frontend.tui.views.workq_detail import WorkqDetailView
+from frontend.tui.widgets import WORKQ
 
 
 @pytest.fixture
@@ -85,6 +95,7 @@ def controller() -> MagicMock:
             waiters=(),
         ),
     ]
+    c.workqs_data = []
     c.mutex_history = {}
     c.msgq_history = {}
     c.mem_slab_history = {}
@@ -138,6 +149,10 @@ def test_filter_cycles_through_types(controller, theme):
     view.handle_input(SpecialCode.FILTER)
     assert view.filter_name == MEM_SLAB
     assert {kind for kind, _ in view._rows()} == {MEM_SLAB}
+
+    view.handle_input(SpecialCode.FILTER)
+    assert view.filter_name == WORKQ
+    assert view._rows() == []
 
     view.handle_input(SpecialCode.FILTER)
     assert view.filter_name == "ALL"
@@ -232,6 +247,97 @@ def test_locked_mutex_with_unknown_owner_shows_the_address(controller, theme):
     assert "0x4000" in view._info.row_values(MUTEX, mutex)[1]
 
 
+def test_a_busy_work_queue_fills_its_bar_and_counts_its_backlog(controller, distinct_theme):
+    view = KernelObjectListView(controller, distinct_theme)
+    busy = WorkqInfo(name="q", address=0x1, flags=0b11, pending=("a", "b"), waiters=())
+
+    fill, label, waiters, attr = view._info.row_values(WORKQ, busy)
+
+    assert (fill, label, waiters) == (100.0, "BUSY ● 2 pending", "-")
+    assert attr == view._info._busy_attr
+
+
+def test_an_idle_work_queue_is_empty_and_plain(controller, distinct_theme):
+    view = KernelObjectListView(controller, distinct_theme)
+    idle = WorkqInfo(name="q", address=0x1, flags=0b01, waiters=())
+
+    assert view._info.row_values(WORKQ, idle) == (0.0, "IDLE", "-", 0)
+
+
+def test_a_work_queue_names_the_states_its_bar_cannot(controller, distinct_theme):
+    """A queue never started, and a walk cut short, say so in the label."""
+    view = KernelObjectListView(controller, distinct_theme)
+    unstarted = WorkqInfo(name="q", address=0x1, flags=0)
+    cut = WorkqInfo(name="q", address=0x1, flags=0b11, pending=("a",) * 16, pending_truncated=True)
+
+    assert view._info.row_values(WORKQ, unstarted)[1] == "NOT STARTED"
+    assert view._info.row_values(WORKQ, cut)[1] == "BUSY ● 16+ pending"
+
+
+def test_a_plugged_work_queue_is_red(controller, distinct_theme):
+    """Plugged, it refuses new submissions, the queue's version of full."""
+    view = KernelObjectListView(controller, distinct_theme)
+    plugged = WorkqInfo(name="q", address=0x1, flags=0b1101, waiters=("drainer",))
+
+    assert view._info.row_values(WORKQ, plugged)[3] == view._info._contended_attr
+
+
+def test_a_draining_work_queue_is_red_too(controller, distinct_theme):
+    """While a drain runs, submissions from other threads are refused."""
+    view = KernelObjectListView(controller, distinct_theme)
+    draining = WorkqInfo(name="q", address=0x1, flags=0b0101, waiters=("drainer",))
+
+    assert view._info.row_values(WORKQ, draining)[3] == view._info._contended_attr
+
+
+def test_work_queues_turning_work_away_are_counted_as_refusing(controller, theme):
+    controller.workqs_data = [
+        WorkqInfo(name="plugged", address=0x7000, flags=0b1001, waiters=()),
+        WorkqInfo(name="draining", address=0x7100, flags=0b0101, waiters=("drainer",)),
+        WorkqInfo(name="idle", address=0x7200, flags=0b0001, waiters=()),
+    ]
+    view = KernelObjectListView(controller, theme)
+    _filter_to(view, WORKQ)
+
+    assert "3 objects | 2 refusing | 1 with waiters" in view._summary(view._rows())
+
+
+def test_a_busy_or_backlogged_work_queue_counts_as_pressure(controller, theme):
+    """Like a held mutex, a running queue is in use, and so is one with work waiting."""
+    controller.workqs_data = [
+        WorkqInfo(name="busy", address=0x7000, flags=0b0011, waiters=()),
+        WorkqInfo(name="backlog", address=0x7100, flags=0b0001, pending=("a",), waiters=()),
+        WorkqInfo(name="idle", address=0x7200, flags=0b0001, waiters=()),
+        WorkqInfo(name="also_idle", address=0x7300, flags=0b0001, waiters=()),
+    ]
+    view = KernelObjectListView(controller, theme)
+    _filter_to(view, WORKQ)
+
+    fill, _, _ = view._aggregate(view._rows())
+
+    assert fill == 50.0
+
+
+def test_work_queues_are_listed_with_the_other_objects(controller, theme):
+    controller.workqs_data = [WorkqInfo(name="bench_workq", address=0x7000, flags=0b01)]
+    view = KernelObjectListView(controller, theme)
+
+    assert (WORKQ, controller.workqs_data[0]) in view._rows()
+
+
+def test_enter_on_a_work_queue_opens_its_detail_view(controller, theme):
+    """Semaphores are Enter's fallthrough, so a work queue must not reach it."""
+    controller.semaphores_data = controller.mutexes_data = []
+    controller.msgqs_data = controller.mem_slabs_data = []
+    controller.workqs_data = [WorkqInfo(name="bench_workq", address=0x7000, flags=0b01)]
+    controller.detailing_semaphore_address = None
+    view = KernelObjectListView(controller, theme)
+
+    assert view.handle_input(SpecialCode.NEWLINE) == ZViewState.WORKQ_DETAIL_VIEW
+    assert controller.detailing_workq_address == 0x7000
+    assert controller.detailing_semaphore_address is None
+
+
 def test_summary_counts_contention(controller, theme):
     view = KernelObjectListView(controller, theme)
 
@@ -283,14 +389,10 @@ def test_empty_message_distinguishes_absent_from_filtered(controller, theme):
     controller.msgqs_data = []
     controller.mem_slabs_data = []
 
+    controller.scraper.has_kernel_objects.return_value = True
     assert "No ALL objects." in view._empty_message()
 
-    controller.scraper.has_semaphores = False
-    controller.scraper.has_mutexes = False
-    controller.scraper.has_msgqs = False
-    controller.scraper.has_mem_slabs = False
-    controller.scraper.has_heaps = False
-
+    controller.scraper.has_kernel_objects.return_value = False
     assert "No statically declared" in view._empty_message()
 
 
@@ -908,6 +1010,72 @@ def test_the_queue_detail_says_when_the_queue_is_gone(controller, theme):
     view.render(win, 24, 209)
 
     assert any("no longer being reported" in text for _, _, text in win.writes)
+
+
+def _busy_workq(**fields) -> WorkqInfo:
+    """``bench_workq`` running a handler with two items behind it."""
+    values = {
+        "name": "bench_workq",
+        "address": 0x7000,
+        "flags": 0b0011,
+        "pending": ("tick_work (work_handler)", "trail_work (work_handler)"),
+        "thread_name": "bench_workq",
+        "waiters": (),
+    }
+    return WorkqInfo(**(values | fields))
+
+
+def test_the_work_queue_detail_shows_thread_flags_and_backlog(controller, theme):
+    controller.workqs_data = [_busy_workq()]
+    controller.workq_history = {0x7000: [0, 2, 1]}
+    controller.detailing_workq_address = 0x7000
+    view = WorkqDetailView(controller, theme)
+
+    drawn = " ".join(text for _, _, text in _render(view).writes)
+
+    assert "started,busy" in drawn
+    assert "0 to 2 pending" in drawn
+    assert "trail_work (work_handler)" in drawn
+
+
+def test_pending_items_sit_above_the_drain_waiters(controller, theme):
+    """The drain waiters take a third of the 16 side rows, the items the rest."""
+    controller.workqs_data = [_busy_workq(waiters=("drainer",))]
+    controller.detailing_workq_address = 0x7000
+    view = WorkqDetailView(controller, theme)
+
+    writes = _render(view, height=24, width=209).writes
+
+    assert [(y, x) for y, x, t in writes if t.startswith("┌Pending")] == [(6, 169)]
+    assert [(y, x) for y, x, t in writes if t.startswith("┌Drain waiters")] == [(17, 169)]
+    assert any("drainer" in t for y, _, t in writes if y > 17)
+
+
+def test_a_cut_walk_ends_the_pending_panel_in_an_ellipsis(controller, theme):
+    controller.workqs_data = [_busy_workq(pending_truncated=True)]
+    controller.detailing_workq_address = 0x7000
+    view = WorkqDetailView(controller, theme)
+
+    assert any(t == "└─ ..." for _, _, t in _render(view).writes)
+
+
+def test_a_short_column_gives_the_pending_items_all_of_it(controller, theme):
+    """Four side rows cannot hold two boxes, and the header row names the waiters."""
+    controller.workqs_data = [_busy_workq()]
+    controller.detailing_workq_address = 0x7000
+    view = WorkqDetailView(controller, theme)
+
+    writes = _render(view, height=12, width=209).writes
+
+    assert any(t.startswith("┌Pending") for _, _, t in writes)
+    assert not any(t.startswith("┌Drain waiters") for _, _, t in writes)
+
+
+def test_the_work_queue_detail_says_when_the_queue_is_gone(controller, theme):
+    controller.detailing_workq_address = 0x9999
+    view = WorkqDetailView(controller, theme)
+
+    assert any("no longer being reported" in t for _, _, t in _render(view).writes)
 
 
 def test_mem_slab_row_shows_usage_block_size_and_peak(controller, theme):

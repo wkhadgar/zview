@@ -279,6 +279,13 @@ def _do_dump(args) -> int:
                 f"slab {sl.name:20s} {sl.num_used}/{sl.num_blocks} x {sl.block_size}B "
                 f"peak={peak} waiters={_waiters(sl.waiters)}"
             )
+        for w in frame.get("workqs", []):
+            items = ",".join(w.pending) + (",..." if w.pending_truncated else "")
+            print(
+                f"wkq  {w.name:20s} {w.depth} pending flags={','.join(w.states) or '-'} "
+                f"thread={w.thread_name or '-'} items={items or '-'} "
+                f"waiters={_waiters(w.waiters)}"
+            )
     return 0
 
 
