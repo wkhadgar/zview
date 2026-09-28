@@ -4,11 +4,12 @@
 
 """RecordingScraper: AbstractScraper wrapper that streams every call to a gzipped NDJSON file."""
 
+import contextlib
 import gzip
 import json
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import ExitStack
 from pathlib import Path
 from typing import IO
@@ -17,8 +18,8 @@ from backend.base import AbstractScraper
 
 logger = logging.getLogger("zview.recording")
 
-# /3 added the header's ``features`` list.
-SCHEMA_VERSION = "zview-recording/3"
+# /3 added the header's ``features`` list, and /4 the reads that raised.
+SCHEMA_VERSION = "zview-recording/4"
 
 
 class RecordingScraper(AbstractScraper):
@@ -67,14 +68,25 @@ class RecordingScraper(AbstractScraper):
         }
         self._fp.write(json.dumps(header) + "\n")
 
-    def _emit(self, op: str, args: dict, result=None) -> None:
-        """Append one call entry: ``{t, op, args[, result]}``. ``t`` is monotonic."""
+    def _emit(self, op: str, args: dict, result=None, error: dict | None = None) -> None:
+        """Append one call entry: ``{t, op, args[, result | error]}``. ``t`` is monotonic."""
         if self._fp is None:
             return
         entry: dict = {"t": time.perf_counter(), "op": op, "args": args}
         if result is not None:
             entry["result"] = result
+        if error is not None:
+            entry["error"] = error
         self._fp.write(json.dumps(entry) + "\n")
+
+    @contextlib.contextmanager
+    def _failure_recorded(self, op: str, args: dict) -> Iterator[None]:
+        """Record the error a read raises as its entry, then let it propagate."""
+        try:
+            yield
+        except Exception as e:
+            self._emit(op, args, error={"kind": type(e).__name__, "message": str(e)})
+            raise
 
     def connect(self) -> None:
         self._open()
@@ -99,13 +111,17 @@ class RecordingScraper(AbstractScraper):
         self._emit("end_batch", {})
 
     def read_bytes(self, at: int, amount: int) -> bytes:
-        result = self._wrapped.read_bytes(at, amount)
-        self._emit("read_bytes", {"at": at, "amount": amount}, bytes(result).hex())
+        args = {"at": at, "amount": amount}
+        with self._failure_recorded("read_bytes", args):
+            result = self._wrapped.read_bytes(at, amount)
+        self._emit("read_bytes", args, bytes(result).hex())
         return result
 
     def _record_read(self, op: str, fn, at: int, amount: int) -> Sequence[int]:
-        result = fn(at, amount)
-        self._emit(op, {"at": at, "amount": amount}, list(result))
+        args = {"at": at, "amount": amount}
+        with self._failure_recorded(op, args):
+            result = fn(at, amount)
+        self._emit(op, args, list(result))
         return result
 
     def read8(self, at: int, amount: int = 1) -> Sequence[int]:

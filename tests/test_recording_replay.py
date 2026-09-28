@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.base import AbstractScraper
+from backend.base import AbstractScraper, ProbeReadError
 from backend.recording import SCHEMA_VERSION, RecordingScraper
 from backend.replay import (
     ReplayComplete,
@@ -92,6 +92,73 @@ def test_roundtrip_read_results_match(sample_path, sample_backend):
     assert replay.read_bytes(0x3000, 16) == bytes(range(16))
     replay.end_batch()
     replay.disconnect()
+
+
+class _FailingRead(FakeBackend):
+    """``FakeBackend`` whose chunk-map sized read fails, as QEMU's stub did at 2 KB."""
+
+    def __init__(self, memory, error: Exception):
+        super().__init__(memory)
+        self._error = error
+
+    def read_bytes(self, at: int, amount: int) -> bytes:
+        raise self._error
+
+
+def _record_a_failing_read(path: Path, backend: FakeBackend) -> None:
+    """A read, a failing read the session survives, and a read after it."""
+    with RecordingScraper(backend, path) as rec:
+        rec.begin_batch()
+        rec.read32(0x1000, 1)
+        with pytest.raises(type(backend._error)):
+            rec.read_bytes(0x3000, 2112)
+        rec.read32(0x1004, 4)
+        rec.end_batch()
+
+
+def test_a_failed_read_replays_as_the_same_error_in_place(sample_path, sample_backend):
+    """The replay takes the path the live session took, so later reads line up."""
+    live = _FailingRead(sample_backend._memory, ProbeReadError("GDB error at 0x3000: E22"))
+    _record_a_failing_read(sample_path, live)
+
+    replay = ReplayScraper(sample_path, honor_timing=False)
+    replay.connect()
+    replay.begin_batch()
+    assert replay.read32(0x1000, 1) == (0xDEADBEEF,)
+    with pytest.raises(ProbeReadError, match="E22"):
+        replay.read_bytes(0x3000, 2112)
+    assert replay.read32(0x1004, 4) == (1, 2, 3, 4)
+    replay.end_batch()
+
+
+def test_a_failure_from_outside_the_probe_errors_replays_as_a_read_error(
+    sample_path, sample_backend
+):
+    live = _FailingRead(sample_backend._memory, ConnectionError("GDB server closed"))
+    _record_a_failing_read(sample_path, live)
+
+    replay = ReplayScraper(sample_path, honor_timing=False)
+    replay.connect()
+    replay.begin_batch()
+    replay.read32(0x1000, 1)
+    with pytest.raises(ProbeReadError, match="ConnectionError: GDB server closed"):
+        replay.read_bytes(0x3000, 2112)
+
+
+def test_a_recording_from_before_failed_reads_still_replays(tmp_path):
+    """Schema /3 has no failure entries, and nothing in it needs one."""
+    path = tmp_path / "v3.ndjson.gz"
+    with gzip.open(path, "wt", encoding="utf-8") as fp:
+        fp.write(json.dumps({"schema": "zview-recording/3", "endianess": "<"}) + "\n")
+        fp.write(json.dumps({"t": 0.0, "op": "connect", "args": {}}) + "\n")
+        fp.write(
+            json.dumps({"t": 0.1, "op": "read32", "args": {"at": 16, "amount": 1}, "result": [7]})
+            + "\n"
+        )
+
+    replay = ReplayScraper(path, honor_timing=False)
+    replay.connect()
+    assert replay.read32(16, 1) == (7,)
 
 
 def test_mismatched_args_raise(sample_path, sample_backend):
