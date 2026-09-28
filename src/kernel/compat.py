@@ -55,7 +55,7 @@ THREAD_NAME_FIELDS: FieldTable = {
     "thread_name": ((("k_thread", "name"),),),
 }
 
-# CONFIG_THREAD_RUNTIME_STATS. z_kernel.usage exists from v3.7.0; on v3.0 and
+# CONFIG_THREAD_RUNTIME_STATS. z_kernel.usage exists from v3.5.0; on v3.0 and
 # v3.3 this group does not resolve.
 USAGE_FIELDS: FieldTable = {
     "cpu_usage": ((("z_kernel", "usage"),),),
@@ -82,7 +82,7 @@ THREAD_QNODE_FIELDS: FieldTable = {
     "thread_qnode": ((("k_thread", "base"), ("_thread_base", "qnode_dlist")),),
 }
 
-# CONFIG_SYS_HEAP_RUNTIME_STATS. max_allocated_bytes exists from v3.3.0; on
+# CONFIG_SYS_HEAP_RUNTIME_STATS. max_allocated_bytes exists from v3.1.0; on
 # v3.0 this group does not resolve.
 HEAP_FIELDS: FieldTable = {
     "heap_free_bytes": ((("z_heap", "free_bytes"),),),
@@ -121,7 +121,7 @@ EVENT_FIELDS: FieldTable = {
     "event_events": ((("k_event", "events"),),),
 }
 
-# The counters moved into a ``k_mem_slab_info`` sub-struct in v3.7.0; v3.0 and
+# The counters moved into a ``k_mem_slab_info`` sub-struct in v3.5.0; v3.0 and
 # v3.3 carry them directly on k_mem_slab.
 MEM_SLAB_FIELDS: FieldTable = {
     "mem_slab_wait_q": ((("k_mem_slab", "wait_q"),),),

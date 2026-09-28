@@ -153,7 +153,7 @@ def test_detect_zephyr_version_of_a_missing_path(tmp_path: Path):
 
 
 def test_mem_slab_resolves_the_sub_struct_layout():
-    """v3.7.0 and later keep the counters in a k_mem_slab_info sub-struct."""
+    """v3.5.0 and later keep the counters in a k_mem_slab_info sub-struct."""
     elf = FakeElf(
         {
             ("k_mem_slab", "wait_q"): 0,
@@ -192,7 +192,7 @@ def test_mem_slab_falls_back_to_the_flat_layout():
 
 
 def test_usage_group_needs_the_kernel_wide_counter():
-    """z_kernel.usage only exists from v3.7.0, so older trees get no CPU stats."""
+    """z_kernel.usage only exists from v3.5.0, so older trees get no CPU stats."""
     elf = FakeElf(
         {
             ("k_thread", "base"): 0,
@@ -205,7 +205,7 @@ def test_usage_group_needs_the_kernel_wide_counter():
 
 
 def test_heap_group_needs_max_allocated_bytes():
-    """z_heap.max_allocated_bytes arrived in v3.3.0; a v3.0 tree reports no heaps."""
+    """z_heap.max_allocated_bytes arrived in v3.1.0; a v3.0 tree reports no heaps."""
     elf = FakeElf(
         {
             ("z_heap", "free_bytes"): 16,
