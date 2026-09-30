@@ -12,15 +12,11 @@ Real-time system observability for Zephyr RTOS, delivered over SWD.
 
 ## Prerequisites
 
-ZView reads what the build left in the ELF, so your app has to be built with a
-few Kconfig options. They ship as snippets:
+ZView reads what the build left in the ELF, so any build works, and a few
+Kconfig options add to what it can show. They ship as a snippet:
 
 ```
-# Everything ZView reads
 west build -S zview
-
-# Only what it cannot work without, for a tight image
-west build -S zview-minimal
 ```
 
 <details>
@@ -32,11 +28,9 @@ own `prj.conf`:
 
 ```
 ## prj.conf
-CONFIG_INIT_STACKS=y            # Required for stack watermarks
-CONFIG_THREAD_MONITOR=y         # Required for thread discovery
-CONFIG_THREAD_STACK_INFO=y      # Required for thread metadata
-
-# Optional Features
+CONFIG_THREAD_MONITOR=y                    # Enables threads created at runtime
+CONFIG_THREAD_STACK_INFO=y                 # Enables stack sizes
+CONFIG_INIT_STACKS=y                       # Enables stack watermarks
 CONFIG_THREAD_NAME=y                       # Enables thread name display
 CONFIG_THREAD_RUNTIME_STATS=y              # Enables CPU usage tracking
 CONFIG_SYS_HEAP_RUNTIME_STATS=y            # Enables heap runtime stats and fragmentation map
