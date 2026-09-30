@@ -20,6 +20,7 @@ def _scraper(**enabled: bool) -> ZScraper:
     s.has_mem_slabs = enabled.get("mem_slabs", False)
     s.has_workqs = enabled.get("workqs", False)
     s.has_heap_waiters = enabled.get("heap_waiters", s.has_heaps)
+    s.has_stack_fill = enabled.get("stack_fill", True)
     s.poll_kernel_objects = True
     return s
 
@@ -113,7 +114,7 @@ def test_the_view_gate_skips_the_reads():
 
 
 def test_absent_features_name_the_kconfig_they_need():
-    s = _scraper()
+    s = _scraper(stack_fill=False)
     s.has_names = False
     s.has_usage = True
     s.has_heaps = False
@@ -121,6 +122,7 @@ def test_absent_features_name_the_kconfig_they_need():
     assert s.absent_features() == (
         "Warning: no thread names (CONFIG_THREAD_NAME=n)",
         "Warning: no heap stats (CONFIG_SYS_HEAP_RUNTIME_STATS=n)",
+        "Warning: no stack usage (CONFIG_INIT_STACKS=n)",
     )
 
 
@@ -166,6 +168,31 @@ def test_a_recording_without_work_queues_does_not_replay_them():
 
     assert not s.has_workqs
     assert s.has_semaphores
+
+
+def test_a_skipped_stack_scan_is_a_recorded_feature():
+    """The scan reads each stack every frame, so a recording has to say it left them out."""
+    assert "unfilled_stacks" in _scraper(stack_fill=False).active_features()
+    assert "unfilled_stacks" not in _scraper().active_features()
+
+
+def test_a_recording_that_scanned_an_unfilled_build_replays_the_scan():
+    """Before the scan was skipped, every stack was read, filled or not."""
+    s = _scraper(stack_fill=False)
+    s._m_scraper = MagicMock(is_live=False, features=("threads", "merged_thread_meta"))
+
+    s._restrict_features_to_recording()
+
+    assert s.has_stack_fill
+
+
+def test_a_recording_that_skipped_the_scan_skips_it_again():
+    s = _scraper(stack_fill=False)
+    s._m_scraper = MagicMock(is_live=False, features=("threads", "unfilled_stacks"))
+
+    s._restrict_features_to_recording()
+
+    assert not s.has_stack_fill
 
 
 def test_a_build_with_only_work_queues_has_objects_to_show():

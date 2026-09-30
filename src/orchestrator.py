@@ -80,6 +80,10 @@ class ZScraper:
         # queue layout.
         self.zephyr_version: str | None = compat.detect_zephyr_version(elf_path)
         self.waitq_flavor: compat.WaitQFlavor = compat.waitq_flavor(self._elf_inspector)
+        # Without the fill pattern there is nothing for the watermark scan to find.
+        self.has_stack_fill: bool = compat.has_kconfig(
+            self._elf_inspector, compat.CONFIG_INIT_STACKS
+        )
 
         self._MAX_THREADS: int = max_threads
 
@@ -212,6 +216,8 @@ class ZScraper:
         self.has_workqs = self.has_workqs and "workqs" in features
         self.has_heap_waiters = self.has_heap_waiters and "heap_waiters" in features
         self.merged_thread_meta = "merged_thread_meta" in features
+        # A recording from before the scan was skipped scanned every stack.
+        self.has_stack_fill = self.has_stack_fill or "unfilled_stacks" not in features
 
     def active_features(self) -> tuple[str, ...]:
         """The features this session polls, as recorded in a recording header."""
@@ -224,6 +230,7 @@ class ZScraper:
             (self.has_mem_slabs, "mem_slabs"),
             (self.has_heaps and self.has_heap_waiters, "heap_waiters"),
             (self.has_workqs, "workqs"),
+            (not self.has_stack_fill, "unfilled_stacks"),
         ):
             if enabled:
                 features.append(name)
@@ -238,6 +245,7 @@ class ZScraper:
                 (self.has_names, "Warning: no thread names (CONFIG_THREAD_NAME=n)"),
                 (self.has_usage, "Warning: no cpu stats (CONFIG_THREAD_RUNTIME_STATS=n)"),
                 (self.has_heaps, "Warning: no heap stats (CONFIG_SYS_HEAP_RUNTIME_STATS=n)"),
+                (self.has_stack_fill, "Warning: no stack usage (CONFIG_INIT_STACKS=n)"),
             )
             if not enabled
         )
@@ -516,18 +524,22 @@ class ZScraper:
                 usage_delta = 0
                 is_active = False
 
-            try:
-                watermark = self._m_scraper.calculate_dynamic_watermark(
-                    thread.stack_start,
-                    thread.stack_size,
-                    thread_id=thread.address,
-                )
-            except Exception as e:
-                raise RuntimeError(f"Error polling stack watermark for {thread.name}: {e}") from e
+            watermark = stack_usage_pct = None
+            if self.has_stack_fill:
+                try:
+                    watermark = self._m_scraper.calculate_dynamic_watermark(
+                        thread.stack_start,
+                        thread.stack_size,
+                        thread_id=thread.address,
+                    )
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Error polling stack watermark for {thread.name}: {e}"
+                    ) from e
 
-            stack_usage_pct = (
-                (watermark / thread.stack_size * 100) if thread.stack_size > 0 else 0.0
-            )
+                stack_usage_pct = (
+                    (watermark / thread.stack_size * 100) if thread.stack_size > 0 else 0.0
+                )
 
             meta = self._read_thread_meta(thread)
 
@@ -663,8 +675,8 @@ class ZScraper:
                 load_pct = 0.0
 
             runtime = ThreadRuntime(
-                cpu=load_pct,
-                cpu_normalized=absolute_cpu,
+                cpu=load_pct if self.has_usage else None,
+                cpu_normalized=absolute_cpu if self.has_usage else None,
                 active=data["is_active"],
                 stack_watermark=data["watermark"],
                 stack_watermark_percent=data["stack_usage_pct"],

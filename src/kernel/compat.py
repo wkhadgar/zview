@@ -35,6 +35,7 @@ FieldTable = dict[str, tuple[MemberPath, ...]]
 
 CONFIG_WAITQ_SIMPLE = "CONFIG_WAITQ_SIMPLE"
 CONFIG_WAITQ_SCALABLE = "CONFIG_WAITQ_SCALABLE"
+CONFIG_INIT_STACKS = "CONFIG_INIT_STACKS"
 
 WaitQFlavor = Literal["simple", "scalable", "unknown"]
 
