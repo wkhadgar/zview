@@ -12,7 +12,9 @@ on the same unmodified ELF skip the scan entirely.
 import hashlib
 import hmac
 import io
+import itertools
 import marshal
+import math
 import os
 import sys
 from pathlib import Path
@@ -26,13 +28,71 @@ from elftools.elf.sections import SymbolTableSection
 _CACHE_HMAC_KEY = hashlib.sha256(str(Path.home()).encode()).digest()
 _HMAC_SIZE = 32  # SHA-256 digest length in bytes
 
-_CACHE_SCHEMA_VERSION = 6
+_CACHE_SCHEMA_VERSION = 7
 
 # DWARF location opcodes: an object's own address, and the frame and register
 # forms a function local takes.
 _DW_OP_ADDR = 0x03
 _DW_OP_FBREG = 0x91
 _DW_OP_REGISTER_RANGE = range(0x50, 0x90)
+
+# Structs found wherever a global holds them: as the variable itself, as an
+# array element, or as a member of another object.
+_NESTED_STRUCTS = ("k_thread",)
+
+# Tags that only name or qualify the type they point to.
+_ALIAS_TAGS = ("DW_TAG_typedef", "DW_TAG_const_type", "DW_TAG_volatile_type", "DW_TAG_atomic_type")
+
+
+class _TypeGraph:
+    """The struct, union, array and alias types of a DWARF scan, by DIE offset."""
+
+    def __init__(self) -> None:
+        # ("struct", name, size, ((member, offset, type), ...)),
+        # ("array", element type, dimensions) or ("alias", target type).
+        self.types: dict[int, tuple] = {}
+        self._placements: dict[tuple[int, str], tuple[tuple[str, int], ...]] = {}
+
+    def size(self, offset: int) -> int:
+        """Byte size of the type at ``offset``, 0 when it was not recorded."""
+        match self.types.get(offset):
+            case ("struct", _, size, _):
+                return size
+            case ("array", element, dimensions):
+                return math.prod(dimensions) * self.size(element)
+            case ("alias", target):
+                return self.size(target)
+        return 0
+
+    def placements(self, offset: int, struct_name: str) -> tuple[tuple[str, int], ...]:
+        """``(path, byte offset)`` of each ``struct_name`` the type at ``offset`` holds by value."""
+        key = (offset, struct_name)
+        if key not in self._placements:
+            # Set before the walk, so a type that loops back to itself ends it.
+            self._placements[key] = ()
+            self._placements[key] = tuple(self._walk(offset, struct_name))
+        return self._placements[key]
+
+    def _walk(self, offset: int, struct_name: str):
+        match self.types.get(offset):
+            case ("struct", name, _, _) if name == struct_name:
+                yield "", 0
+            case ("struct", _, _, members):
+                for member, member_offset, member_type in members:
+                    prefix = f".{member}" if member else ""
+                    for path, inner in self.placements(member_type, struct_name):
+                        yield prefix + path, member_offset + inner
+            case ("array", element, dimensions):
+                held = self.placements(element, struct_name)
+                if not held:
+                    return
+                stride = self.size(element)
+                for position, index in enumerate(itertools.product(*map(range, dimensions))):
+                    label = "".join(f"[{i}]" for i in index)
+                    for path, inner in held:
+                        yield label + path, position * stride + inner
+            case ("alias", target):
+                yield from self.placements(target, struct_name)
 
 
 class ElfInspector:
@@ -66,6 +126,7 @@ class ElfInspector:
         self._struct_variables: dict[str, list[str]] = {}
         self._struct_addresses: dict[str, dict[str, list[int]]] = {}
         self._struct_declarations: dict[str, list[str]] = {}
+        self._nested_instances: dict[str, dict[str, list[int]]] = {}
         self._decl_sites: dict[int, tuple[int, int, int]] = {}
         self._function_sites: dict[int, tuple[int, int, int]] = {}
         self._resolved_files: dict[tuple[int, int], str] = {}
@@ -152,6 +213,7 @@ class ElfInspector:
             self._struct_variables = data["struct_vars"]
             self._struct_addresses = data["struct_addrs"]
             self._struct_declarations = data["struct_decls"]
+            self._nested_instances = data["nested"]
             self._decl_sites = data["decl_sites"]
             self._function_sites = data["function_sites"]
             return True
@@ -180,6 +242,7 @@ class ElfInspector:
             "struct_vars": self._struct_variables,
             "struct_addrs": self._struct_addresses,
             "struct_decls": self._struct_declarations,
+            "nested": self._nested_instances,
             "decl_sites": self._decl_sites,
             "function_sites": self._function_sites,
         }
@@ -213,15 +276,7 @@ class ElfInspector:
         for child in parent_die.iter_children():
             if child.tag != "DW_TAG_member":
                 continue
-            loc_attr = child.attributes.get("DW_AT_data_member_location")
-            if loc_attr is None:
-                # Union members elide the location attribute (offset is 0).
-                child_loc = 0
-            else:
-                child_loc = (
-                    loc_attr.value[1] if loc_attr.form == "DW_FORM_exprloc" else loc_attr.value
-                )
-            full_loc = base_offset + child_loc
+            full_loc = base_offset + self._member_location(child)
 
             m_name_attr = child.attributes.get("DW_AT_name")
             if m_name_attr:
@@ -238,6 +293,55 @@ class ElfInspector:
                 continue
             if type_die.tag in ("DW_TAG_structure_type", "DW_TAG_union_type"):
                 self._collect_members(type_die, struct_name, full_loc)
+
+    @staticmethod
+    def _member_location(member) -> int:
+        """A ``DW_TAG_member``'s byte offset in its struct or union."""
+        loc_attr = member.attributes.get("DW_AT_data_member_location")
+        if loc_attr is None:
+            # Union members elide the location attribute (offset is 0).
+            return 0
+        return loc_attr.value[1] if loc_attr.form == "DW_FORM_exprloc" else loc_attr.value
+
+    def _aggregate_type(self, die, cu_offset: int) -> tuple:
+        """A struct or union as its type graph entry."""
+        name_attr = die.attributes.get("DW_AT_name")
+        size_attr = die.attributes.get("DW_AT_byte_size")
+        members = tuple(
+            (
+                child.attributes["DW_AT_name"].value.decode(errors="ignore")
+                if "DW_AT_name" in child.attributes
+                else None,
+                self._member_location(child),
+                child.attributes["DW_AT_type"].value + cu_offset,
+            )
+            for child in die.iter_children()
+            if child.tag == "DW_TAG_member" and "DW_AT_type" in child.attributes
+        )
+        return (
+            "struct",
+            name_attr.value.decode(errors="ignore") if name_attr else None,
+            size_attr.value if size_attr else 0,
+            members,
+        )
+
+    @staticmethod
+    def _array_type(die, cu_offset: int) -> tuple:
+        """An array as its type graph entry. An unsized dimension holds nothing."""
+        dimensions = []
+        for subrange in die.iter_children():
+            if subrange.tag != "DW_TAG_subrange_type":
+                continue
+            count = subrange.attributes.get("DW_AT_count")
+            upper = subrange.attributes.get("DW_AT_upper_bound")
+            if count is not None and isinstance(count.value, int):
+                dimensions.append(count.value)
+            # A zero-length array has its upper bound at -1, stored unsigned.
+            elif upper is not None and isinstance(upper.value, int) and upper.value < 1 << 31:
+                dimensions.append(upper.value + 1)
+            else:
+                dimensions.append(0)
+        return ("array", die.attributes["DW_AT_type"].value + cu_offset, tuple(dimensions))
 
     def _variable_address(self, die, address_size: int) -> tuple[int | None, bool]:
         """
@@ -313,11 +417,21 @@ class ElfInspector:
             dwarf = elf.get_dwarf_info()
             offset_to_struct: dict[int, str] = {}
             pending_vars: list[tuple[str, int, int | None, bool]] = []
+            graph = _TypeGraph()
 
             for CU in dwarf.iter_CUs():
                 cu_offset = CU.cu_offset
                 address_size = CU.header["address_size"]
                 for die in CU.iter_DIEs():
+                    if die.tag in ("DW_TAG_structure_type", "DW_TAG_union_type"):
+                        if not die.attributes.get("DW_AT_declaration"):
+                            graph.types[die.offset] = self._aggregate_type(die, cu_offset)
+                    elif die.tag == "DW_TAG_array_type" and "DW_AT_type" in die.attributes:
+                        graph.types[die.offset] = self._array_type(die, cu_offset)
+                    elif die.tag in _ALIAS_TAGS and "DW_AT_type" in die.attributes:
+                        target = die.attributes["DW_AT_type"].value + cu_offset
+                        graph.types[die.offset] = ("alias", target)
+
                     if die.tag == "DW_TAG_structure_type":
                         name_attr = die.attributes.get("DW_AT_name")
                         if not name_attr:
@@ -373,6 +487,14 @@ class ElfInspector:
             # pending_vars because DWARF type references may point forward in the
             # stream relative to the variable DIE's position.
             for var_name, type_offset, address, is_static in pending_vars:
+                if address is not None:
+                    for struct_name in _NESTED_STRUCTS:
+                        instances = self._nested_instances.setdefault(struct_name, {})
+                        for path, offset in graph.placements(type_offset, struct_name):
+                            addresses = instances.setdefault(var_name + path, [])
+                            if address + offset not in addresses:
+                                addresses.append(address + offset)
+
                 if type_offset in offset_to_struct:
                     struct_name = offset_to_struct[type_offset]
                     self._struct_variables.setdefault(struct_name, []).append(var_name)
@@ -555,6 +677,20 @@ class ElfInspector:
                     found[name] = addresses
 
         return found
+
+    def find_nested_instances(self, struct_name: str) -> dict[str, list[int]]:
+        """
+        Map ``{path: addresses}`` for every instance of the named struct a global
+        holds by value: the variable itself, an array element such as
+        ``z_idle_threads[0]``, or a member such as ``k_sys_work_q.thread``.
+
+        Only the structs in ``_NESTED_STRUCTS`` are indexed. Order follows DWARF
+        discovery.
+        """
+        return {
+            path: list(addresses)
+            for path, addresses in self._nested_instances.get(struct_name, {}).items()
+        }
 
     def _object_symbols(self, name: str, struct_name: str) -> list[int]:
         """Addresses of the defined data symbols named ``name`` sized like the struct."""
