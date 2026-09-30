@@ -47,6 +47,10 @@ _VERSION_SEARCH_DEPTH = 4
 THREAD_FIELDS: FieldTable = {
     "threads_head": ((("z_kernel", "threads"),),),
     "thread_next": ((("k_thread", "next_thread"),),),
+}
+
+# CONFIG_THREAD_STACK_INFO.
+THREAD_STACK_FIELDS: FieldTable = {
     "stack_start": ((("k_thread", "stack_info"), ("_thread_stack_info", "start")),),
     "stack_size": ((("k_thread", "stack_info"), ("_thread_stack_info", "size")),),
 }

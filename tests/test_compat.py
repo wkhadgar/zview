@@ -204,6 +204,17 @@ def test_usage_group_needs_the_kernel_wide_counter():
     assert compat.resolve_fields(elf, compat.USAGE_FIELDS) is None
 
 
+def test_the_thread_list_resolves_without_the_stack_geometry():
+    """CONFIG_THREAD_STACK_INFO adds k_thread.stack_info, the monitor adds the list."""
+    elf = FakeElf({("z_kernel", "threads"): 8, ("k_thread", "next_thread"): 96})
+
+    assert compat.resolve_fields(elf, compat.THREAD_FIELDS) == {
+        "threads_head": 8,
+        "thread_next": 96,
+    }
+    assert compat.resolve_fields(elf, compat.THREAD_STACK_FIELDS) is None
+
+
 def test_heap_group_needs_max_allocated_bytes():
     """z_heap.max_allocated_bytes arrived in v3.1.0; a v3.0 tree reports no heaps."""
     elf = FakeElf(

@@ -254,7 +254,8 @@ def _do_dump(args) -> int:
         for t in frame.get("threads", []):
             wm = getattr(t.runtime, "stack_watermark", None)
             wm = "-" if wm is None else wm
-            print(f"thread {t.name:30s} stack={t.stack_size:>6}  watermark={wm}")
+            size = "-" if t.stack_size is None else t.stack_size
+            print(f"thread {t.name:30s} stack={size:>6}  watermark={wm}")
         for h in frame.get("heaps", []):
             print(
                 f"heap {h.name:20s} free={h.free_bytes} "

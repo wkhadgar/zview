@@ -118,10 +118,12 @@ def test_absent_features_name_the_kconfig_they_need():
     s.has_names = False
     s.has_usage = True
     s.has_heaps = False
+    s.has_stack_info = False
 
     assert s.absent_features() == (
         "Warning: no thread names (CONFIG_THREAD_NAME=n)",
         "Warning: no heap stats (CONFIG_SYS_HEAP_RUNTIME_STATS=n)",
+        "Warning: no stack sizes (CONFIG_THREAD_STACK_INFO=n)",
         "Warning: no stack usage (CONFIG_INIT_STACKS=n)",
     )
 
@@ -130,6 +132,7 @@ def test_a_full_build_has_no_notices():
     s = _scraper(heaps=True)
     s.has_names = True
     s.has_usage = True
+    s.has_stack_info = True
 
     assert s.absent_features() == ()
 

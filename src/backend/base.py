@@ -58,8 +58,9 @@ class ThreadInfo:
     """Static identity and stack geometry of a Zephyr thread plus its latest runtime."""
 
     address: int
-    stack_start: int
-    stack_size: int
+    # None on a build without CONFIG_THREAD_STACK_INFO.
+    stack_start: int | None
+    stack_size: int | None
     name: str
     runtime: ThreadRuntime | None
     priority: int | None = None

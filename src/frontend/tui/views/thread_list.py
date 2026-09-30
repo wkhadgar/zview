@@ -115,7 +115,7 @@ class ThreadListView(BaseStateView):
         table_start = 4
 
         runtimes = [t.runtime for t in self.controller.threads_data if t.runtime]
-        stack_size_sum = sum(t.stack_size for t in self.controller.threads_data)
+        stack_size_sum = _total([t.stack_size for t in self.controller.threads_data])
         stack_watermark_sum = _total([r.stack_watermark for r in runtimes])
         is_any_thread_active = any(r.active for r in runtimes)
         aggregate_stack_usage_pct = None

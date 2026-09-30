@@ -58,6 +58,7 @@ class ZScraper:
         self.has_heaps: bool = True
         self.has_usage: bool = True
         self.has_names: bool = True
+        self.has_stack_info: bool = True
         self.has_semaphores: bool = True
         self.has_mutexes: bool = True
         self.has_msgqs: bool = True
@@ -111,12 +112,13 @@ class ZScraper:
         if thread_fields is None:
             raise LookupError(
                 "Kernel thread layout not found in the ELF. ZView needs a build with "
-                "CONFIG_THREAD_MONITOR=y and CONFIG_THREAD_STACK_INFO=y."
+                "CONFIG_THREAD_MONITOR=y."
             )
 
         fields: dict = dict(thread_fields)
 
         for group, flag in (
+            (compat.THREAD_STACK_FIELDS, "has_stack_info"),
             (compat.THREAD_NAME_FIELDS, "has_names"),
             (compat.USAGE_FIELDS, "has_usage"),
             (compat.HEAP_FIELDS, "has_heaps"),
@@ -245,6 +247,7 @@ class ZScraper:
                 (self.has_names, "Warning: no thread names (CONFIG_THREAD_NAME=n)"),
                 (self.has_usage, "Warning: no cpu stats (CONFIG_THREAD_RUNTIME_STATS=n)"),
                 (self.has_heaps, "Warning: no heap stats (CONFIG_SYS_HEAP_RUNTIME_STATS=n)"),
+                (self.has_stack_info, "Warning: no stack sizes (CONFIG_THREAD_STACK_INFO=n)"),
                 (self.has_stack_fill, "Warning: no stack usage (CONFIG_INIT_STACKS=n)"),
             )
             if not enabled
@@ -525,7 +528,7 @@ class ZScraper:
                 is_active = False
 
             watermark = stack_usage_pct = None
-            if self.has_stack_fill:
+            if self.has_stack_fill and thread.stack_size is not None:
                 try:
                     watermark = self._m_scraper.calculate_dynamic_watermark(
                         thread.stack_start,

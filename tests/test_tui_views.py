@@ -357,6 +357,20 @@ def test_an_unmeasured_thread_row_draws_dashes(controller, theme):
     assert sum("- / 512" in text for text in win.drawn) == 1
 
 
+def test_a_build_without_stack_info_draws_no_stack_size(controller, theme):
+    from dataclasses import replace
+
+    unsized = replace(_unmeasured_thread(), stack_start=None, stack_size=None)
+    controller.threads_data = [unsized]
+    controller.min_dimensions = (14, 85)
+    win = _TextWin()
+
+    ThreadListView(controller, theme).render(win, 24, 209)
+
+    assert not [text for text in win.drawn if "None" in text]
+    assert sum("- / -" in text for text in win.drawn) == 2
+
+
 def test_unmeasured_values_sort_with_the_unpolled_threads(controller, theme):
     view = ThreadListView(controller, theme)
 

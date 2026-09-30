@@ -476,7 +476,7 @@ class TUIThreadInfo:
 
         # Thread Watermark Bytes
         watermark_bytes_display = _fit_str(
-            f"{_or_dash(runtime.stack_watermark, '{}')} / {thread_info.stack_size}",
+            f"{_or_dash(runtime.stack_watermark, '{}')} / {_or_dash(thread_info.stack_size, '{}')}",
             self._stack_bytes_width,
         )
         _addstr_clipped(stdscr, y, col_pos, watermark_bytes_display, screen_w)

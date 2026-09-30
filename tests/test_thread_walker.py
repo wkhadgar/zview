@@ -134,6 +134,19 @@ def test_linked_list_multiple_threads():
     assert threads["worker"].stack_size == 768
 
 
+def test_a_build_without_stack_info_walks_threads_with_no_geometry():
+    """The struct words that would hold the geometry are something else there."""
+    from dataclasses import replace
+
+    t1 = 0x1000
+    scraper = FakeScraper({HEAD_ADDR: (t1,), t1: _make_thread(0x2000, 512, 0, "main")})
+    layout = replace(LAYOUT, stack_start=None, stack_size=None)
+
+    (thread,) = walk_thread_list(scraper, FakeElf(), HEAD_ADDR, layout, "little", True).values()
+
+    assert (thread.name, thread.stack_start, thread.stack_size) == ("main", None, None)
+
+
 def test_no_names_uses_address_fallback():
     t1 = 0x1000
     scraper = FakeScraper(

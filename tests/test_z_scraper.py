@@ -469,10 +469,12 @@ def test_cpu_share_cannot_exceed_the_total_it_divides(elf_path):
     assert burst.runtime.cpu == 100.0
 
 
-def _one_thread(scraper: ZScraper) -> ThreadInfo:
+def _one_thread(scraper: ZScraper, stack_start=0x1000, stack_size=512) -> ThreadInfo:
     """Poll and finalize one frame of a single thread."""
     scraper.thread_pool = [
-        ThreadInfo(address=0x2000, stack_start=0x1000, stack_size=512, name="t", runtime=None)
+        ThreadInfo(
+            address=0x2000, stack_start=stack_start, stack_size=stack_size, name="t", runtime=None
+        )
     ]
     delta = scraper._read_cpu_cycles_delta()
     polled, delta = scraper._poll_threads(delta)
@@ -501,6 +503,17 @@ def test_a_build_without_runtime_stats_reports_no_cpu_share(elf_path):
 
     assert (runtime.cpu, runtime.cpu_normalized) == (None, None)
     assert runtime.stack_watermark_percent == 25.0
+
+
+def test_a_thread_with_no_stack_geometry_is_not_scanned(elf_path):
+    """A filled stack still needs a start and a size to be read."""
+    scraper, _ = _meta_scraper(elf_path)
+    scraper.has_usage = False
+
+    runtime = _one_thread(scraper, stack_start=None, stack_size=None).runtime
+
+    scraper._m_scraper.calculate_dynamic_watermark.assert_not_called()
+    assert (runtime.stack_watermark, runtime.stack_watermark_percent) == (None, None)
 
 
 def _meta_scraper(elf_path) -> tuple[ZScraper, list[tuple[str, int, int]]]:

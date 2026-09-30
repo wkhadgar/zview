@@ -14,8 +14,10 @@ class KernelLayout:
     # Mandatory: thread walking
     threads_head: int  # z_kernel.threads
     thread_next: int  # k_thread.next_thread
-    stack_start: int  # _thread_stack_info.start (resolved through k_thread.stack_info)
-    stack_size: int  # _thread_stack_info.size (resolved through k_thread.stack_info)
+
+    # Optional: stack geometry (CONFIG_THREAD_STACK_INFO)
+    stack_start: int | None = None  # _thread_stack_info.start (through k_thread.stack_info)
+    stack_size: int | None = None  # _thread_stack_info.size (through k_thread.stack_info)
 
     # Optional: thread names (CONFIG_THREAD_NAME)
     thread_name: int | None = None
