@@ -21,6 +21,7 @@ def _scraper(**enabled: bool) -> ZScraper:
     s.has_workqs = enabled.get("workqs", False)
     s.has_heap_waiters = enabled.get("heap_waiters", s.has_heaps)
     s.has_stack_fill = enabled.get("stack_fill", True)
+    s.has_thread_list = enabled.get("thread_list", True)
     s.poll_kernel_objects = True
     return s
 
@@ -114,7 +115,7 @@ def test_the_view_gate_skips_the_reads():
 
 
 def test_absent_features_name_the_kconfig_they_need():
-    s = _scraper(stack_fill=False)
+    s = _scraper(stack_fill=False, thread_list=False)
     s.has_names = False
     s.has_usage = True
     s.has_heaps = False
@@ -123,6 +124,7 @@ def test_absent_features_name_the_kconfig_they_need():
     assert s.absent_features() == (
         "Warning: no thread names (CONFIG_THREAD_NAME=n)",
         "Warning: no heap stats (CONFIG_SYS_HEAP_RUNTIME_STATS=n)",
+        "Warning: static threads only (CONFIG_THREAD_MONITOR=n)",
         "Warning: no stack sizes (CONFIG_THREAD_STACK_INFO=n)",
         "Warning: no stack usage (CONFIG_INIT_STACKS=n)",
     )

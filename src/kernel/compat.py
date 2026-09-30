@@ -43,7 +43,7 @@ _VERSION_HEADER = Path("include") / "generated" / "zephyr" / "version.h"
 _VERSION_PATTERN = re.compile(r'#define\s+KERNEL_VERSION_STRING\s+"([^"]+)"')
 _VERSION_SEARCH_DEPTH = 4
 
-# Required for thread walking.
+# CONFIG_THREAD_MONITOR: the kernel's list of every thread.
 THREAD_FIELDS: FieldTable = {
     "threads_head": ((("z_kernel", "threads"),),),
     "thread_next": ((("k_thread", "next_thread"),),),

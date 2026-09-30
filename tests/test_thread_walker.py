@@ -4,7 +4,7 @@
 
 import pytest
 
-from kernel.threads import walk_thread_list
+from kernel.threads import walk_static_threads, walk_thread_list
 
 
 class FakeScraper:
@@ -206,3 +206,67 @@ def test_big_endian_name_decoding():
     threads = walk_thread_list(scraper, FakeElf(), HEAD_ADDR, LAYOUT, "big", has_names=True)
 
     assert "main" in threads
+
+
+# The same struct with base.thread_state in byte 1 of word 0.
+STATIC_LAYOUT = KernelLayout(thread_state=1, stack_start=4, stack_size=8, thread_name=16)
+_DUMMY, _DEAD = 1 << 0, 1 << 3
+
+
+def _static_thread(state: int, stack_start: int, stack_size: int, name: str = "") -> tuple:
+    return (state << 8, stack_start, stack_size, 0, *_name_to_words(name))
+
+
+def _walk_static(memory: dict, objects: dict[str, list[int]], has_names=False, max_threads=64):
+    return walk_static_threads(
+        FakeScraper(memory), FakeElf(), objects, STATIC_LAYOUT, "little", has_names, max_threads
+    )
+
+
+def test_static_threads_are_named_after_their_objects():
+    """K_THREAD_DEFINE's object carries the thread id, the name THREAD_NAME would give."""
+    threads = _walk_static(
+        {0x1000: _static_thread(0, 0x2000, 512), 0x1020: _static_thread(0, 0x3000, 256)},
+        {"_k_thread_obj_worker": [0x1000], "z_idle_threads[0]": [0x1020]},
+    )
+
+    assert {n: (t.address, t.stack_size) for n, t in threads.items()} == {
+        "worker": (0x1000, 512),
+        "z_idle_threads[0]": (0x1020, 256),
+    }
+
+
+def test_objects_that_are_not_live_threads_are_left_out():
+    """The monitor list never holds these, so a static walk must not show them."""
+    threads = _walk_static(
+        {
+            0x1000: _static_thread(0, 0x2000, 512),
+            0x1020: _static_thread(_DUMMY, 0x3000, 256),
+            0x1040: _static_thread(_DEAD, 0x4000, 256),
+            0x1060: (0,) * 8,
+        },
+        {"live": [0x1000], "_thread_dummy": [0x1020], "exited": [0x1040], "unstarted": [0x1060]},
+    )
+
+    assert list(threads) == ["live"]
+
+
+def test_a_built_in_name_wins_and_a_missing_one_falls_back_to_the_object():
+    threads = _walk_static(
+        {
+            0x1000: _static_thread(0, 0x2000, 512, "shell"),
+            0x1020: _static_thread(0, 0x3000, 256),
+            0x1040: _static_thread(0, 0x4000, 256, "shell"),
+        },
+        {"shell_ctx.thread": [0x1000], "_k_thread_obj_blinky": [0x1020], "other.thread": [0x1040]},
+        has_names=True,
+    )
+
+    assert list(threads) == ["shell", "blinky", "shell @ 0x1040"]
+
+
+def test_the_static_walk_stops_at_max_threads():
+    memory = {0x1000 + 0x20 * i: _static_thread(0, 0x2000, 64) for i in range(4)}
+    objects = {f"t{i}": [0x1000 + 0x20 * i] for i in range(4)}
+
+    assert list(_walk_static(memory, objects, max_threads=2)) == ["t0", "t1"]
