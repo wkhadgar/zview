@@ -252,8 +252,10 @@ def _do_dump(args) -> int:
         print(json.dumps(serialize_frame(frame)))
     else:
         for t in frame.get("threads", []):
-            wm = t.runtime.stack_watermark if t.runtime else "-"
-            print(f"thread {t.name:30s} stack={t.stack_size:>6}  watermark={wm}")
+            wm = getattr(t.runtime, "stack_watermark", None)
+            wm = "-" if wm is None else wm
+            size = "-" if t.stack_size is None else t.stack_size
+            print(f"thread {t.name:30s} stack={size:>6}  watermark={wm}")
         for h in frame.get("heaps", []):
             print(
                 f"heap {h.name:20s} free={h.free_bytes} "

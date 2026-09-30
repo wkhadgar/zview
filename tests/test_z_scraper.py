@@ -469,6 +469,53 @@ def test_cpu_share_cannot_exceed_the_total_it_divides(elf_path):
     assert burst.runtime.cpu == 100.0
 
 
+def _one_thread(scraper: ZScraper, stack_start=0x1000, stack_size=512) -> ThreadInfo:
+    """Poll and finalize one frame of a single thread."""
+    scraper.thread_pool = [
+        ThreadInfo(
+            address=0x2000, stack_start=stack_start, stack_size=stack_size, name="t", runtime=None
+        )
+    ]
+    delta = scraper._read_cpu_cycles_delta()
+    polled, delta = scraper._poll_threads(delta)
+    return scraper._finalize_threads(polled, delta)[0]
+
+
+def test_an_unfilled_build_skips_the_scan_and_reports_no_stack_usage(elf_path):
+    """Without the fill pattern the scan would find every stack full."""
+    scraper, _ = _meta_scraper(elf_path)
+    scraper.has_usage = False
+    scraper.has_stack_fill = False
+
+    runtime = _one_thread(scraper).runtime
+
+    scraper._m_scraper.calculate_dynamic_watermark.assert_not_called()
+    assert (runtime.stack_watermark, runtime.stack_watermark_percent) == (None, None)
+
+
+def test_a_build_without_runtime_stats_reports_no_cpu_share(elf_path):
+    """A 0% share would claim the thread idle, not unmeasured."""
+    scraper, _ = _meta_scraper(elf_path)
+    scraper.has_usage = False
+    scraper._m_scraper.calculate_dynamic_watermark.return_value = 128
+
+    runtime = _one_thread(scraper).runtime
+
+    assert (runtime.cpu, runtime.cpu_normalized) == (None, None)
+    assert runtime.stack_watermark_percent == 25.0
+
+
+def test_a_thread_with_no_stack_geometry_is_not_scanned(elf_path):
+    """A filled stack still needs a start and a size to be read."""
+    scraper, _ = _meta_scraper(elf_path)
+    scraper.has_usage = False
+
+    runtime = _one_thread(scraper, stack_start=None, stack_size=None).runtime
+
+    scraper._m_scraper.calculate_dynamic_watermark.assert_not_called()
+    assert (runtime.stack_watermark, runtime.stack_watermark_percent) == (None, None)
+
+
 def _meta_scraper(elf_path) -> tuple[ZScraper, list[tuple[str, int, int]]]:
     """``ZScraper`` over a recording scraper stand-in that logs every read it serves."""
     from dataclasses import replace as dc_replace

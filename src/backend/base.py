@@ -44,11 +44,13 @@ class ProbeReadMalformed(ProbeReadFailure):
 class ThreadRuntime:
     """Per-frame runtime state for a Zephyr thread."""
 
-    cpu: float
-    cpu_normalized: float
+    # None on a build without runtime stats.
+    cpu: float | None
+    cpu_normalized: float | None
     active: bool
-    stack_watermark: int
-    stack_watermark_percent: float
+    # None on a build that does not fill its stacks.
+    stack_watermark: int | None
+    stack_watermark_percent: float | None
 
 
 @dataclass(frozen=True)
@@ -56,8 +58,9 @@ class ThreadInfo:
     """Static identity and stack geometry of a Zephyr thread plus its latest runtime."""
 
     address: int
-    stack_start: int
-    stack_size: int
+    # None on a build without CONFIG_THREAD_STACK_INFO.
+    stack_start: int | None
+    stack_size: int | None
     name: str
     runtime: ThreadRuntime | None
     priority: int | None = None

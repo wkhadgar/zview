@@ -17,6 +17,16 @@ from frontend.tui.views.base import (
 from frontend.tui.widgets import TUIThreadInfo
 
 
+def _runtime_key(field: str):
+    """Sort key on a runtime field, with an unknown value at ``-1``."""
+    return lambda t: -1 if (value := getattr(t.runtime, field, None)) is None else value
+
+
+def _total(values: list) -> float | None:
+    """The threads' values summed, or None when the build does not measure them."""
+    return None if None in values else sum(values)
+
+
 class ThreadListView(BaseStateView):
     SCHEMA: dict[str, int] = {
         "Thread": 25,
@@ -35,10 +45,10 @@ class ThreadListView(BaseStateView):
         self._invert_sorting = False
         self._sort_keys = [
             lambda t: t.name,
-            lambda t: t.runtime.cpu if t.runtime else -1,
-            lambda t: t.runtime.cpu_normalized if t.runtime else -1,
-            lambda t: t.runtime.stack_watermark_percent if t.runtime else -1,
-            lambda t: t.runtime.stack_watermark if t.runtime else -1,
+            _runtime_key("cpu"),
+            _runtime_key("cpu_normalized"),
+            _runtime_key("stack_watermark_percent"),
+            _runtime_key("stack_watermark"),
         ]
 
         self.top_line: int = 0
@@ -104,27 +114,17 @@ class ThreadListView(BaseStateView):
 
         table_start = 4
 
-        stack_size_sum = sum(t.stack_size for t in self.controller.threads_data)
-        stack_watermark_sum = sum(
-            t.runtime.stack_watermark if t.runtime else 0 for t in self.controller.threads_data
-        )
-        is_any_thread_active = any(
-            t.runtime.active if t.runtime else False for t in self.controller.threads_data
-        )
-        aggregate_stack_usage_pct = (
-            (stack_watermark_sum / stack_size_sum * 100) if stack_size_sum > 0 else 0.0
-        )
-        aggregate_stack_usage_pct = (
-            (stack_watermark_sum / stack_size_sum * 100) if stack_size_sum > 0 else 0.0
-        )
-        aggregate_load = sum(
-            t.runtime.cpu for t in self.controller.threads_data if t.runtime and t.runtime.cpu > 0
-        )
-        aggregate_cpu = sum(
-            t.runtime.cpu_normalized
-            for t in self.controller.threads_data
-            if t.runtime and t.runtime.cpu_normalized > 0
-        )
+        runtimes = [t.runtime for t in self.controller.threads_data if t.runtime]
+        stack_size_sum = _total([t.stack_size for t in self.controller.threads_data])
+        stack_watermark_sum = _total([r.stack_watermark for r in runtimes])
+        is_any_thread_active = any(r.active for r in runtimes)
+        aggregate_stack_usage_pct = None
+        if stack_watermark_sum is not None:
+            aggregate_stack_usage_pct = (
+                (stack_watermark_sum / stack_size_sum * 100) if stack_size_sum > 0 else 0.0
+            )
+        aggregate_load = _total([r.cpu for r in runtimes])
+        aggregate_cpu = _total([r.cpu_normalized for r in runtimes])
 
         all_threads_info = ThreadInfo(
             address=0,

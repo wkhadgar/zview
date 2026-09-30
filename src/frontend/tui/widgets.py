@@ -19,6 +19,11 @@ def _fit_str(text: str, width: int, align: str = "^") -> str:
     return f"{text:{align}{width}}"[:width]
 
 
+def _or_dash(value: float | None, template: str) -> str:
+    """``value`` formatted into ``template``, or ``-`` when it is unknown."""
+    return "-" if value is None else template.format(value)
+
+
 def _addstr_clipped(
     stdscr: curses.window,
     y: int,
@@ -426,11 +431,11 @@ class TUIThreadInfo:
         _, screen_w = stdscr.getmaxyx()
 
         runtime = thread_info.runtime or ThreadRuntime(
-            cpu=-1.0,
-            cpu_normalized=-1.0,
+            cpu=None,
+            cpu_normalized=None,
             active=False,
-            stack_watermark=0,
-            stack_watermark_percent=0.0,
+            stack_watermark=None,
+            stack_watermark_percent=None,
         )
 
         # Thread name
@@ -450,28 +455,29 @@ class TUIThreadInfo:
         col_pos += self._thread_name_width + 1
 
         # Thread CPUs
-        if runtime.cpu >= 0:
-            cpu_display = _fit_str(f"{runtime.cpu_normalized:.2f}%", self._cpu_usage_width)
-        else:
-            cpu_display = _fit_str("-", self._cpu_usage_width)
+        cpu_display = _fit_str(_or_dash(runtime.cpu_normalized, "{:.2f}%"), self._cpu_usage_width)
         _addstr_clipped(stdscr, y, col_pos, cpu_display, screen_w)
         col_pos += self._cpu_usage_width + 1
 
         # Thread Loads
-        if runtime.cpu >= 0:
-            load_display = _fit_str(f"{runtime.cpu:.1f}%", self._load_usage_width)
-        else:
-            load_display = _fit_str("-", self._load_usage_width)
+        load_display = _fit_str(_or_dash(runtime.cpu, "{:.1f}%"), self._load_usage_width)
         _addstr_clipped(stdscr, y, col_pos, load_display, screen_w)
         col_pos += self._load_usage_width + 1
 
         # Thread Watermark Progress Bar
-        self.watermark_bar.draw(stdscr, y, col_pos, runtime.stack_watermark_percent)
+        self.watermark_bar.draw(
+            stdscr,
+            y,
+            col_pos,
+            runtime.stack_watermark_percent or 0.0,
+            label=_or_dash(runtime.stack_watermark_percent, "{:.1f}%"),
+        )
         col_pos += self.watermark_bar.width + 1
 
         # Thread Watermark Bytes
         watermark_bytes_display = _fit_str(
-            f"{runtime.stack_watermark} / {thread_info.stack_size}", self._stack_bytes_width
+            f"{_or_dash(runtime.stack_watermark, '{}')} / {_or_dash(thread_info.stack_size, '{}')}",
+            self._stack_bytes_width,
         )
         _addstr_clipped(stdscr, y, col_pos, watermark_bytes_display, screen_w)
 

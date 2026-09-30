@@ -315,3 +315,76 @@ def test_thread_detail_history_never_exceeds_the_graph_columns(controller, theme
     # once, not one sample per frame.
     view.render(_StubWin(width=60), 24, 60)
     assert len(view._usages["cpu"]) <= (60 // 2) - 2
+
+
+class _TextWin(_StubWin):
+    """``_StubWin`` that keeps every string drawn."""
+
+    def __init__(self, height: int = 24, width: int = 209):
+        super().__init__(height, width)
+        self.drawn: list[str] = []
+
+    def addstr(self, y, x, text, attr=0):
+        super().addstr(y, x, text, attr)
+        self.drawn.append(text)
+
+
+def _unmeasured_thread() -> ThreadInfo:
+    """A thread on a build without runtime stats or stack fill."""
+    from backend.base import ThreadRuntime
+
+    runtime = ThreadRuntime(
+        cpu=None,
+        cpu_normalized=None,
+        active=False,
+        stack_watermark=None,
+        stack_watermark_percent=None,
+    )
+    return ThreadInfo(
+        address=0x1000, stack_start=0x2000, stack_size=512, name="worker", runtime=runtime
+    )
+
+
+def test_an_unmeasured_thread_row_draws_dashes(controller, theme):
+    """The row and the all-threads sum show no number the build did not measure."""
+    controller.threads_data = [_unmeasured_thread(), _make_thread("idle")]
+    controller.min_dimensions = (14, 85)
+    win = _TextWin()
+
+    ThreadListView(controller, theme).render(win, 24, 209)
+
+    assert not [text for text in win.drawn if "None" in text]
+    assert sum("- / 512" in text for text in win.drawn) == 1
+
+
+def test_a_build_without_stack_info_draws_no_stack_size(controller, theme):
+    from dataclasses import replace
+
+    unsized = replace(_unmeasured_thread(), stack_start=None, stack_size=None)
+    controller.threads_data = [unsized]
+    controller.min_dimensions = (14, 85)
+    win = _TextWin()
+
+    ThreadListView(controller, theme).render(win, 24, 209)
+
+    assert not [text for text in win.drawn if "None" in text]
+    assert sum("- / -" in text for text in win.drawn) == 2
+
+
+def test_unmeasured_values_sort_with_the_unpolled_threads(controller, theme):
+    view = ThreadListView(controller, theme)
+
+    for key in view._sort_keys[1:]:
+        assert key(_unmeasured_thread()) == key(_make_thread("idle")) == -1
+
+
+def test_the_detail_view_keeps_no_history_without_runtime_stats(controller, theme):
+    """Plotting a 0 would draw the thread idle."""
+    controller.threads_data = [_unmeasured_thread()]
+    controller.detailing_thread = "worker"
+    controller.min_dimensions = (14, 85)
+    view = ThreadDetailView(controller, theme)
+
+    view.render(_StubWin(width=120), 24, 120)
+
+    assert view._usages == {"cpu": [], "load": []}

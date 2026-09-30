@@ -22,7 +22,7 @@ from kernel.mem_slabs import walk_mem_slabs
 from kernel.msgqs import walk_msgqs
 from kernel.mutexes import walk_mutexes
 from kernel.semaphores import walk_semaphores
-from kernel.threads import walk_thread_list
+from kernel.threads import walk_static_threads, walk_thread_list
 from kernel.workqs import walk_workqs
 
 logger = logging.getLogger("zview.scraper")
@@ -58,6 +58,8 @@ class ZScraper:
         self.has_heaps: bool = True
         self.has_usage: bool = True
         self.has_names: bool = True
+        self.has_thread_list: bool = True
+        self.has_stack_info: bool = True
         self.has_semaphores: bool = True
         self.has_mutexes: bool = True
         self.has_msgqs: bool = True
@@ -80,6 +82,10 @@ class ZScraper:
         # queue layout.
         self.zephyr_version: str | None = compat.detect_zephyr_version(elf_path)
         self.waitq_flavor: compat.WaitQFlavor = compat.waitq_flavor(self._elf_inspector)
+        # Without the fill pattern there is nothing for the watermark scan to find.
+        self.has_stack_fill: bool = compat.has_kconfig(
+            self._elf_inspector, compat.CONFIG_INIT_STACKS
+        )
 
         self._MAX_THREADS: int = max_threads
 
@@ -103,16 +109,11 @@ class ZScraper:
         """Resolve DWARF-derived offsets. Sets ``has_*`` flags for missing features."""
         elf = self._elf_inspector
 
-        thread_fields = compat.resolve_fields(elf, compat.THREAD_FIELDS)
-        if thread_fields is None:
-            raise LookupError(
-                "Kernel thread layout not found in the ELF. ZView needs a build with "
-                "CONFIG_THREAD_MONITOR=y and CONFIG_THREAD_STACK_INFO=y."
-            )
-
-        fields: dict = dict(thread_fields)
+        fields: dict = {}
 
         for group, flag in (
+            (compat.THREAD_FIELDS, "has_thread_list"),
+            (compat.THREAD_STACK_FIELDS, "has_stack_info"),
             (compat.THREAD_NAME_FIELDS, "has_names"),
             (compat.USAGE_FIELDS, "has_usage"),
             (compat.HEAP_FIELDS, "has_heaps"),
@@ -141,7 +142,8 @@ class ZScraper:
     def _resolve_addresses(self) -> None:
         elf = self._elf_inspector
         self._kernel_base_address = elf.get_symbol_info("_kernel", "address")[0]
-        self._threads_address = self._kernel_base_address + self._layout.threads_head
+        if self.has_thread_list:
+            self._threads_address = self._kernel_base_address + self._layout.threads_head
         self.idle_threads_address = elf.get_symbol_info("z_idle_threads", "address")[0]
         if self.has_usage:
             self._cpu_usage_address = self._kernel_base_address + self._layout.cpu_usage
@@ -212,6 +214,8 @@ class ZScraper:
         self.has_workqs = self.has_workqs and "workqs" in features
         self.has_heap_waiters = self.has_heap_waiters and "heap_waiters" in features
         self.merged_thread_meta = "merged_thread_meta" in features
+        # A recording from before the scan was skipped scanned every stack.
+        self.has_stack_fill = self.has_stack_fill or "unfilled_stacks" not in features
 
     def active_features(self) -> tuple[str, ...]:
         """The features this session polls, as recorded in a recording header."""
@@ -224,6 +228,7 @@ class ZScraper:
             (self.has_mem_slabs, "mem_slabs"),
             (self.has_heaps and self.has_heap_waiters, "heap_waiters"),
             (self.has_workqs, "workqs"),
+            (not self.has_stack_fill, "unfilled_stacks"),
         ):
             if enabled:
                 features.append(name)
@@ -238,6 +243,12 @@ class ZScraper:
                 (self.has_names, "Warning: no thread names (CONFIG_THREAD_NAME=n)"),
                 (self.has_usage, "Warning: no cpu stats (CONFIG_THREAD_RUNTIME_STATS=n)"),
                 (self.has_heaps, "Warning: no heap stats (CONFIG_SYS_HEAP_RUNTIME_STATS=n)"),
+                (
+                    self.has_thread_list,
+                    "Warning: static threads only (CONFIG_THREAD_MONITOR=n)",
+                ),
+                (self.has_stack_info, "Warning: no stack sizes (CONFIG_THREAD_STACK_INFO=n)"),
+                (self.has_stack_fill, "Warning: no stack usage (CONFIG_INIT_STACKS=n)"),
             )
             if not enabled
         )
@@ -333,15 +344,27 @@ class ZScraper:
         ]
 
     def update_available_threads(self):
-        threads = walk_thread_list(
-            self._m_scraper,
-            self._elf_inspector,
-            self._threads_address,
-            self._layout,
-            self._endianess,
-            self.has_names,
-            self._MAX_THREADS,
-        )
+        if self.has_thread_list:
+            threads = walk_thread_list(
+                self._m_scraper,
+                self._elf_inspector,
+                self._threads_address,
+                self._layout,
+                self._endianess,
+                self.has_names,
+                self._MAX_THREADS,
+            )
+        else:
+            # Without the kernel's list, the threads are the ones allocated statically.
+            threads = walk_static_threads(
+                self._m_scraper,
+                self._elf_inspector,
+                self._elf_inspector.find_nested_instances("k_thread"),
+                self._layout,
+                self._endianess,
+                self.has_names,
+                self._MAX_THREADS,
+            )
         self._all_threads_info.clear()
         self._all_threads_info.update(threads)
 
@@ -516,18 +539,22 @@ class ZScraper:
                 usage_delta = 0
                 is_active = False
 
-            try:
-                watermark = self._m_scraper.calculate_dynamic_watermark(
-                    thread.stack_start,
-                    thread.stack_size,
-                    thread_id=thread.address,
-                )
-            except Exception as e:
-                raise RuntimeError(f"Error polling stack watermark for {thread.name}: {e}") from e
+            watermark = stack_usage_pct = None
+            if self.has_stack_fill and thread.stack_size is not None:
+                try:
+                    watermark = self._m_scraper.calculate_dynamic_watermark(
+                        thread.stack_start,
+                        thread.stack_size,
+                        thread_id=thread.address,
+                    )
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Error polling stack watermark for {thread.name}: {e}"
+                    ) from e
 
-            stack_usage_pct = (
-                (watermark / thread.stack_size * 100) if thread.stack_size > 0 else 0.0
-            )
+                stack_usage_pct = (
+                    (watermark / thread.stack_size * 100) if thread.stack_size > 0 else 0.0
+                )
 
             meta = self._read_thread_meta(thread)
 
@@ -663,8 +690,8 @@ class ZScraper:
                 load_pct = 0.0
 
             runtime = ThreadRuntime(
-                cpu=load_pct,
-                cpu_normalized=absolute_cpu,
+                cpu=load_pct if self.has_usage else None,
+                cpu_normalized=absolute_cpu if self.has_usage else None,
                 active=data["is_active"],
                 stack_watermark=data["watermark"],
                 stack_watermark_percent=data["stack_usage_pct"],

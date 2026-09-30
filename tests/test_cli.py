@@ -84,6 +84,31 @@ def test_dump_replay_human_readable(monkeypatch, capsys):
     assert "stack=" in out and "watermark=" in out
 
 
+def test_dump_prints_an_unmeasured_watermark_as_a_dash(monkeypatch, capsys):
+    from backend.base import ThreadInfo, ThreadRuntime
+
+    unmeasured = ThreadRuntime(
+        cpu=None,
+        cpu_normalized=None,
+        active=False,
+        stack_watermark=None,
+        stack_watermark_percent=None,
+    )
+    frame = {
+        "threads": [
+            ThreadInfo(0x1000, 0x2000, 512, "worker", unmeasured),
+            ThreadInfo(0x1100, None, None, "unsized", unmeasured),
+        ]
+    }
+    monkeypatch.setattr(zview_cli, "dump_single_frame", lambda *a, **kw: frame)
+
+    rc, out, _ = _invoke(monkeypatch, capsys, ["dump", "-e", str(_ELF), "-i", str(_FIXTURE)])
+
+    assert rc == 0
+    assert "worker                         stack=   512  watermark=-" in out
+    assert "unsized                        stack=     -  watermark=-" in out
+
+
 def test_dump_prints_every_group_it_polled(monkeypatch, capsys):
     """The text dump covers what the JSON one carries, groups added later included."""
     from backend.base import HeapInfo, MemSlabInfo, MsgqInfo, WorkqInfo

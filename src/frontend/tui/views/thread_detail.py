@@ -131,8 +131,10 @@ class ThreadDetailView(BaseStateView):
         info_top = 3
         self._draw_info_boxes(stdscr, info_top, width, thread)
 
-        self._usages["cpu"].append(int(thread.runtime.cpu_normalized))
-        self._usages["load"].append(int(thread.runtime.cpu))
+        # Both shares are unknown together, on a build without runtime stats.
+        if thread.runtime.cpu is not None:
+            self._usages["cpu"].append(int(thread.runtime.cpu_normalized))
+            self._usages["load"].append(int(thread.runtime.cpu))
 
         graph_top = info_top + self._INFO_BOX_HEIGHT
         graph_height = max(

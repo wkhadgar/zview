@@ -232,3 +232,65 @@ def test_a_version_5_line_table_resolves_a_function(extern_sites):
     path, line = extern_sites.function_site(extern_sites.get_symbol_info("main", "address")[0])
 
     assert (path, line) == ("/src/a.c", 6)
+
+
+def test_every_thread_object_is_found_with_its_path(parser):
+    """The array element is one ``find_struct_instances`` cannot see."""
+    assert parser.find_nested_instances("k_thread") == {
+        "_k_thread_obj_stress_id": [0x200000B8],
+        "z_main_thread": [0x20000238],
+        "z_idle_threads[0]": [0x20000178],
+        "_thread_dummy": [0x20000338],
+    }
+
+
+def _graph(types: dict[int, tuple]):
+    from backend.elf_inspector import _TypeGraph
+
+    graph = _TypeGraph()
+    graph.types = types
+    return graph
+
+
+# A 128-byte thread, a work queue holding one at offset 16, and a typedef of it.
+_THREAD, _QUEUE, _QUEUE_T = 1, 2, 3
+_TYPES = {
+    _THREAD: ("struct", "k_thread", 128, ()),
+    _QUEUE: ("struct", "k_work_q", 160, (("queue", 0, 99), ("thread", 16, _THREAD))),
+    _QUEUE_T: ("alias", _QUEUE),
+}
+
+
+def test_a_member_thread_sits_at_its_member_offset():
+    assert _graph(_TYPES).placements(_QUEUE, "k_thread") == ((".thread", 16),)
+
+
+def test_an_array_steps_by_its_element_size_through_a_typedef():
+    graph = _graph({**_TYPES, 4: ("array", _QUEUE_T, (2,))})
+
+    assert graph.placements(4, "k_thread") == (("[0].thread", 16), ("[1].thread", 176))
+
+
+def test_a_two_dimensional_array_is_laid_out_row_by_row():
+    graph = _graph({**_TYPES, 4: ("array", _THREAD, (2, 2))})
+
+    assert graph.placements(4, "k_thread") == (
+        ("[0][0]", 0),
+        ("[0][1]", 128),
+        ("[1][0]", 256),
+        ("[1][1]", 384),
+    )
+
+
+def test_a_zero_length_array_and_an_unrecorded_type_hold_nothing():
+    """A pointer is never recorded, so a thread behind one is not held."""
+    graph = _graph({**_TYPES, 4: ("array", _THREAD, (0,))})
+
+    assert graph.placements(4, "k_thread") == ()
+    assert graph.placements(99, "k_thread") == ()
+
+
+def test_a_type_that_loops_back_to_itself_ends_the_walk():
+    graph = _graph({**_TYPES, 4: ("struct", "loop", 8, (("self", 0, 4),))})
+
+    assert graph.placements(4, "k_thread") == ()

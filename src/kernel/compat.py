@@ -35,6 +35,7 @@ FieldTable = dict[str, tuple[MemberPath, ...]]
 
 CONFIG_WAITQ_SIMPLE = "CONFIG_WAITQ_SIMPLE"
 CONFIG_WAITQ_SCALABLE = "CONFIG_WAITQ_SCALABLE"
+CONFIG_INIT_STACKS = "CONFIG_INIT_STACKS"
 
 WaitQFlavor = Literal["simple", "scalable", "unknown"]
 
@@ -42,10 +43,14 @@ _VERSION_HEADER = Path("include") / "generated" / "zephyr" / "version.h"
 _VERSION_PATTERN = re.compile(r'#define\s+KERNEL_VERSION_STRING\s+"([^"]+)"')
 _VERSION_SEARCH_DEPTH = 4
 
-# Required for thread walking.
+# CONFIG_THREAD_MONITOR: the kernel's list of every thread.
 THREAD_FIELDS: FieldTable = {
     "threads_head": ((("z_kernel", "threads"),),),
     "thread_next": ((("k_thread", "next_thread"),),),
+}
+
+# CONFIG_THREAD_STACK_INFO.
+THREAD_STACK_FIELDS: FieldTable = {
     "stack_start": ((("k_thread", "stack_info"), ("_thread_stack_info", "start")),),
     "stack_size": ((("k_thread", "stack_info"), ("_thread_stack_info", "size")),),
 }

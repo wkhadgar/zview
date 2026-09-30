@@ -1,3 +1,0 @@
-name: zview-minimal
-append:
-  EXTRA_CONF_FILE: zview-minimal.conf
