@@ -22,11 +22,7 @@ from frontend.tui.widgets import (
     TUIKernelObjectInfo,
 )
 
-# Filter step covering every type that hands out memory.
-ALLOCATORS = "ALLOC"
-
 __all__ = [
-    "ALLOCATORS",
     "HEAP",
     "MEM_SLAB",
     "MSGQ",
@@ -55,24 +51,20 @@ class KernelObjectListView(BaseStateView):
     COLUMNS: list[str] = list(SCHEMA.keys())
     _BAR_COLUMN = 2
 
-    _FILTERS = ("ALL", SEMAPHORE, MUTEX, MSGQ, ALLOCATORS, HEAP, MEM_SLAB, WORKQ)
+    _FILTERS = ("ALL", SEMAPHORE, MUTEX, MSGQ, HEAP, MEM_SLAB, WORKQ)
     # The aggregate row sums the filtered rows, so it is labelled by the filter.
     _AGGREGATE_LABELS = {
         "ALL": "All Objects",
         SEMAPHORE: "All Semaphores",
         MUTEX: "All Mutexes",
         MSGQ: "All Queues",
-        ALLOCATORS: "All Allocators",
         HEAP: "All Heaps",
         MEM_SLAB: "All Slabs",
         WORKQ: "All Work Queues",
     }
-    # Types a filter step covers, for the steps that cover more than their own.
-    _FILTER_KINDS = {ALLOCATORS: (HEAP, MEM_SLAB)}
     # An allocator out of room is exhausted, and a work queue turning work away
     # is refusing, not contended.
     _PRESSURE_WORDS = {
-        ALLOCATORS: "exhausted",
         HEAP: "exhausted",
         MEM_SLAB: "exhausted",
         WORKQ: "refusing",
@@ -111,11 +103,7 @@ class KernelObjectListView(BaseStateView):
         return self._FILTERS[self._filter_idx]
 
     def _shows(self, kind: str) -> bool:
-        name = self.filter_name
-        if name == "ALL":
-            return True
-
-        return kind in self._FILTER_KINDS.get(name, (name,))
+        return self.filter_name in ("ALL", kind)
 
     def _rows(self) -> list[tuple[str, Any]]:
         """Typed, filtered and sorted rows backing the table."""
@@ -273,9 +261,7 @@ class KernelObjectListView(BaseStateView):
     def keybindings(self) -> list[Keybind]:
         return [
             Keybind("<Enter>", "Detail", "Open detail view for the selected object"),
-            Keybind(
-                "f", "Filter", "Cycle the type filter (ALL, SEM, MTX, MSG, ALLOC, HEP, SLB, WKQ)"
-            ),
+            Keybind("f", "Filter", "Cycle the type filter (ALL, SEM, MTX, MSG, HEP, SLB, WKQ)"),
             Keybind("k", "Threads", "Switch back to the threads view"),
             Keybind("s", "Sort", "Cycle through sort keys"),
             Keybind("i", "Invert", "Reverse the current sort order"),

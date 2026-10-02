@@ -20,7 +20,6 @@ from backend.base import (
 )
 from frontend.tui.views.base import SpecialCode, ZViewState, ZViewTUIAttributes
 from frontend.tui.views.kernel_object_list import (
-    ALLOCATORS,
     HEAP,
     MEM_SLAB,
     MSGQ,
@@ -137,10 +136,6 @@ def test_filter_cycles_through_types(controller, theme):
     view.handle_input(SpecialCode.FILTER)
     assert view.filter_name == MSGQ
     assert {kind for kind, _ in view._rows()} == {MSGQ}
-
-    view.handle_input(SpecialCode.FILTER)
-    assert view.filter_name == ALLOCATORS
-    assert {kind for kind, _ in view._rows()} == {MEM_SLAB}
 
     view.handle_input(SpecialCode.FILTER)
     assert view.filter_name == HEAP
@@ -1204,8 +1199,7 @@ def test_an_exhausted_slab_reads_as_contention(controller, distinct_theme):
 
 def test_enter_on_a_slab_opens_its_detail_view(controller, theme):
     view = KernelObjectListView(controller, theme)
-    for _ in range(4):
-        view.handle_input(SpecialCode.FILTER)  # SEM, MTX, MSG, SLB
+    _filter_to(view, MEM_SLAB)
     view.cursor = 0
 
     target = view._rows()[0][1]
@@ -1272,20 +1266,10 @@ def _heap(
     )
 
 
-def test_the_allocator_filter_shows_heaps_and_slabs(controller, theme):
-    controller.heaps_data = [_heap()]
-    view = KernelObjectListView(controller, theme)
-
-    _filter_to(view, ALLOCATORS)
-
-    assert {kind for kind, _ in view._rows()} == {HEAP, MEM_SLAB}
-    assert view._AGGREGATE_LABELS[ALLOCATORS] == "All Allocators"
-
-
 def test_an_allocator_filter_counts_exhaustion_not_contention(controller, theme):
     controller.heaps_data = [_heap(free=0)]
     view = KernelObjectListView(controller, theme)
-    _filter_to(view, ALLOCATORS)
+    _filter_to(view, HEAP)
 
     summary = view._summary(view._rows())
 

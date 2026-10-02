@@ -155,7 +155,7 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
 * **ENTER**: Get details for the selected thread or kernel object (hit ENTER again to return).
 * **S / I**: Sort the data and invert the sorting order.
 * **k**: Access the **Kernel Objects** view listing semaphores, mutexes, message queues, memory slabs, heaps and work queues (hit k again to return).
-* **f**: In the kernel objects view, cycle the type filter (ALL, SEM, MTX, MSG, ALLOC, HEP, SLB, WKQ).
+* **f**: In the kernel objects view, cycle the type filter (ALL, SEM, MTX, MSG, HEP, SLB, WKQ).
 * **r**: Soft refresh, re-walks the kernel thread list and clears runtime baselines.
 * **R**: Full reconnect, tears down the polling thread, disconnects the probe, reconnects, and resumes.
 
