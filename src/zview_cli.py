@@ -263,7 +263,17 @@ def _do_dump(args) -> int:
                 f"waiters={_waiters(h.waiters)}"
             )
         for s in frame.get("semaphores", []):
-            print(f"sem  {s.name:20s} {s.count}/{s.limit}  waiters={_waiters(s.waiters)}")
+            # First match wins.
+            level = next(
+                text
+                for applies, text in (
+                    (not s.is_initialized, "not initialized"),
+                    (s.is_unbounded, f"{s.count}/-"),
+                    (True, f"{s.count}/{s.limit}"),
+                )
+                if applies
+            )
+            print(f"sem  {s.name:20s} {level}  waiters={_waiters(s.waiters)}")
         for m in frame.get("mutexes", []):
             state = f"owner={m.owner_name or hex(m.owner_address)} depth={m.lock_count}"
             print(

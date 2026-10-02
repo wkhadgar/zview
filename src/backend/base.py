@@ -97,12 +97,31 @@ class HeapInfo:
 class SemaphoreInfo:
     """Snapshot of a Zephyr ``k_sem``."""
 
+    # K_SEM_MAX_LIMIT, the limit of a semaphore that counts without one.
+    _MAX_LIMIT: ClassVar[int] = 0xFFFF_FFFF
+
     name: str
     address: int
     count: int
     limit: int
     # ``None``: the wait queue layout is not walkable. ``()``: nobody waiting.
     waiters: tuple[str, ...] | None = None
+
+    @property
+    def is_initialized(self) -> bool:
+        """``k_sem_init`` refuses a zero limit, so a zero one has not run yet."""
+        return self.limit != 0
+
+    @property
+    def is_unbounded(self) -> bool:
+        return self.limit == self._MAX_LIMIT
+
+    @property
+    def fill_percent(self) -> float:
+        """The count as a share of the limit, 0 where there is no limit to share."""
+        if not self.is_initialized or self.is_unbounded:
+            return 0.0
+        return self.count / self.limit * 100.0
 
 
 @dataclass(frozen=True)

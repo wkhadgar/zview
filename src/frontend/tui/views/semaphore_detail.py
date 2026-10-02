@@ -45,7 +45,7 @@ class SemaphoreDetailView(KernelObjectDetailView):
             stdscr,
             self._INFO_ROW,
             width,
-            [self._site(sem.address), str(sem.limit)],
+            [self._site(sem.address), self._limit_text(sem)],
         )
 
         panels = self._panels(height, width, self._GRAPH_ROW)
@@ -55,22 +55,36 @@ class SemaphoreDetailView(KernelObjectDetailView):
         self._render_status(stdscr, width, height - 2)
         stdscr.refresh()
 
+    @staticmethod
+    def _limit_text(sem: SemaphoreInfo) -> str:
+        # First match wins.
+        return next(
+            text
+            for applies, text in (
+                (not sem.is_initialized, "not initialized"),
+                (sem.is_unbounded, "none"),
+                (True, str(sem.limit)),
+            )
+            if applies
+        )
+
     def _draw_count_graph(
         self, stdscr: curses.window, width: int, sem: SemaphoreInfo, graph_height: int
     ) -> None:
         # Yellow while threads are queued on it, plain otherwise.
         attr = self._busy_attr if sem.waiters else 0
 
-        # Built per frame: the y scale is the semaphore's own limit.
-        graph = TUIGraph(
-            "Count",
-            f"0 to {sem.limit} available",
-            (0, sem.limit or 1),
-            attr,
-        )
         # One column per sample: extra points are averaged into moving buckets.
         columns = max(1, width - 2)
         history = list(self.controller.sem_history.get(sem.address, ()))[-columns:]
+
+        # Built per frame: the y scale is the semaphore's own limit, or the
+        # highest count drawn when it has none.
+        if sem.is_unbounded:
+            top, subtitle = max(history, default=0) or 1, "no limit"
+        else:
+            top, subtitle = sem.limit or 1, f"0 to {sem.limit} available"
+        graph = TUIGraph("Count", subtitle, (0, top), attr)
 
         graph.draw(
             stdscr,
