@@ -84,6 +84,28 @@ def test_dump_replay_human_readable(monkeypatch, capsys):
     assert "stack=" in out and "watermark=" in out
 
 
+def test_dump_prints_a_semaphore_without_a_limit_or_an_init(monkeypatch, capsys):
+    from backend.base import SemaphoreInfo
+
+    frame = {
+        "semaphores": [
+            SemaphoreInfo(
+                name="unbounded", address=0x1000, count=14, limit=0xFFFF_FFFF, waiters=()
+            ),
+            SemaphoreInfo(name="late", address=0x1010, count=0, limit=0, waiters=()),
+            SemaphoreInfo(name="bounded", address=0x1020, count=2, limit=4, waiters=()),
+        ]
+    }
+    monkeypatch.setattr(zview_cli, "dump_single_frame", lambda *a, **kw: frame)
+
+    rc, out, _ = _invoke(monkeypatch, capsys, ["dump", "-e", str(_ELF), "-i", str(_FIXTURE)])
+
+    assert rc == 0
+    assert "sem  unbounded            14/-  waiters=-" in out
+    assert "sem  late                 not initialized  waiters=-" in out
+    assert "sem  bounded              2/4  waiters=-" in out
+
+
 def test_dump_prints_an_unmeasured_watermark_as_a_dash(monkeypatch, capsys):
     from backend.base import ThreadInfo, ThreadRuntime
 

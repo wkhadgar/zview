@@ -191,13 +191,20 @@ def test_semaphore_row_bar_tracks_the_count(controller, theme):
     assert view._info.row_values(SEMAPHORE, empty)[0] == 0.0
 
 
-def test_semaphore_row_survives_a_zero_limit(controller, theme):
-    """A zero limit must not divide by zero."""
+def test_a_semaphore_before_its_init_reads_as_not_initialized(controller, theme):
+    """``k_sem_init`` refuses a zero limit, so a zero one is a struct still unset."""
     view = KernelObjectListView(controller, theme)
     sem = SemaphoreInfo(name="s", address=0x1, count=0, limit=0, waiters=())
 
-    assert view._info.row_values(SEMAPHORE, sem)[0] == 0.0
-    assert view._info.row_values(SEMAPHORE, sem)[1] == "0/0"
+    assert view._info.row_values(SEMAPHORE, sem)[:2] == (0.0, "NOT INITIALIZED")
+
+
+def test_a_semaphore_without_a_limit_shows_its_count_on_an_empty_bar(controller, theme):
+    """K_SEM_MAX_LIMIT is UINT_MAX, so a share of it is always about zero."""
+    view = KernelObjectListView(controller, theme)
+    sem = SemaphoreInfo(name="s", address=0x1, count=14, limit=0xFFFF_FFFF, waiters=())
+
+    assert view._info.row_values(SEMAPHORE, sem)[:2] == (0.0, "14 / no limit")
 
 
 def test_unknown_waiters_render_as_a_question_mark(controller, theme):
@@ -856,6 +863,47 @@ def test_count_graph_plots_one_column_per_sample(controller, theme):
     assert len(plotted[0]) == width - 2
     # The tail of the history, in order, not a resampling of all of it.
     assert plotted[0] == list(range(500))[-(width - 2) :]
+
+
+def _scaled_count_graph(controller, theme, sem: SemaphoreInfo, history: list[int]):
+    """``(subtitle, y scale)`` of the count graph, and the info boxes drawn beside it."""
+    controller.detailing_semaphore_address = sem.address
+    controller.semaphores_data = [sem]
+    controller.sem_history = {sem.address: history}
+    view = SemaphoreDetailView(controller, theme)
+
+    from frontend.tui.widgets import TUIGraph
+
+    built: list[tuple] = []
+
+    def recording_graph(title, subtitle, limits, attr):
+        built.append((subtitle, limits))
+        return TUIGraph(title, subtitle, limits, attr)
+
+    with patch("frontend.tui.views.semaphore_detail.TUIGraph", recording_graph):
+        win = _render(view)
+
+    return built[0], [text for _, _, text in win.writes]
+
+
+def test_a_count_graph_without_a_limit_scales_to_the_highest_count(controller, theme):
+    """Scaled to UINT_MAX, every count would sit on the bottom row."""
+    sem = SemaphoreInfo(name="s", address=0x2000, count=9, limit=0xFFFF_FFFF, waiters=())
+
+    graph, drawn = _scaled_count_graph(controller, theme, sem, [3, 14, 9])
+
+    assert graph == ("no limit", (0, 14))
+    assert any(text.strip() == "none" for text in drawn)
+    assert not any("4294967295" in text for text in drawn)
+
+
+def test_a_count_graph_before_the_init_names_it_and_draws_no_limit(controller, theme):
+    sem = SemaphoreInfo(name="s", address=0x2000, count=0, limit=0, waiters=())
+
+    graph, drawn = _scaled_count_graph(controller, theme, sem, [0, 0])
+
+    assert graph[1] == (0, 1)
+    assert any(text.strip() == "not initialized" for text in drawn)
 
 
 def test_history_legend_marks_match_the_strip_colors(controller, distinct_theme):
