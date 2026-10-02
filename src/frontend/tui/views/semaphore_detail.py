@@ -62,7 +62,7 @@ class SemaphoreDetailView(KernelObjectDetailView):
             text
             for applies, text in (
                 (not sem.is_initialized, "not initialized"),
-                (sem.is_unbounded, "none"),
+                (sem.is_unbounded, "unlimited"),
                 (True, str(sem.limit)),
             )
             if applies
@@ -81,7 +81,7 @@ class SemaphoreDetailView(KernelObjectDetailView):
         # Built per frame: the y scale is the semaphore's own limit, or the
         # highest count drawn when it has none.
         if sem.is_unbounded:
-            top, subtitle = max(history, default=0) or 1, "no limit"
+            top, subtitle = max(history, default=0) or 1, "unlimited"
         else:
             top, subtitle = sem.limit or 1, f"0 to {sem.limit} available"
         graph = TUIGraph("Count", subtitle, (0, top), attr)

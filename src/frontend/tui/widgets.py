@@ -626,7 +626,7 @@ class TUIKernelObjectInfo:
                 text
                 for applies, text in (
                     (not obj.is_initialized, "NOT INITIALIZED"),
-                    (obj.is_unbounded, f"{obj.count} / no limit"),
+                    (obj.is_unbounded, f"{obj.count} / unlimited"),
                     (True, f"{obj.count}/{obj.limit}"),
                 )
                 if applies

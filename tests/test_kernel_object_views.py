@@ -204,7 +204,7 @@ def test_a_semaphore_without_a_limit_shows_its_count_on_an_empty_bar(controller,
     view = KernelObjectListView(controller, theme)
     sem = SemaphoreInfo(name="s", address=0x1, count=14, limit=0xFFFF_FFFF, waiters=())
 
-    assert view._info.row_values(SEMAPHORE, sem)[:2] == (0.0, "14 / no limit")
+    assert view._info.row_values(SEMAPHORE, sem)[:2] == (0.0, "14 / unlimited")
 
 
 def test_unknown_waiters_render_as_a_question_mark(controller, theme):
@@ -892,8 +892,8 @@ def test_a_count_graph_without_a_limit_scales_to_the_highest_count(controller, t
 
     graph, drawn = _scaled_count_graph(controller, theme, sem, [3, 14, 9])
 
-    assert graph == ("no limit", (0, 14))
-    assert any(text.strip() == "none" for text in drawn)
+    assert graph == ("unlimited", (0, 14))
+    assert any(text.strip() == "unlimited" for text in drawn)
     assert not any("4294967295" in text for text in drawn)
 
 
