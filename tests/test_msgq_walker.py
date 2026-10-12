@@ -4,8 +4,8 @@
 
 import pytest
 
-from kernel.layout import KernelLayout
-from kernel.msgqs import walk_msgqs
+from zview.kernel.layout import KernelLayout
+from zview.kernel.msgqs import walk_msgqs
 
 
 class FakeScraper:

@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from backend.base import AbstractScraper, ProbeReadError
-from backend.recording import SCHEMA_VERSION, RecordingScraper
-from backend.replay import (
+from zview.backend.base import AbstractScraper, ProbeReadError
+from zview.backend.recording import SCHEMA_VERSION, RecordingScraper
+from zview.backend.replay import (
     ReplayComplete,
     ReplayExhausted,
     ReplayMismatch,
@@ -288,7 +288,7 @@ def test_replay_is_not_live(sample_path, sample_backend):
 
 def test_live_backends_advertise_is_live_by_default():
     """``AbstractScraper.is_live`` default is True."""
-    from backend.gdb import GDBScraper
+    from zview.backend.gdb import GDBScraper
 
     scraper = GDBScraper("localhost:1234")
     assert scraper.is_live is True

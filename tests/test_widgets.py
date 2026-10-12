@@ -8,7 +8,7 @@ import curses
 
 import pytest
 
-from frontend.tui.widgets import SiteValue, TUIGraph, TUIProgressBar, _addstr_clipped
+from zview.frontend.tui.widgets import SiteValue, TUIGraph, TUIProgressBar, _addstr_clipped
 
 
 @pytest.fixture

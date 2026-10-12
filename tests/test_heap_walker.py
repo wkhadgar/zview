@@ -7,9 +7,9 @@ import struct
 
 import pytest
 
-from backend.base import ProbeReadError
-from kernel.heaps import walk_heap_waiters
-from orchestrator import ZScraper
+from zview.backend.base import ProbeReadError
+from zview.kernel.heaps import walk_heap_waiters
+from zview.orchestrator import ZScraper
 
 
 class FakeScraper:
@@ -29,7 +29,7 @@ class FakeScraper:
 
 def _make_walker(scraper: FakeScraper) -> ZScraper:
     """Bypass ``ZScraper.__init__`` and seed only what the walker reads."""
-    from kernel.layout import KernelLayout
+    from zview.kernel.layout import KernelLayout
 
     walker = object.__new__(ZScraper)
     walker._m_scraper = scraper
@@ -214,7 +214,7 @@ class FakeHeapMemory:
 
 def _heap_poller(words: dict[int, int], *, wait_q: int | None, flavor: str = "simple") -> ZScraper:
     """``ZScraper`` seeded with one heap and nothing else."""
-    from kernel.layout import KernelLayout
+    from zview.kernel.layout import KernelLayout
 
     poller = object.__new__(ZScraper)
     poller._m_scraper = FakeHeapMemory(words)
@@ -267,7 +267,7 @@ def test_a_heap_without_a_resolved_queue_reports_no_waiter_list():
 
 def test_a_recording_without_a_chunk_map_stops_asking_for_one():
     """A drift leaves the replay cursor untouched, so the heap is still reported."""
-    from backend.replay import ReplayMismatch
+    from zview.backend.replay import ReplayMismatch
 
     def drift(_address):
         raise ReplayMismatch("Replay drift at index 19: expected end_batch, got read_bytes.")
@@ -307,8 +307,8 @@ class LiveHeapRefusingChunkMap(FakeHeapMemory):
 
 def test_a_chunk_map_the_live_stub_refused_replays_frame_after_frame(tmp_path):
     """Replay meets the refusal where the live session did, so later frames still line up."""
-    from backend.recording import RecordingScraper
-    from backend.replay import ReplayScraper
+    from zview.backend.recording import RecordingScraper
+    from zview.backend.replay import ReplayScraper
 
     # 264 chunks of 8 bytes: the 2112 byte read of the talk's recording.
     words = {**_STATS, _HEAP + _WAIT_Q: _HEAP + _WAIT_Q, _SYS_HEAP: 264}

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backend.base import (
+from zview.backend.base import (
     HeapInfo,
     MemSlabInfo,
     MsgqInfo,
@@ -18,8 +18,8 @@ from backend.base import (
     SemaphoreInfo,
     WorkqInfo,
 )
-from frontend.tui.views.base import SpecialCode, ZViewState, ZViewTUIAttributes
-from frontend.tui.views.kernel_object_list import (
+from zview.frontend.tui.views.base import SpecialCode, ZViewState, ZViewTUIAttributes
+from zview.frontend.tui.views.kernel_object_list import (
     HEAP,
     MEM_SLAB,
     MSGQ,
@@ -27,12 +27,12 @@ from frontend.tui.views.kernel_object_list import (
     SEMAPHORE,
     KernelObjectListView,
 )
-from frontend.tui.views.mem_slab_detail import MemSlabDetailView
-from frontend.tui.views.msgq_detail import MsgqDetailView
-from frontend.tui.views.mutex_detail import MutexDetailView
-from frontend.tui.views.semaphore_detail import SemaphoreDetailView
-from frontend.tui.views.workq_detail import WorkqDetailView
-from frontend.tui.widgets import WORKQ
+from zview.frontend.tui.views.mem_slab_detail import MemSlabDetailView
+from zview.frontend.tui.views.msgq_detail import MsgqDetailView
+from zview.frontend.tui.views.mutex_detail import MutexDetailView
+from zview.frontend.tui.views.semaphore_detail import SemaphoreDetailView
+from zview.frontend.tui.views.workq_detail import WorkqDetailView
+from zview.frontend.tui.widgets import WORKQ
 
 
 @pytest.fixture
@@ -850,7 +850,7 @@ def test_count_graph_plots_one_column_per_sample(controller, theme):
 
     plotted: list[list[int]] = []
     with patch(
-        "frontend.tui.views.semaphore_detail.TUIGraph.draw",
+        "zview.frontend.tui.views.semaphore_detail.TUIGraph.draw",
         lambda self, stdscr, y, x, h, w, **kwargs: plotted.append(kwargs["points"]),
     ):
         view.render(_StubWin(width=width), 24, width)
@@ -867,7 +867,7 @@ def _scaled_count_graph(controller, theme, sem: SemaphoreInfo, history: list[int
     controller.sem_history = {sem.address: history}
     view = SemaphoreDetailView(controller, theme)
 
-    from frontend.tui.widgets import TUIGraph
+    from zview.frontend.tui.widgets import TUIGraph
 
     built: list[tuple] = []
 
@@ -875,7 +875,7 @@ def _scaled_count_graph(controller, theme, sem: SemaphoreInfo, history: list[int
         built.append((subtitle, limits))
         return TUIGraph(title, subtitle, limits, attr)
 
-    with patch("frontend.tui.views.semaphore_detail.TUIGraph", recording_graph):
+    with patch("zview.frontend.tui.views.semaphore_detail.TUIGraph", recording_graph):
         win = _render(view)
 
     return built[0], [text for _, _, text in win.writes]

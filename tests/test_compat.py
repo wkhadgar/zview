@@ -4,7 +4,7 @@
 
 from pathlib import Path
 
-from kernel import compat
+from zview.kernel import compat
 
 
 class FakeElf:

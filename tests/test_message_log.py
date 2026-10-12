@@ -12,9 +12,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from frontend.tui.views.base import Keybind, SpecialCode, ZViewState, ZViewTUIAttributes
-from frontend.tui.widgets import PopupRow, TUIPopup
-from frontend.zview_tui import _MESSAGE_LOG_SIZE, LogEntry, ZView
+from zview.frontend.tui.views.base import Keybind, SpecialCode, ZViewState, ZViewTUIAttributes
+from zview.frontend.tui.widgets import PopupRow, TUIPopup
+from zview.frontend.zview_tui import _MESSAGE_LOG_SIZE, LogEntry, ZView
 
 
 class _StrictWin:

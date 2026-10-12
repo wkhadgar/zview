@@ -7,9 +7,9 @@ from west.commands import WestCommand
 _zview_base = Path(__file__).parent.parent.parent
 sys.path.append(str(_zview_base / "src"))
 
-import zview_cli  # noqa: E402
-from logging_setup import configure as configure_logging  # noqa: E402
-from runner_config import RunnerConfig  # noqa: E402
+from zview import cli  # noqa: E402
+from zview.logging_setup import configure as configure_logging  # noqa: E402
+from zview.runner_config import RunnerConfig  # noqa: E402
 
 _COMMANDS_NEEDING_RUNNER = ("live", "record")
 
@@ -59,7 +59,7 @@ class ZViewCommand(WestCommand):
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
         sub = parser.add_subparsers(dest="cmd", metavar="COMMAND")
-        zview_cli.register_commands(
+        cli.register_commands(
             sub,
             auto_filled=frozenset({"elf", "target"}),
             subcommand_epilogs=_build_subcommand_epilogs(),
@@ -81,8 +81,8 @@ class ZViewCommand(WestCommand):
         if _command_wants_runner(args):
             self._fill_runner(args)
 
-        zview_cli.validate_args(self.parser, args)
-        sys.exit(zview_cli.dispatch(args))
+        cli.validate_args(self.parser, args)
+        sys.exit(cli.dispatch(args))
 
     def _fill_elf(self, args: argparse.Namespace) -> None:
         if args.elf_file is not None:
@@ -109,10 +109,10 @@ class ZViewCommand(WestCommand):
 
         runner, target_mcu = cfg.get_config(preferred_runner=args.runner)
 
-        if runner not in zview_cli.AVAILABLE_RUNNERS:
+        if runner not in cli.AVAILABLE_RUNNERS:
             self.wrn(
                 f"'{runner}' is not a valid runner for ZView. Try explicitly passing one of "
-                f"the following: {', '.join(zview_cli.AVAILABLE_RUNNERS)}"
+                f"the following: {', '.join(cli.AVAILABLE_RUNNERS)}"
             )
             self.wrn("Trying to continue with PyOCD as runner...")
             runner, target_mcu = cfg.get_config(preferred_runner="pyocd")

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from runner_config import RunnerConfig
+from zview.runner_config import RunnerConfig
 
 
 def test_file_not_found():

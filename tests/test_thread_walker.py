@@ -4,7 +4,7 @@
 
 import pytest
 
-from kernel.threads import walk_static_threads, walk_thread_list
+from zview.kernel.threads import walk_static_threads, walk_thread_list
 
 
 class FakeScraper:
@@ -54,7 +54,7 @@ class FakeElf:
 #   2: stack_size
 #   3: next_thread
 #   4-7: name (16 bytes)
-from kernel.layout import KernelLayout  # noqa: E402
+from zview.kernel.layout import KernelLayout  # noqa: E402
 
 LAYOUT = KernelLayout(
     threads_head=0,  # unused by walker (head address comes as arg)

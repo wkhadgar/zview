@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from backend.base import HeapInfo, ThreadInfo
-from backend.replay import ReplayScraper
-from orchestrator import ZScraper
+from zview.backend.base import HeapInfo, ThreadInfo
+from zview.backend.replay import ReplayScraper
+from zview.orchestrator import ZScraper
 
 _FIXTURES_DIR = Path(__file__).parent / "fixtures" / "recordings"
 _ELF_PATH = Path(__file__).parent / "fixtures" / "zephyr.elf"

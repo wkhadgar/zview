@@ -6,8 +6,8 @@ from dataclasses import replace
 
 import pytest
 
-from kernel.layout import KernelLayout
-from kernel.mem_slabs import walk_mem_slabs
+from zview.kernel.layout import KernelLayout
+from zview.kernel.mem_slabs import walk_mem_slabs
 
 
 class FakeScraper:

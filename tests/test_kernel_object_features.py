@@ -7,7 +7,7 @@
 import queue
 from unittest.mock import MagicMock, patch
 
-from orchestrator import ZScraper
+from zview.orchestrator import ZScraper
 
 
 def _scraper(**enabled: bool) -> ZScraper:
@@ -221,8 +221,8 @@ def test_the_poll_reads_the_work_queues_last():
         return lambda *_a, **_kw: order.append(key) or {key: key}
 
     with (
-        patch("orchestrator.walk_semaphores", walker("semaphores")),
-        patch("orchestrator.walk_workqs", walker("workqs")),
+        patch("zview.orchestrator.walk_semaphores", walker("semaphores")),
+        patch("zview.orchestrator.walk_workqs", walker("workqs")),
     ):
         frame = s._poll_kernel_objects(queue.Queue())
 

@@ -18,8 +18,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from backend.replay import ReplayScraper  # noqa: E402
-from orchestrator import ZScraper  # noqa: E402
+from zview.backend.replay import ReplayScraper  # noqa: E402
+from zview.orchestrator import ZScraper  # noqa: E402
 
 GOLDEN_SCHEMA = "zview-golden/1"
 

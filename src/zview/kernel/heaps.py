@@ -1,0 +1,97 @@
+# Copyright (c) 2026 Paulo Santos (@wkhadgar)
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Zephyr sys_heap chunk walker and k_heap wait queue reader."""
+
+import struct
+
+from zview.backend.base import AbstractScraper
+from zview.kernel.wait_queues import resolve_waiter_names, walk_wait_queue
+
+
+def walk_heap_fragmentation(
+    scraper: AbstractScraper,
+    z_heap_addr: int,
+    end_chunk_offset: int,
+) -> list[dict]:
+    """
+    Enumerate a sys_heap's chunks. Returns ``[{"used": bool, "size": int}]``
+    in byte units, or ``[]`` when the heap is null/empty. Raises ``ValueError``
+    on a corrupted header or sizes >32 MB, ``RuntimeError`` on a zero-size chunk.
+    """
+    if z_heap_addr == 0:
+        return []
+
+    end_chunk = scraper.read32(z_heap_addr + end_chunk_offset)[0]
+    if end_chunk == 0:
+        return []
+
+    total_bytes = end_chunk * 8
+    if total_bytes > (1024 * 1024 * 32):
+        raise ValueError(f"Heap size exceeds sanity limit: {total_bytes} bytes.")
+
+    raw_buffer = scraper.read_bytes(z_heap_addr, total_bytes)
+    mv = memoryview(raw_buffer)
+
+    # Evaluate the chunk0 signature structurally
+    val16_raw = struct.unpack_from(f"{scraper.endianess}H", mv, 2)[0]
+    val32_raw = struct.unpack_from(f"{scraper.endianess}I", mv, 4)[0]
+
+    is_used_16 = bool(val16_raw & 1)
+    is_used_32 = bool(val32_raw & 1)
+
+    val16 = val16_raw >> 1
+    val32 = val32_raw >> 1
+
+    if (0 < val16 < end_chunk) and is_used_16:
+        c = val16  # Start chunk ID
+        fmt = f"{scraper.endianess}H"
+        offset_in_chunk = 2
+    elif (0 < val32 < end_chunk) and is_used_32:
+        c = val32
+        fmt = f"{scraper.endianess}I"
+        offset_in_chunk = 4
+    else:
+        raise ValueError(
+            f"Corrupted chunk0 header. "
+            f"16-bit field: size {val16}, used {is_used_16} | "
+            f"32-bit field: size {val32}, used {is_used_32}"
+        )
+
+    chunks = []
+
+    while c < end_chunk:
+        offset = (c * 8) + offset_in_chunk
+        val = struct.unpack_from(fmt, mv, offset)[0]
+
+        is_used = bool(val & 1)
+        c_size = val >> 1
+
+        if c_size == 0:
+            raise RuntimeError(f"Infinite loop prevented: Chunk at ID {c} has size 0.")
+
+        chunks.append({"used": is_used, "size": c_size * 8})
+        c += c_size
+
+    return chunks
+
+
+def walk_heap_waiters(
+    scraper: AbstractScraper,
+    heap_address: int,
+    wait_q_offset: int,
+    qnode_offset: int,
+    thread_names: dict[int, str] | None = None,
+) -> tuple[str, ...]:
+    """
+    Return the names of the threads queued on a ``k_heap``, in queue order.
+
+    ``heap_address`` is the ``k_heap`` itself, not the ``sys_heap`` it wraps;
+    ``wait_q_offset`` is the queue's offset within it. A thread queues there by
+    asking for memory with a timeout the heap cannot meet.
+    """
+    return resolve_waiter_names(
+        walk_wait_queue(scraper, heap_address + wait_q_offset, qnode_offset),
+        thread_names,
+    )

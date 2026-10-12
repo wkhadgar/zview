@@ -2,13 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""CLI wiring coverage for zview_cli.main."""
+"""CLI wiring coverage for zview.cli.main."""
 
 import json
 import sys
 from pathlib import Path
 
-import zview_cli
+from zview import cli
 
 _TESTS_DIR = Path(__file__).parent
 _FIXTURE = _TESTS_DIR / "fixtures" / "recordings" / "sys_heap_v4.3.ndjson.gz"
@@ -16,10 +16,10 @@ _ELF = _TESTS_DIR / "fixtures" / "zephyr.elf"
 
 
 def _invoke(monkeypatch, capsys, argv: list[str]):
-    """Run zview_cli.main with ``argv``; return (rc, stdout, stderr)."""
+    """Run zview.cli.main with ``argv``; return (rc, stdout, stderr)."""
     monkeypatch.setattr(sys, "argv", ["zview", *argv])
     try:
-        rc = zview_cli.main()
+        rc = cli.main()
     except SystemExit as exc:
         rc = exc.code
     captured = capsys.readouterr()
@@ -27,7 +27,7 @@ def _invoke(monkeypatch, capsys, argv: list[str]):
 
 
 def test_normalize_argv_splices_live_for_bare_invocation():
-    assert zview_cli._normalize_argv(["-e", "x", "-r", "jlink", "-t", "y"]) == [
+    assert cli._normalize_argv(["-e", "x", "-r", "jlink", "-t", "y"]) == [
         "live",
         "-e",
         "x",
@@ -39,13 +39,13 @@ def test_normalize_argv_splices_live_for_bare_invocation():
 
 
 def test_normalize_argv_passes_known_commands_through():
-    for cmd in zview_cli.KNOWN_COMMANDS:
-        assert zview_cli._normalize_argv([cmd, "-e", "x"]) == [cmd, "-e", "x"]
+    for cmd in cli.KNOWN_COMMANDS:
+        assert cli._normalize_argv([cmd, "-e", "x"]) == [cmd, "-e", "x"]
 
 
 def test_normalize_argv_passes_help_through():
-    assert zview_cli._normalize_argv(["--help"]) == ["--help"]
-    assert zview_cli._normalize_argv(["-h"]) == ["-h"]
+    assert cli._normalize_argv(["--help"]) == ["--help"]
+    assert cli._normalize_argv(["-h"]) == ["-h"]
 
 
 def test_dump_replay_json_stdout_is_valid_json(monkeypatch, capsys):
@@ -85,7 +85,7 @@ def test_dump_replay_human_readable(monkeypatch, capsys):
 
 
 def test_dump_prints_a_semaphore_without_a_limit_or_an_init(monkeypatch, capsys):
-    from backend.base import SemaphoreInfo
+    from zview.backend.base import SemaphoreInfo
 
     frame = {
         "semaphores": [
@@ -96,7 +96,7 @@ def test_dump_prints_a_semaphore_without_a_limit_or_an_init(monkeypatch, capsys)
             SemaphoreInfo(name="bounded", address=0x1020, count=2, limit=4, waiters=()),
         ]
     }
-    monkeypatch.setattr(zview_cli, "dump_single_frame", lambda *a, **kw: frame)
+    monkeypatch.setattr(cli, "dump_single_frame", lambda *a, **kw: frame)
 
     rc, out, _ = _invoke(monkeypatch, capsys, ["dump", "-e", str(_ELF), "-i", str(_FIXTURE)])
 
@@ -107,7 +107,7 @@ def test_dump_prints_a_semaphore_without_a_limit_or_an_init(monkeypatch, capsys)
 
 
 def test_dump_prints_an_unmeasured_watermark_as_a_dash(monkeypatch, capsys):
-    from backend.base import ThreadInfo, ThreadRuntime
+    from zview.backend.base import ThreadInfo, ThreadRuntime
 
     unmeasured = ThreadRuntime(
         cpu=None,
@@ -122,7 +122,7 @@ def test_dump_prints_an_unmeasured_watermark_as_a_dash(monkeypatch, capsys):
             ThreadInfo(0x1100, None, None, "unsized", unmeasured),
         ]
     }
-    monkeypatch.setattr(zview_cli, "dump_single_frame", lambda *a, **kw: frame)
+    monkeypatch.setattr(cli, "dump_single_frame", lambda *a, **kw: frame)
 
     rc, out, _ = _invoke(monkeypatch, capsys, ["dump", "-e", str(_ELF), "-i", str(_FIXTURE)])
 
@@ -133,7 +133,7 @@ def test_dump_prints_an_unmeasured_watermark_as_a_dash(monkeypatch, capsys):
 
 def test_dump_prints_every_group_it_polled(monkeypatch, capsys):
     """The text dump covers what the JSON one carries, groups added later included."""
-    from backend.base import HeapInfo, MemSlabInfo, MsgqInfo, WorkqInfo
+    from zview.backend.base import HeapInfo, MemSlabInfo, MsgqInfo, WorkqInfo
 
     frame = {
         "heaps": [
@@ -176,7 +176,7 @@ def test_dump_prints_every_group_it_polled(monkeypatch, capsys):
             WorkqInfo(name="idle_q", address=0x7100, flags=0, waiters=None),
         ],
     }
-    monkeypatch.setattr(zview_cli, "dump_single_frame", lambda *a, **kw: frame)
+    monkeypatch.setattr(cli, "dump_single_frame", lambda *a, **kw: frame)
 
     rc, out, _ = _invoke(monkeypatch, capsys, ["dump", "-e", str(_ELF), "-i", str(_FIXTURE)])
 
@@ -278,7 +278,7 @@ def test_record_dispatches_with_frames_bound(monkeypatch, capsys, tmp_path):
         recorded.append({"out_path": str(out_path), **kwargs})
         return 7
 
-    monkeypatch.setattr(zview_cli, "record_session", fake_record)
+    monkeypatch.setattr(cli, "record_session", fake_record)
 
     out_file = tmp_path / "snap.ndjson.gz"
     rc, out, _ = _invoke(
@@ -308,16 +308,16 @@ def test_record_dispatches_with_frames_bound(monkeypatch, capsys, tmp_path):
 def test_replay_no_pacing_passes_to_scraper(monkeypatch, capsys):
     """--no-pacing -> ReplayScraper(honor_timing=False)."""
     captured: dict = {}
-    real_cls = zview_cli.ReplayScraper
+    real_cls = cli.ReplayScraper
 
     class SpyReplay(real_cls):
         def __init__(self, *args, **kwargs):
             captured["honor_timing"] = kwargs.get("honor_timing", True)
             super().__init__(*args, **kwargs)
 
-    monkeypatch.setattr(zview_cli, "ReplayScraper", SpyReplay)
-    monkeypatch.setattr(zview_cli, "tui_run", lambda *a, **kw: None)
-    monkeypatch.setattr(zview_cli.curses, "wrapper", lambda fn, *a, **kw: fn(None, *a, **kw))
+    monkeypatch.setattr(cli, "ReplayScraper", SpyReplay)
+    monkeypatch.setattr(cli, "tui_run", lambda *a, **kw: None)
+    monkeypatch.setattr(cli.curses, "wrapper", lambda fn, *a, **kw: fn(None, *a, **kw))
 
     rc, _, _ = _invoke(
         monkeypatch,

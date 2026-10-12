@@ -1,0 +1,795 @@
+# Copyright (c) 2026 Paulo Santos (@wkhadgar)
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""ZScraper: backend + ELF + kernel walkers + polling thread."""
+
+import contextlib
+import logging
+import queue
+import threading
+import time
+from threading import Event
+from typing import Literal
+
+from zview.backend.base import AbstractScraper, HeapInfo, ThreadInfo, ThreadRuntime
+from zview.backend.elf_inspector import ElfInspector
+from zview.backend.replay import ReplayComplete, ReplayMismatch
+from zview.kernel import compat
+from zview.kernel.heaps import walk_heap_fragmentation, walk_heap_waiters
+from zview.kernel.layout import KernelLayout
+from zview.kernel.mem_slabs import walk_mem_slabs
+from zview.kernel.msgqs import walk_msgqs
+from zview.kernel.mutexes import walk_mutexes
+from zview.kernel.semaphores import walk_semaphores
+from zview.kernel.threads import walk_static_threads, walk_thread_list
+from zview.kernel.workqs import walk_workqs
+
+logger = logging.getLogger("zview.scraper")
+
+
+class _BrokenFrame(Exception):
+    """Raised when a poll cycle observes a counter regression."""
+
+
+class ZScraper:
+    last_cpu_cycles: int | None
+    last_cpu_delta: int
+    last_thread_cycles: dict[int, int]
+
+    def __init__(
+        self,
+        meta_scraper: AbstractScraper,
+        elf_path,
+        max_threads: int = 64,
+    ):
+        self._all_threads_info: dict[str, ThreadInfo] = {}
+        self._elf_inspector: ElfInspector = ElfInspector(elf_path)
+        self._endianess: Literal["little", "big"] = (
+            "little" if self._elf_inspector._little_endian else "big"
+        )
+        self._m_scraper: AbstractScraper = meta_scraper
+        self._m_scraper.endianess = "<" if self._endianess == "little" else ">"
+        self._polling_thread: threading.Thread | None = None
+        self._thread_pool: list[ThreadInfo] | None = None
+        self._stop_event: Event | None = None
+        self.inspection_period = 0.2
+
+        self.has_heaps: bool = True
+        self.has_usage: bool = True
+        self.has_names: bool = True
+        self.has_thread_list: bool = True
+        self.has_stack_info: bool = True
+        self.has_semaphores: bool = True
+        self.has_mutexes: bool = True
+        self.has_msgqs: bool = True
+        self.has_mem_slabs: bool = True
+        self.has_workqs: bool = True
+        # The heap wait queue walk reads per heap per frame, so it is its own
+        # feature: a recording taken before it has no such read to replay.
+        self.has_heap_waiters: bool = True
+        self.capture_all_heap_chunks: bool = False
+        # The thread metadata bytes in one read, and the entry pointer read
+        # once per thread. A recording taken before that holds one read per
+        # field per frame, so replaying it keeps asking that way.
+        self.merged_thread_meta: bool = True
+        self._thread_entry_cache: dict[int, int] = {}
+        # Set False by the TUI outside the kernel objects view; dump and record
+        # leave it on.
+        self.poll_kernel_objects: bool = True
+
+        # Built Zephyr version (when the ELF is in its build tree) and the wait
+        # queue layout.
+        self.zephyr_version: str | None = compat.detect_zephyr_version(elf_path)
+        self.waitq_flavor: compat.WaitQFlavor = compat.waitq_flavor(self._elf_inspector)
+        # Without the fill pattern there is nothing for the watermark scan to find.
+        self.has_stack_fill: bool = compat.has_kconfig(
+            self._elf_inspector, compat.CONFIG_INIT_STACKS
+        )
+
+        self._MAX_THREADS: int = max_threads
+
+        self._layout = self._resolve_layout()
+        self._resolve_addresses()
+
+        if self.has_heaps:
+            self._discover_heap_addresses()
+
+        self._discover_kernel_object_addresses()
+        self._restrict_features_to_recording()
+
+        # A recording covers every heap's chunk map or none of it; the poll
+        # finds out on its first read and backs off if there is none.
+        if not self._m_scraper.is_live and self.has_heaps:
+            self.capture_all_heap_chunks = True
+
+        self.reset_runtime_state()
+
+    def _resolve_layout(self) -> KernelLayout:
+        """Resolve DWARF-derived offsets. Sets ``has_*`` flags for missing features."""
+        elf = self._elf_inspector
+
+        fields: dict = {}
+
+        for group, flag in (
+            (compat.THREAD_FIELDS, "has_thread_list"),
+            (compat.THREAD_STACK_FIELDS, "has_stack_info"),
+            (compat.THREAD_NAME_FIELDS, "has_names"),
+            (compat.USAGE_FIELDS, "has_usage"),
+            (compat.HEAP_FIELDS, "has_heaps"),
+            (compat.SEMAPHORE_FIELDS, "has_semaphores"),
+            (compat.MUTEX_FIELDS, "has_mutexes"),
+            (compat.MSGQ_FIELDS, "has_msgqs"),
+            (compat.MEM_SLAB_FIELDS, "has_mem_slabs"),
+            # A queue's pending items are k_work nodes, so both must resolve.
+            (compat.WORKQ_FIELDS, "has_workqs"),
+            (compat.WORK_FIELDS, "has_workqs"),
+        ):
+            if (extras := compat.resolve_fields(elf, group)) is not None:
+                fields.update(extras)
+            else:
+                setattr(self, flag, False)
+
+        # Metadata members and the qnode link resolve independently.
+        fields.update(compat.resolve_optional_fields(elf, compat.THREAD_META_FIELDS))
+        fields.update(compat.resolve_optional_fields(elf, compat.THREAD_QNODE_FIELDS))
+        fields.update(compat.resolve_optional_fields(elf, compat.MEM_SLAB_OPTIONAL_FIELDS))
+        fields.update(compat.resolve_optional_fields(elf, compat.HEAP_OPTIONAL_FIELDS))
+        fields.update(compat.resolve_optional_fields(elf, compat.WORKQ_OPTIONAL_FIELDS))
+
+        return KernelLayout(**fields)
+
+    def _resolve_addresses(self) -> None:
+        elf = self._elf_inspector
+        self._kernel_base_address = elf.get_symbol_info("_kernel", "address")[0]
+        if self.has_thread_list:
+            self._threads_address = self._kernel_base_address + self._layout.threads_head
+        self.idle_threads_address = elf.get_symbol_info("z_idle_threads", "address")[0]
+        if self.has_usage:
+            self._cpu_usage_address = self._kernel_base_address + self._layout.cpu_usage
+
+    def _discover_heap_addresses(self) -> None:
+        """Populate ``_k_heap_addresses`` from ``k_heap`` globals; clears ``has_heaps`` if none."""
+        self._k_heap_addresses = self._elf_inspector.find_struct_instances("k_heap")
+        if not self._k_heap_addresses:
+            self.has_heaps = False
+            return
+        self.extra_info_heap_address: int | None = None
+
+    def _discover_kernel_object_addresses(self) -> None:
+        """Populate kernel object addresses; clears the flag when none exist."""
+        self._k_sem_addresses: dict[str, list[int]] = {}
+        self._k_mutex_addresses: dict[str, list[int]] = {}
+        self._k_msgq_addresses: dict[str, list[int]] = {}
+        self._k_mem_slab_addresses: dict[str, list[int]] = {}
+        self._k_workq_addresses: dict[str, list[int]] = {}
+
+        if self.has_semaphores:
+            self._k_sem_addresses = self._discover_struct_instances("k_sem")
+            self.has_semaphores = bool(self._k_sem_addresses)
+
+        if self.has_mutexes:
+            self._k_mutex_addresses = self._discover_struct_instances("k_mutex")
+            self.has_mutexes = bool(self._k_mutex_addresses)
+
+        if self.has_msgqs:
+            self._k_msgq_addresses = self._discover_struct_instances("k_msgq")
+            self.has_msgqs = bool(self._k_msgq_addresses)
+
+        if self.has_mem_slabs:
+            self._k_mem_slab_addresses = self._discover_struct_instances("k_mem_slab")
+            self.has_mem_slabs = bool(self._k_mem_slab_addresses)
+
+        if self.has_workqs:
+            self._k_workq_addresses = self._discover_struct_instances("k_work_q")
+            self.has_workqs = bool(self._k_workq_addresses)
+
+    def _discover_struct_instances(self, struct_name: str) -> dict[str, list[int]]:
+        """
+        Map ``{symbol: addresses}`` for every global instance of ``struct_name``.
+
+        Only statically declared objects (``K_SEM_DEFINE`` and friends) have a
+        symbol. A DWARF variable with no matching data symbol is skipped.
+        """
+        return self._elf_inspector.find_struct_instances(struct_name)
+
+    def _restrict_features_to_recording(self) -> None:
+        """
+        Limit a replayed session to the features its recording captured.
+
+        Replay matches a strict read sequence. A recording with no feature list
+        predates the primitives and is treated as threads and heaps only.
+        """
+        if self._m_scraper.is_live:
+            return
+
+        features = getattr(self._m_scraper, "features", None)
+        if features is None:
+            return
+
+        self.has_semaphores = self.has_semaphores and "semaphores" in features
+        self.has_mutexes = self.has_mutexes and "mutexes" in features
+        self.has_msgqs = self.has_msgqs and "msgqs" in features
+        self.has_mem_slabs = self.has_mem_slabs and "mem_slabs" in features
+        self.has_workqs = self.has_workqs and "workqs" in features
+        self.has_heap_waiters = self.has_heap_waiters and "heap_waiters" in features
+        self.merged_thread_meta = "merged_thread_meta" in features
+        # A recording from before the scan was skipped scanned every stack.
+        self.has_stack_fill = self.has_stack_fill or "unfilled_stacks" not in features
+
+    def active_features(self) -> tuple[str, ...]:
+        """The features this session polls, as recorded in a recording header."""
+        features = ["threads", "merged_thread_meta"]
+        for enabled, name in (
+            (self.has_heaps, "heaps"),
+            (self.has_semaphores, "semaphores"),
+            (self.has_mutexes, "mutexes"),
+            (self.has_msgqs, "msgqs"),
+            (self.has_mem_slabs, "mem_slabs"),
+            (self.has_heaps and self.has_heap_waiters, "heap_waiters"),
+            (self.has_workqs, "workqs"),
+            (not self.has_stack_fill, "unfilled_stacks"),
+        ):
+            if enabled:
+                features.append(name)
+
+        return tuple(features)
+
+    def absent_features(self) -> tuple[str, ...]:
+        """One notice per capability the build's Kconfig leaves out."""
+        return tuple(
+            notice
+            for enabled, notice in (
+                (self.has_names, "Warning: no thread names (CONFIG_THREAD_NAME=n)"),
+                (self.has_usage, "Warning: no cpu stats (CONFIG_THREAD_RUNTIME_STATS=n)"),
+                (self.has_heaps, "Warning: no heap stats (CONFIG_SYS_HEAP_RUNTIME_STATS=n)"),
+                (
+                    self.has_thread_list,
+                    "Warning: static threads only (CONFIG_THREAD_MONITOR=n)",
+                ),
+                (self.has_stack_info, "Warning: no stack sizes (CONFIG_THREAD_STACK_INFO=n)"),
+                (self.has_stack_fill, "Warning: no stack usage (CONFIG_INIT_STACKS=n)"),
+            )
+            if not enabled
+        )
+
+    def decl_site(self, address: int) -> tuple[str, int] | None:
+        """``(path, line)`` where the object at ``address`` is declared, if known."""
+        return self._elf_inspector.decl_site(address)
+
+    def function_site(self, address: int) -> tuple[str, int] | None:
+        """``(path, line)`` where the function at ``address`` is defined, if known."""
+        return self._elf_inspector.function_site(address)
+
+    def has_kernel_objects(self) -> bool:
+        """True while any object group is live, so the objects view has rows to draw."""
+        return (
+            self.has_semaphores
+            or self.has_mutexes
+            or self.has_msgqs
+            or self.has_mem_slabs
+            or self.has_heaps
+            or self.has_workqs
+        )
+
+    def _poll_kernel_objects(self, data_queue: queue.Queue) -> dict:
+        """
+        Read the kernel objects. A failing group is skipped.
+
+        Wait queues are walked only on the ``simple`` layout; otherwise
+        ``waiters`` is ``None``.
+        """
+        frame: dict = {}
+        if not self.poll_kernel_objects or not self.has_kernel_objects():
+            return frame
+
+        walk_waiters = self.waitq_flavor == "simple"
+        thread_names = self._thread_names()
+
+        for enabled, key, walker, addresses in (
+            (self.has_semaphores, "semaphores", walk_semaphores, self._k_sem_addresses),
+            (self.has_mutexes, "mutexes", walk_mutexes, self._k_mutex_addresses),
+            (self.has_msgqs, "msgqs", walk_msgqs, self._k_msgq_addresses),
+            (self.has_mem_slabs, "mem_slabs", walk_mem_slabs, self._k_mem_slab_addresses),
+            (self.has_workqs, "workqs", walk_workqs, self._k_workq_addresses),
+        ):
+            if not enabled:
+                continue
+
+            try:
+                objects = walker(
+                    self._m_scraper,
+                    self._elf_inspector,
+                    addresses,
+                    self._layout,
+                    thread_names,
+                    walk_waiters=walk_waiters,
+                )
+            except Exception as e:
+                data_queue.put({"error": f"Error reading {key}: {e}"}, block=False)
+                continue
+
+            frame[key] = list(objects.values())
+
+        return frame
+
+    def __enter__(self):
+        self._m_scraper.__enter__()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._m_scraper.__exit__(exc_type, exc_val, exc_tb)
+
+    @property
+    def all_threads(self):
+        return self._all_threads_info
+
+    @property
+    def thread_pool(self):
+        return self._thread_pool
+
+    @thread_pool.setter
+    def thread_pool(self, new: list[ThreadInfo]):
+        self._thread_pool = new
+
+    def read_variable(self, var_name: str) -> list:
+        if not self._m_scraper.is_connected:
+            self._m_scraper.connect()
+
+        var_addresses = self._elf_inspector.get_symbol_info(var_name, "address")
+        var_sizes = self._elf_inspector.get_symbol_info(var_name, "size")
+
+        return [
+            self._m_scraper.read8(var_address, var_size)
+            for var_address, var_size in zip(var_addresses, var_sizes, strict=True)
+        ]
+
+    def update_available_threads(self):
+        if self.has_thread_list:
+            threads = walk_thread_list(
+                self._m_scraper,
+                self._elf_inspector,
+                self._threads_address,
+                self._layout,
+                self._endianess,
+                self.has_names,
+                self._MAX_THREADS,
+            )
+        else:
+            # Without the kernel's list, the threads are the ones allocated statically.
+            threads = walk_static_threads(
+                self._m_scraper,
+                self._elf_inspector,
+                self._elf_inspector.find_nested_instances("k_thread"),
+                self._layout,
+                self._endianess,
+                self.has_names,
+                self._MAX_THREADS,
+            )
+        self._all_threads_info.clear()
+        self._all_threads_info.update(threads)
+
+    def get_heap_fragmentation(self, z_heap_addr: int) -> list[dict]:
+        return walk_heap_fragmentation(
+            self._m_scraper,
+            z_heap_addr,
+            self._layout.heap_end_chunk,
+        )
+
+    def reset_thread_pool(self):
+        self.thread_pool = list(self.all_threads.values())
+        # A rebuilt list can hand the same address to a different thread.
+        self._thread_entry_cache.clear()
+
+    def reset_runtime_state(self) -> None:
+        """Clear watermark/cycle caches; baselines are re-seeded by the next poll."""
+        self._m_scraper.watermark_cache.clear()
+        self.last_cpu_cycles = None
+        self.last_cpu_delta = 0
+        self.last_thread_cycles = {}
+
+    def start_polling_thread(
+        self,
+        data_queue: queue.Queue,
+        stop_event: threading.Event,
+        inspection_period: float,
+    ):
+        """Start the polling daemon thread. No-op if one is already running."""
+        if self._polling_thread is not None:
+            data_queue.put({"error": "Already started..."})
+            return
+
+        self.inspection_period = inspection_period
+        self._polling_thread = threading.Thread(
+            target=self._poll_thread_worker,
+            args=(data_queue, stop_event, inspection_period),
+            daemon=True,
+        )
+        self._stop_event = stop_event
+        self._polling_thread.start()
+
+    def finish_polling_thread(self):
+        if self._polling_thread is None or self._stop_event is None:
+            return
+
+        self._stop_event.set()
+        if self._polling_thread.is_alive():
+            self._polling_thread.join(timeout=1.0)
+            if self._polling_thread.is_alive():
+                logger.warning("Polling thread did not terminate gracefully.")
+
+        self._polling_thread = None
+
+    _MAX_TOLERATED_ERRORS = 3
+
+    def _poll_thread_worker(
+        self,
+        data_queue: queue.Queue,
+        stop_event: threading.Event,
+        inspection_period: float,
+    ):
+        """Polling thread entry point. Tolerates ``_MAX_TOLERATED_ERRORS`` transient faults."""
+        try:
+            if not self._m_scraper.is_connected:
+                self._m_scraper.connect()
+        except Exception as e:
+            data_queue.put({"fatal_error": f"Failed to connect to target: {e}"})
+            return
+
+        consecutive_errors = 0
+        while not stop_event.is_set():
+            cycle_start = time.perf_counter()
+            in_batch = False
+            try:
+                self._m_scraper.begin_batch()
+                in_batch = True
+
+                cpu_cycles_delta = self._read_cpu_cycles_delta()
+                polled_raw, cpu_cycles_delta = self._poll_threads(cpu_cycles_delta)
+                final_threads = self._finalize_threads(polled_raw, cpu_cycles_delta)
+
+                frame: dict = {"threads": final_threads}
+                if self.has_heaps:
+                    frame["heaps"] = self._poll_heaps(data_queue)
+                frame.update(self._poll_kernel_objects(data_queue))
+                data_queue.put(frame, block=False)
+
+                consecutive_errors = 0
+            except queue.Full:
+                pass
+            except ReplayComplete as e:
+                data_queue.put({"replay_complete": str(e)})
+                break
+            except _BrokenFrame as e:
+                logger.warning("Broken frame captured (%s); resyncing baselines.", e)
+                self.reset_runtime_state()
+            except Exception as e:
+                consecutive_errors += 1
+                if consecutive_errors >= self._MAX_TOLERATED_ERRORS:
+                    data_queue.put(
+                        {
+                            "fatal_error": f"Target lost after "
+                            f"{self._MAX_TOLERATED_ERRORS} retries: {e}"
+                        }
+                    )
+                    break
+                # One message per fault, not one per attempt: the message log
+                # counts the repeats, which is the retry number.
+                data_queue.put({"error": f"Transient read fault: {e}"}, block=False)
+            finally:
+                if in_batch:
+                    with contextlib.suppress(Exception):
+                        self._m_scraper.end_batch()
+
+            # Sleep only the remainder of the period, so the poll cadence tracks
+            # the requested period instead of period-plus-read-time. When the
+            # reads already exceed the period, poll back-to-back (no sleep).
+            elapsed = time.perf_counter() - cycle_start
+            time.sleep(max(0.0, inspection_period - elapsed))
+
+    def _read_cpu_cycles_delta(self) -> int:
+        """Cycles elapsed since the last frame; ``-1`` when ``has_usage`` is False."""
+        if not self.has_usage:
+            return -1
+
+        try:
+            current = self._m_scraper.read32(self._cpu_usage_address)[0]
+        except Exception as e:
+            raise RuntimeError(f"Error reading global CPU cycles: {e}") from e
+
+        if self.last_cpu_cycles is None:
+            self.last_cpu_cycles = current
+            return 0
+
+        delta = current - self.last_cpu_cycles
+        self.last_cpu_cycles = current
+        if delta < 0:
+            raise _BrokenFrame("global CPU cycle counter regressed")
+        self.last_cpu_delta = delta
+        return delta
+
+    def _poll_threads(self, cpu_cycles_delta: int) -> tuple[list[dict], int]:
+        """Read per-thread usage + watermark. Returns (raw_data, adjusted_cpu_cycles_delta)."""
+        if self.thread_pool is None:
+            raise RuntimeError("Thread pool is uninitialized.")
+
+        polled: list[dict] = []
+        for thread in self.thread_pool:
+            if self.has_usage:
+                try:
+                    thread_usage = self._m_scraper.read64(
+                        thread.address + self._layout.thread_usage
+                    )[0]
+                except Exception as e:
+                    raise RuntimeError(f"Error polling thread usage {thread.name}: {e}") from e
+
+                prev = self.last_thread_cycles.get(thread.address)
+                self.last_thread_cycles[thread.address] = thread_usage
+
+                if prev is None:
+                    usage_delta = 0
+                    is_active = False
+                else:
+                    usage_delta = thread_usage - prev
+                    if usage_delta < 0:
+                        raise _BrokenFrame(f"thread {thread.name} usage counter regressed")
+                    if thread.address == self.idle_threads_address:
+                        cpu_cycles_delta += usage_delta
+                    is_active = usage_delta > 0
+            else:
+                usage_delta = 0
+                is_active = False
+
+            watermark = stack_usage_pct = None
+            if self.has_stack_fill and thread.stack_size is not None:
+                try:
+                    watermark = self._m_scraper.calculate_dynamic_watermark(
+                        thread.stack_start,
+                        thread.stack_size,
+                        thread_id=thread.address,
+                    )
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Error polling stack watermark for {thread.name}: {e}"
+                    ) from e
+
+                stack_usage_pct = (
+                    (watermark / thread.stack_size * 100) if thread.stack_size > 0 else 0.0
+                )
+
+            meta = self._read_thread_meta(thread)
+
+            polled.append(
+                {
+                    "info": thread,
+                    "usage_delta": usage_delta,
+                    "is_active": is_active,
+                    "watermark": watermark,
+                    "stack_usage_pct": stack_usage_pct,
+                    "meta": meta,
+                }
+            )
+
+        return polled, cpu_cycles_delta
+
+    def _read_thread_meta(self, thread: ThreadInfo) -> dict:
+        """Read priority/state/options/entry for a thread; missing offsets yield ``None``."""
+        meta: dict = {
+            "priority": None,
+            "state": None,
+            "user_options": None,
+            "entry_point": None,
+            "entry_symbol": None,
+        }
+        try:
+            meta.update(
+                self._read_meta_span(thread)
+                if self.merged_thread_meta
+                else self._read_meta_fields(thread)
+            )
+            entry = self._read_thread_entry(thread)
+            if entry is not None:
+                meta["entry_point"] = entry
+                meta["entry_symbol"] = self._resolve_entry_symbol(entry)
+        except Exception:
+            # Per-frame read fault on metadata is non-fatal: leave fields ``None``.
+            pass
+        return meta
+
+    # The metadata bytes, by their offset in the layout.
+    _META_BYTES = (
+        ("priority", "thread_priority"),
+        ("state", "thread_state"),
+        ("user_options", "thread_user_options"),
+    )
+
+    def _read_meta_span(self, thread: ThreadInfo) -> dict:
+        """The metadata bytes in one read: they sit within a few bytes of each other."""
+        offsets = {
+            name: offset
+            for name, attribute in self._META_BYTES
+            if (offset := getattr(self._layout, attribute)) is not None
+        }
+        if not offsets:
+            return {}
+
+        base = min(offsets.values())
+        raw = self._m_scraper.read8(thread.address + base, max(offsets.values()) - base + 1)
+
+        values = {name: raw[offset - base] for name, offset in offsets.items()}
+        if "priority" in values:
+            values["priority"] = self._signed_priority(values["priority"])
+        return values
+
+    def _read_meta_fields(self, thread: ThreadInfo) -> dict:
+        """The metadata bytes one read apiece, as a recording made that way expects."""
+        values = {}
+        for name, attribute in self._META_BYTES:
+            offset = getattr(self._layout, attribute)
+            if offset is not None:
+                values[name] = self._m_scraper.read8(thread.address + offset)[0]
+        if "priority" in values:
+            values["priority"] = self._signed_priority(values["priority"])
+        return values
+
+    @staticmethod
+    def _signed_priority(raw: int) -> int:
+        """A Zephyr priority is a signed 8-bit value: cooperative ones are negative."""
+        return raw - 256 if raw >= 0x80 else raw
+
+    def _read_thread_entry(self, thread: ThreadInfo) -> int | None:
+        """The entry pointer, read once per thread: it is fixed while the thread lives."""
+        if self._layout.thread_entry is None:
+            return None
+        if self.merged_thread_meta and thread.address in self._thread_entry_cache:
+            return self._thread_entry_cache[thread.address]
+
+        entry = self._m_scraper.read32(thread.address + self._layout.thread_entry)[0]
+        self._thread_entry_cache[thread.address] = entry
+        return entry
+
+    def _resolve_entry_symbol(self, addr: int) -> str | None:
+        """Cache-backed reverse symbol lookup for a function pointer."""
+        if addr == 0:
+            return None
+        cache = getattr(self, "_entry_symbol_cache", None)
+        if cache is None:
+            self._entry_symbol_cache = cache = {}
+        if addr in cache:
+            return cache[addr]
+        # Thumb code pointers have bit 0 set; mask before lookup.
+        try:
+            sym = self._elf_inspector.get_symbol_name_at(addr & ~1)
+        except Exception:
+            sym = None
+        cache[addr] = sym
+        return sym
+
+    def _finalize_threads(self, polled: list[dict], cpu_cycles_delta: int) -> list[ThreadInfo]:
+        """Build ``ThreadInfo`` objects from raw polling state, computing CPU% and load%."""
+        idle = next(
+            (d for d in polled if d["info"].address == self.idle_threads_address),
+            None,
+        )
+        active_total = (cpu_cycles_delta - idle["usage_delta"]) if idle else cpu_cycles_delta
+
+        final: list[ThreadInfo] = []
+        for data in polled:
+            # The two counters are read at different instants, so a share can
+            # land above the total it divides.
+            absolute_cpu = (
+                min((data["usage_delta"] / cpu_cycles_delta) * 100.0, 100.0)
+                if cpu_cycles_delta > 0
+                else 0.0
+            )
+
+            if data["info"].address == self.idle_threads_address:
+                load_pct = 0.0
+            elif active_total > 0:
+                load_pct = min((data["usage_delta"] / active_total) * 100.0, 100.0)
+            else:
+                load_pct = 0.0
+
+            runtime = ThreadRuntime(
+                cpu=load_pct if self.has_usage else None,
+                cpu_normalized=absolute_cpu if self.has_usage else None,
+                active=data["is_active"],
+                stack_watermark=data["watermark"],
+                stack_watermark_percent=data["stack_usage_pct"],
+            )
+            meta = data.get("meta") or {}
+            final.append(
+                ThreadInfo(
+                    address=data["info"].address,
+                    stack_start=data["info"].stack_start,
+                    stack_size=data["info"].stack_size,
+                    name=data["info"].name,
+                    runtime=runtime,
+                    priority=meta.get("priority"),
+                    state=meta.get("state"),
+                    user_options=meta.get("user_options"),
+                    entry_point=meta.get("entry_point"),
+                    entry_symbol=meta.get("entry_symbol"),
+                )
+            )
+        return final
+
+    def _thread_names(self) -> dict[int, str]:
+        """``{address: name}`` for the threads a wait queue can name."""
+        return {t.address: t.name for t in self._all_threads_info.values()}
+
+    def _poll_heaps(self, data_queue: queue.Queue) -> list[HeapInfo]:
+        """Read all heap metadata. Per-heap read failures emit ``error`` frames and are skipped."""
+        heaps: list[HeapInfo] = []
+        walk_waiters = (
+            self.has_heap_waiters
+            and self.waitq_flavor == "simple"
+            and self._layout.heap_wait_q is not None
+            and self._layout.thread_qnode is not None
+        )
+        thread_names = self._thread_names() if walk_waiters else {}
+        for heap_name, heap_addresses in self._k_heap_addresses.items():
+            for heap_address in heap_addresses:
+                try:
+                    heap_struct = self._m_scraper.read32(heap_address)[0]
+                    free = self._m_scraper.read32(heap_struct + self._layout.heap_free_bytes)[0]
+                    allocated = self._m_scraper.read32(
+                        heap_struct + self._layout.heap_allocated_bytes
+                    )[0]
+                    max_allocated = self._m_scraper.read32(
+                        heap_struct + self._layout.heap_max_allocated_bytes
+                    )[0]
+                except Exception as e:
+                    data_queue.put(
+                        {"error": f"Error reading heap info for {heap_name}: {e}"},
+                        block=False,
+                    )
+                    continue
+
+                waiters = None
+                if walk_waiters:
+                    try:
+                        waiters = walk_heap_waiters(
+                            self._m_scraper,
+                            heap_address,
+                            self._layout.heap_wait_q,
+                            self._layout.thread_qnode,
+                            thread_names,
+                        )
+                    except Exception as e:
+                        data_queue.put(
+                            {"error": f"Error reading waiters for {heap_name}: {e}"},
+                            block=False,
+                        )
+
+                chunks = None
+                if self.capture_all_heap_chunks or self.extra_info_heap_address == heap_struct:
+                    try:
+                        chunks = self.get_heap_fragmentation(heap_struct)
+                    except ReplayMismatch:
+                        # A recording taken without the chunk map has no such
+                        # read to serve. A drift leaves the cursor untouched,
+                        # so the session goes on without asking again.
+                        self.capture_all_heap_chunks = False
+                        self.extra_info_heap_address = None
+                    except Exception as e:
+                        data_queue.put(
+                            {"error": f"Error reading sparsity for {heap_name}: {e}"},
+                            block=False,
+                        )
+
+                total = allocated + free
+                usage_pct = (allocated / total * 100) if total > 0 else 0.0
+
+                heaps.append(
+                    HeapInfo(
+                        heap_name,
+                        heap_struct,
+                        free,
+                        allocated,
+                        max_allocated,
+                        usage_pct,
+                        chunks,
+                        waiters,
+                    )
+                )
+        return heaps
