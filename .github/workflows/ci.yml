@@ -47,6 +47,9 @@ jobs:
           pip install .
           pip install -r tests/requirements.txt
 
+      - name: Check Installed CLI
+        run: zview --help
+
       - name: Run Tests
         run: |
           PYTHONPATH=src pytest tests/ -v
