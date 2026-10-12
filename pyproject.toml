@@ -36,14 +36,11 @@ Homepage = "https://github.com/wkhadgar/zview"
 Issues = "https://github.com/wkhadgar/zview/issues"
 
 [project.scripts]
-zview = "zview_cli:main"
+zview = "zview.cli:main"
 
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
-
-[tool.setuptools]
-py-modules = ["zview_cli"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
