@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.elf_inspector import ElfInspector
+from zview.backend.elf_inspector import ElfInspector
 
 
 @pytest.fixture
@@ -245,7 +245,7 @@ def test_every_thread_object_is_found_with_its_path(parser):
 
 
 def _graph(types: dict[int, tuple]):
-    from backend.elf_inspector import _TypeGraph
+    from zview.backend.elf_inspector import _TypeGraph
 
     graph = _TypeGraph()
     graph.types = types

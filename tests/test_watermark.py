@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from backend.base import AbstractScraper
+from zview.backend.base import AbstractScraper
 
 FILL = 0xAAAAAAAA
 USED = 0x12345678

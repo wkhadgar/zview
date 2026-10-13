@@ -1,0 +1,334 @@
+import argparse
+import curses
+import json
+import sys
+
+from zview.backend.gdb import GDBScraper
+from zview.backend.image import ImageMismatch, verify_target_image
+from zview.backend.jlink import JLinkScraper
+from zview.backend.nrfutil import NrfutilScraper
+from zview.backend.pyocd import PyOCDScraper
+from zview.backend.replay import ReplayScraper
+from zview.frontend.zview_tui import tui_run
+from zview.logging_setup import configure as configure_logging
+from zview.orchestrator import ZScraper
+from zview.snapshot import dump_single_frame, record_session, serialize_frame
+
+AVAILABLE_RUNNERS = ("gdb", "jlink", "nrfutil", "pyocd")
+KNOWN_COMMANDS = ("live", "record", "replay", "dump")
+
+
+def _normalize_argv(argv: list[str]) -> list[str]:
+    """Prepend ``live`` when ``argv`` does not start with a known command."""
+    if not argv:
+        return argv
+    first = argv[0]
+    if first in KNOWN_COMMANDS or first in ("-h", "--help"):
+        return argv
+    return ["live", *argv]
+
+
+def _add_elf(parser: argparse.ArgumentParser, *, required: bool = True) -> None:
+    parser.add_argument(
+        "-e",
+        "--elf-file",
+        required=required,
+        default=None,
+        help="Path to the application's .elf firmware file.",
+    )
+
+
+def _add_live_target(parser: argparse.ArgumentParser, *, required: bool = True) -> None:
+    parser.add_argument(
+        "-r",
+        "--runner",
+        choices=AVAILABLE_RUNNERS,
+        required=required,
+        default=None,
+        help="Debug runner to attach to the live target.",
+    )
+    parser.add_argument(
+        "-t",
+        "--runner-target",
+        required=required,
+        default=None,
+        help="MCU descriptor for the chosen runner.",
+    )
+
+
+def _add_period(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--period",
+        type=float,
+        default=0.10,
+        help="Minimum polling period in seconds (default: 0.10).",
+    )
+
+
+def register_commands(
+    sub: argparse._SubParsersAction,
+    *,
+    auto_filled: frozenset[str] = frozenset(),
+    subcommand_epilogs: dict[str, str] | None = None,
+) -> None:
+    """
+    Add the live/record/replay/dump subparsers to ``sub``.
+    Flag names listed in ``auto_filled`` ({"elf", "target"}) are declared
+    non-required. ``subcommand_epilogs`` maps command name -> epilog text.
+    """
+    epilogs = subcommand_epilogs or {}
+    elf_required = "elf" not in auto_filled
+    target_required = "target" not in auto_filled
+
+    def _sub(name: str, summary: str) -> argparse.ArgumentParser:
+        return sub.add_parser(
+            name,
+            help=summary,
+            epilog=epilogs.get(name),
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+
+    p_live = _sub("live", "Attach to a probe and render the TUI (default).")
+    _add_elf(p_live, required=elf_required)
+    _add_live_target(p_live, required=target_required)
+    _add_period(p_live)
+
+    p_record = _sub("record", "Capture a live session to a .ndjson.gz recording file.")
+    _add_elf(p_record, required=elf_required)
+    _add_live_target(p_record, required=target_required)
+    p_record.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        metavar="FILE",
+        help="Recording target path (.ndjson.gz).",
+    )
+    bound = p_record.add_mutually_exclusive_group(required=True)
+    bound.add_argument("--duration", type=float, help="Recording bound, in seconds.")
+    bound.add_argument("--frames", type=int, help="Recording bound, in data frames.")
+    _add_period(p_record)
+
+    p_replay = _sub("replay", "Render the TUI from a recording file.")
+    _add_elf(p_replay, required=elf_required)
+    p_replay.add_argument(
+        "-i",
+        "--input",
+        required=True,
+        metavar="FILE",
+        help="Recording source path (.ndjson.gz).",
+    )
+    p_replay.add_argument(
+        "--no-pacing",
+        action="store_true",
+        help="Drain the recording as fast as possible instead of honoring its wall-clock cadence.",
+    )
+
+    p_dump = _sub("dump", "Capture a single polling frame and exit (no TUI).")
+    _add_elf(p_dump, required=elf_required)
+    # Dump's runner/target are always optional (-i is the alternative source).
+    _add_live_target(p_dump, required=False)
+    p_dump.add_argument(
+        "-i",
+        "--input",
+        metavar="FILE",
+        help="Replay source path (.ndjson.gz). Mutually exclusive with --runner/--runner-target.",
+    )
+    p_dump.add_argument(
+        "--frame",
+        type=int,
+        default=1,
+        help="Which polling frame to dump (1-indexed). Default: 1.",
+    )
+    p_dump.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the frame as JSON on stdout.",
+    )
+    _add_period(p_dump)
+
+
+def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Post-parse cross-flag validation. Calls ``parser.error()`` on failure."""
+    if args.cmd == "dump":
+        if args.input and (args.runner or args.runner_target):
+            parser.error("dump: --input is mutually exclusive with --runner/--runner-target.")
+        if not args.input and not (args.runner and args.runner_target):
+            parser.error("dump: requires either --input FILE or both --runner and --runner-target.")
+        if args.frame < 1:
+            parser.error("dump: --frame must be >= 1.")
+
+
+def _build_parser(
+    prog: str = "zview",
+    subcommand_epilogs: dict[str, str] | None = None,
+) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=prog,
+        description="ZView - Zephyr RTOS runtime visualizer over SWD.",
+        epilog=f"Run `{prog} <command> --help` for command-specific options.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub = parser.add_subparsers(dest="cmd", metavar="COMMAND", required=True)
+    register_commands(sub, subcommand_epilogs=subcommand_epilogs)
+    return parser
+
+
+def _parse_args(
+    argv: list[str],
+    prog: str = "zview",
+    subcommand_epilogs: dict[str, str] | None = None,
+) -> argparse.Namespace:
+    parser = _build_parser(prog=prog, subcommand_epilogs=subcommand_epilogs)
+    args = parser.parse_args(argv)
+    validate_args(parser, args)
+    return args
+
+
+def _build_live_backend(args):
+    scraper_map = {
+        "gdb": GDBScraper,
+        "jlink": JLinkScraper,
+        "nrfutil": NrfutilScraper,
+        "pyocd": PyOCDScraper,
+    }
+    cls = scraper_map.get(args.runner, PyOCDScraper)
+    return cls(args.runner_target)
+
+
+def _do_live(args) -> int:
+    with _build_live_backend(args) as backend:
+        verify_target_image(backend, args.elf_file)
+        scraper = ZScraper(backend, args.elf_file)
+        for notice in scraper.absent_features():
+            print(notice, file=sys.stderr)
+        curses.wrapper(tui_run, scraper, args.period)
+    return 0
+
+
+def _do_record(args) -> int:
+    backend = _build_live_backend(args)
+    captured = record_session(
+        backend,
+        args.elf_file,
+        args.output,
+        duration=args.duration,
+        frames=args.frames,
+        period=args.period,
+    )
+    print(f"Recorded {captured} frames to {args.output}")
+    return 0
+
+
+def _do_replay(args) -> int:
+    backend = ReplayScraper(args.input, honor_timing=not args.no_pacing)
+    with backend:
+        scraper = ZScraper(backend, args.elf_file)
+        # Pacing comes from the recording; the polling-thread sleep is just a floor.
+        curses.wrapper(tui_run, scraper, 0.05)
+    return 0
+
+
+def _waiters(waiters) -> str:
+    """Render a waiter list. ``None`` prints as ``unknown``, empty as ``-``."""
+    if waiters is None:
+        return "unknown"
+
+    return ",".join(waiters) if waiters else "-"
+
+
+def _do_dump(args) -> int:
+    if args.input:
+        backend = ReplayScraper(args.input, honor_timing=False)
+    else:
+        backend = _build_live_backend(args)
+
+    frame = dump_single_frame(
+        backend,
+        args.elf_file,
+        period=args.period,
+        frame=args.frame,
+    )
+    if args.json:
+        print(json.dumps(serialize_frame(frame)))
+    else:
+        for t in frame.get("threads", []):
+            wm = getattr(t.runtime, "stack_watermark", None)
+            wm = "-" if wm is None else wm
+            size = "-" if t.stack_size is None else t.stack_size
+            print(f"thread {t.name:30s} stack={size:>6}  watermark={wm}")
+        for h in frame.get("heaps", []):
+            print(
+                f"heap {h.name:20s} free={h.free_bytes} "
+                f"alloc={h.allocated_bytes} max={h.max_allocated_bytes} "
+                f"waiters={_waiters(h.waiters)}"
+            )
+        for s in frame.get("semaphores", []):
+            # First match wins.
+            level = next(
+                text
+                for applies, text in (
+                    (not s.is_initialized, "not initialized"),
+                    (s.is_unbounded, f"{s.count}/-"),
+                    (True, f"{s.count}/{s.limit}"),
+                )
+                if applies
+            )
+            print(f"sem  {s.name:20s} {level}  waiters={_waiters(s.waiters)}")
+        for m in frame.get("mutexes", []):
+            state = f"owner={m.owner_name or hex(m.owner_address)} depth={m.lock_count}"
+            print(
+                f"mtx  {m.name:20s} {'LOCKED' if m.is_locked else 'FREE':6s} {state} "
+                f"waiters={_waiters(m.waiters)}"
+            )
+        for q in frame.get("msgqs", []):
+            print(
+                f"msgq {q.name:20s} {q.used_msgs}/{q.max_msgs} x {q.msg_size}B "
+                f"waiters={_waiters(q.waiters)}"
+            )
+        for sl in frame.get("mem_slabs", []):
+            peak = "-" if sl.max_used is None else sl.max_used
+            print(
+                f"slab {sl.name:20s} {sl.num_used}/{sl.num_blocks} x {sl.block_size}B "
+                f"peak={peak} waiters={_waiters(sl.waiters)}"
+            )
+        for w in frame.get("workqs", []):
+            items = ",".join(w.pending) + (",..." if w.pending_truncated else "")
+            print(
+                f"wkq  {w.name:20s} {w.depth} pending flags={','.join(w.states) or '-'} "
+                f"thread={w.thread_name or '-'} items={items or '-'} "
+                f"waiters={_waiters(w.waiters)}"
+            )
+    return 0
+
+
+_DISPATCH = {
+    "live": _do_live,
+    "record": _do_record,
+    "replay": _do_replay,
+    "dump": _do_dump,
+}
+
+
+def dispatch(args: argparse.Namespace) -> int:
+    """Run the command named by ``args.cmd``."""
+    return _DISPATCH[args.cmd](args)
+
+
+def main(
+    argv: list[str] | None = None,
+    prog: str = "zview",
+    subcommand_epilogs: dict[str, str] | None = None,
+) -> int:
+    configure_logging()
+    raw = sys.argv[1:] if argv is None else argv
+    args = _parse_args(_normalize_argv(raw), prog=prog, subcommand_epilogs=subcommand_epilogs)
+
+    try:
+        return dispatch(args)
+    except ImageMismatch as mismatch:
+        print(f"zview: {mismatch}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

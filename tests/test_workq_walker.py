@@ -2,9 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from backend.base import WorkqInfo
-from kernel.layout import KernelLayout
-from kernel.workqs import walk_workqs
+from zview.backend.base import WorkqInfo
+from zview.kernel.layout import KernelLayout
+from zview.kernel.workqs import walk_workqs
 
 
 class FakeScraper:

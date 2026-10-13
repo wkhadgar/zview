@@ -8,11 +8,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from frontend.tui.views.base import BaseStateView, Keybind, ZViewTUIAttributes
-from frontend.tui.views.fatal_error import FatalErrorView
-from frontend.tui.views.heap_detail import HeapDetailView
-from frontend.tui.views.thread_detail import ThreadDetailView
-from frontend.tui.views.thread_list import ThreadListView
+from zview.frontend.tui.views.base import BaseStateView, Keybind, ZViewTUIAttributes
+from zview.frontend.tui.views.fatal_error import FatalErrorView
+from zview.frontend.tui.views.heap_detail import HeapDetailView
+from zview.frontend.tui.views.thread_detail import ThreadDetailView
+from zview.frontend.tui.views.thread_list import ThreadListView
 
 
 @pytest.fixture
@@ -54,7 +54,7 @@ def test_fatal_error_footer_is_help_gateway_only(controller, theme):
 
 
 def test_fit_str_pads_when_shorter():
-    from frontend.tui.widgets import _fit_str
+    from zview.frontend.tui.widgets import _fit_str
 
     assert _fit_str("ab", 6) == "  ab  "
     assert _fit_str("ab", 6, align="<") == "ab    "
@@ -63,27 +63,27 @@ def test_fit_str_pads_when_shorter():
 
 def test_fit_str_truncates_when_longer():
     """Hard-clip the formatted string at exactly ``width``; never spill over."""
-    from frontend.tui.widgets import _fit_str
+    from zview.frontend.tui.widgets import _fit_str
 
     assert _fit_str("1234567890", 4) == "1234"
     assert len(_fit_str("9999999 / 99999999", 8)) == 8
 
 
 def test_truncate_str_returns_unchanged_when_shorter():
-    from frontend.tui.widgets import _truncate_str
+    from zview.frontend.tui.widgets import _truncate_str
 
     assert _truncate_str("hi", 5) == "hi"
 
 
 def test_truncate_str_returns_unchanged_when_exact():
     """Off-by-one guard: name length equal to column width must NOT be truncated."""
-    from frontend.tui.widgets import _truncate_str
+    from zview.frontend.tui.widgets import _truncate_str
 
     assert _truncate_str("hello", 5) == "hello"
 
 
 def test_truncate_str_clips_with_ellipsis_when_longer():
-    from frontend.tui.widgets import _truncate_str
+    from zview.frontend.tui.widgets import _truncate_str
 
     assert _truncate_str("hello world", 8) == "hello..."
     assert len(_truncate_str("a_very_long_name_here", 10)) == 10
@@ -100,7 +100,7 @@ _THREAD_SCHEMA = [25, 7, 7, 27, 14]  # floor sum + 4 seps = 84
 
 
 def test_compute_flex_widths_returns_floor_when_terminal_at_floor():
-    from frontend.tui.views.base import compute_flex_widths
+    from zview.frontend.tui.views.base import compute_flex_widths
 
     # floor=84, reserved col bumps that to 85 before any growth happens
     assert compute_flex_widths(_THREAD_SCHEMA, 84, []) == _THREAD_SCHEMA
@@ -109,7 +109,7 @@ def test_compute_flex_widths_returns_floor_when_terminal_at_floor():
 
 def test_compute_flex_widths_distributes_extra_to_bar_when_no_name_overflow():
     """No name needs more than the floor -> all extra to bar."""
-    from frontend.tui.views.base import compute_flex_widths
+    from zview.frontend.tui.views.base import compute_flex_widths
 
     items = [_Named("main"), _Named("idle")]  # both well under 25
     widths = compute_flex_widths(_THREAD_SCHEMA, 100, items)
@@ -118,7 +118,7 @@ def test_compute_flex_widths_distributes_extra_to_bar_when_no_name_overflow():
 
 def test_compute_flex_widths_grows_name_only_as_needed():
     """Long name absorbs the extra it needs; remainder goes to bar."""
-    from frontend.tui.views.base import compute_flex_widths
+    from zview.frontend.tui.views.base import compute_flex_widths
 
     items = [_Named("x" * 36)]
     # extra (after reserve) = 95 - 84 - 1 = 10; name needs 11; takes all 10, bar floor.
@@ -128,7 +128,7 @@ def test_compute_flex_widths_grows_name_only_as_needed():
 
 def test_compute_flex_widths_caps_name_at_actual_need():
     """Once name is satisfied, leftover goes to bar; name never exceeds longest item."""
-    from frontend.tui.views.base import compute_flex_widths
+    from zview.frontend.tui.views.base import compute_flex_widths
 
     items = [_Named("x" * 36)]
     # extra = 130 - 84 - 1 = 45; name takes 11 (36 - 25), bar takes the remaining 34
@@ -138,7 +138,7 @@ def test_compute_flex_widths_caps_name_at_actual_need():
 
 def test_compute_flex_widths_never_shrinks_below_floor():
     """Bar must never drop below schema floor regardless of input."""
-    from frontend.tui.views.base import compute_flex_widths
+    from zview.frontend.tui.views.base import compute_flex_widths
 
     # Empty items, terminal == floor: no growth, no shrink.
     widths = compute_flex_widths(_THREAD_SCHEMA, 84, [])
@@ -150,7 +150,7 @@ def test_compute_flex_widths_never_shrinks_below_floor():
 
 def test_compute_flex_widths_empty_items_is_safe():
     """No data -> max_name defaults to 0; all extra to bar."""
-    from frontend.tui.views.base import compute_flex_widths
+    from zview.frontend.tui.views.base import compute_flex_widths
 
     widths = compute_flex_widths(_THREAD_SCHEMA, 100, [])
     assert widths[0] == _THREAD_SCHEMA[0]
@@ -162,8 +162,8 @@ def test_compute_flex_widths_empty_items_is_safe():
 
 import curses  # noqa: E402
 
-from backend.base import ThreadInfo  # noqa: E402
-from frontend.tui.views.base import SpecialCode, ZViewState  # noqa: E402
+from zview.backend.base import ThreadInfo  # noqa: E402
+from zview.frontend.tui.views.base import SpecialCode, ZViewState  # noqa: E402
 
 
 def _make_thread(name: str, addr: int = 0x1000) -> ThreadInfo:
@@ -293,7 +293,7 @@ class _StubWin:
 
 def test_thread_detail_history_never_exceeds_the_graph_columns(controller, theme):
     """A surplus of samples would be averaged into moving buckets by the graph."""
-    from backend.base import ThreadInfo, ThreadRuntime
+    from zview.backend.base import ThreadInfo, ThreadRuntime
 
     runtime = ThreadRuntime(
         cpu=10.0, cpu_normalized=5.0, active=True, stack_watermark=64, stack_watermark_percent=25.0
@@ -331,7 +331,7 @@ class _TextWin(_StubWin):
 
 def _unmeasured_thread() -> ThreadInfo:
     """A thread on a build without runtime stats or stack fill."""
-    from backend.base import ThreadRuntime
+    from zview.backend.base import ThreadRuntime
 
     runtime = ThreadRuntime(
         cpu=None,

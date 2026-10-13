@@ -4,7 +4,7 @@
 
 """Coverage for ``HeapDetailView`` pure-function helpers (no curses)."""
 
-from frontend.tui.views.heap_detail import HeapDetailView
+from zview.frontend.tui.views.heap_detail import HeapDetailView
 
 
 def test_sparsity_map_empty_chunks_returns_empty():
@@ -161,7 +161,7 @@ def _heap_controller(waiters=("worker",), used_chunks=8, free=256):
     """Controller holding one heap under the cursor, with a walkable chunk map."""
     from unittest.mock import MagicMock
 
-    from backend.base import HeapInfo
+    from zview.backend.base import HeapInfo
 
     chunks = [{"used": i % 2 == 0, "size": 64} for i in range(used_chunks)]
     heap = HeapInfo(

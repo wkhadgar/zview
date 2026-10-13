@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from kernel.layout import KernelLayout
-from kernel.semaphores import walk_semaphores
+from zview.kernel.layout import KernelLayout
+from zview.kernel.semaphores import walk_semaphores
 
 
 class FakeScraper:

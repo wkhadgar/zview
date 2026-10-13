@@ -11,9 +11,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from backend.base import HeapInfo, ThreadInfo, WorkqInfo
-from frontend.tui.views.base import ZViewState
-from frontend.zview_tui import ZView
+from zview.backend.base import HeapInfo, ThreadInfo, WorkqInfo
+from zview.frontend.tui.views.base import ZViewState
+from zview.frontend.zview_tui import ZView
 
 
 @pytest.fixture
@@ -150,7 +150,7 @@ def test_a_frame_rejected_mid_resize_does_not_end_the_session(app):
 
 def test_process_data_stores_kernel_objects(app):
     """Semaphore and mutex frames land on the controller."""
-    from backend.base import MutexInfo, SemaphoreInfo
+    from zview.backend.base import MutexInfo, SemaphoreInfo
 
     sem = SemaphoreInfo(name="data_ready", address=0x2000, count=1, limit=4, waiters=())
     mutex = MutexInfo(name="spi_bus", address=0x3000, lock_count=0, owner_address=0)
@@ -163,7 +163,7 @@ def test_process_data_stores_kernel_objects(app):
 
 def test_process_data_without_kernel_objects_keeps_the_last_frame(app):
     """A frame without the keys leaves the last values in place."""
-    from backend.base import SemaphoreInfo
+    from zview.backend.base import SemaphoreInfo
 
     sem = SemaphoreInfo(name="s", address=0x2000, count=1, limit=1, waiters=())
     app.process_data({"threads": [], "semaphores": [sem]})
@@ -175,7 +175,7 @@ def test_process_data_without_kernel_objects_keeps_the_last_frame(app):
 
 def test_contention_history_samples_once_per_frame(app):
     """Each frame appends one mark: free, held alone, or held with waiters."""
-    from backend.base import MutexInfo, MutexState
+    from zview.backend.base import MutexInfo, MutexState
 
     free = MutexInfo(name="m", address=0x3000, lock_count=0, owner_address=0, waiters=())
     contended = MutexInfo(
@@ -202,7 +202,7 @@ def test_contention_history_samples_once_per_frame(app):
 
 def test_contention_history_is_bounded(app):
     """History is capped at 256 samples per mutex."""
-    from backend.base import MutexInfo
+    from zview.backend.base import MutexInfo
 
     mutex = MutexInfo(name="m", address=0x3000, lock_count=0, owner_address=0, waiters=())
     for _ in range(600):

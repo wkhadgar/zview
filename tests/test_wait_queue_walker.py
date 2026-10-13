@@ -4,7 +4,7 @@
 
 import pytest
 
-from kernel.wait_queues import resolve_waiter_names, walk_wait_queue
+from zview.kernel.wait_queues import resolve_waiter_names, walk_wait_queue
 
 
 class FakeScraper:

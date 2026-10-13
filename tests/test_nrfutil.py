@@ -9,13 +9,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backend.base import (
+from zview.backend.base import (
     ProbeConnectFailure,
     ProbeReadError,
     ProbeReadMalformed,
     ProbeReadTimeout,
 )
-from backend.nrfutil import NrfutilScraper
+from zview.backend.nrfutil import NrfutilScraper
 
 NRFUTIL_PATH = "/usr/bin/nrfutil"
 
@@ -55,7 +55,7 @@ def _completed(stdout: str = "", stderr: str = "", returncode: int = 0) -> Magic
 @pytest.fixture
 def scraper():
     """A scraper that believes nrfutil is installed, without touching the filesystem."""
-    with patch("backend.nrfutil.shutil.which", return_value=NRFUTIL_PATH):
+    with patch("zview.backend.nrfutil.shutil.which", return_value=NRFUTIL_PATH):
         return NrfutilScraper("001057722700")
 
 
@@ -66,14 +66,15 @@ def test_selector_prefers_the_serial_number(scraper):
 
 def test_selector_falls_back_to_the_jlink_trait():
     """Without a target_mcu, nrfutil is asked for the sole attached J-Link."""
-    with patch("backend.nrfutil.shutil.which", return_value=NRFUTIL_PATH):
+    with patch("zview.backend.nrfutil.shutil.which", return_value=NRFUTIL_PATH):
         assert NrfutilScraper(None)._selector() == ["--traits", "jlink"]
 
 
 def test_read_builds_a_direct_json_read_command(scraper):
     """Reads are issued as `nrfutil --json device read --direct` for the probe."""
     with patch(
-        "backend.nrfutil.subprocess.run", return_value=_completed(_success_stdout([1, 2, 3, 4]))
+        "zview.backend.nrfutil.subprocess.run",
+        return_value=_completed(_success_stdout([1, 2, 3, 4])),
     ) as run:
         scraper.read_bytes(0x20000000, 4)
 
@@ -88,7 +89,7 @@ def test_read_builds_a_direct_json_read_command(scraper):
 
 def test_read_bytes_returns_the_payload(scraper):
     with patch(
-        "backend.nrfutil.subprocess.run",
+        "zview.backend.nrfutil.subprocess.run",
         return_value=_completed(_success_stdout([0xDE, 0xAD, 0xBE, 0xEF])),
     ):
         assert scraper.read_bytes(0x20000000, 4) == b"\xde\xad\xbe\xef"
@@ -97,7 +98,7 @@ def test_read_bytes_returns_the_payload(scraper):
 def test_read_bytes_concatenates_memory_blocks(scraper):
     """nrfutil may split a read across memoryData blocks; they join in order."""
     with patch(
-        "backend.nrfutil.subprocess.run",
+        "zview.backend.nrfutil.subprocess.run",
         return_value=_completed(_success_stdout([1, 2], [3, 4])),
     ):
         assert scraper.read_bytes(0x20000000, 4) == b"\x01\x02\x03\x04"
@@ -113,21 +114,21 @@ def test_read_bytes_ignores_non_task_end_and_undecodable_lines(scraper):
         + _success_stdout([0xAA, 0xBB])
     )
 
-    with patch("backend.nrfutil.subprocess.run", return_value=_completed(stdout)):
+    with patch("zview.backend.nrfutil.subprocess.run", return_value=_completed(stdout)):
         assert scraper.read_bytes(0x20000000, 2) == b"\xaa\xbb"
 
 
 def test_read_bytes_truncates_an_overlong_payload(scraper):
     """A probe returning more than requested is clipped to the asked-for length."""
     with patch(
-        "backend.nrfutil.subprocess.run",
+        "zview.backend.nrfutil.subprocess.run",
         return_value=_completed(_success_stdout([1, 2, 3, 4, 5, 6])),
     ):
         assert scraper.read_bytes(0x20000000, 4) == b"\x01\x02\x03\x04"
 
 
 def test_zero_length_read_never_spawns_a_process(scraper):
-    with patch("backend.nrfutil.subprocess.run") as run:
+    with patch("zview.backend.nrfutil.subprocess.run") as run:
         assert scraper.read_bytes(0x20000000, 0) == b""
         assert scraper.read_bytes(0x20000000, -1) == b""
 
@@ -170,7 +171,7 @@ def test_word_reads_request_the_right_byte_count(scraper):
 def test_timeout_maps_to_probe_read_timeout(scraper):
     with (
         patch(
-            "backend.nrfutil.subprocess.run",
+            "zview.backend.nrfutil.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd="nrfutil", timeout=20.0),
         ),
         pytest.raises(ProbeReadTimeout, match="timed out"),
@@ -181,7 +182,7 @@ def test_timeout_maps_to_probe_read_timeout(scraper):
 def test_failed_task_maps_to_probe_read_error_and_quotes_nrfutil(scraper):
     with (
         patch(
-            "backend.nrfutil.subprocess.run",
+            "zview.backend.nrfutil.subprocess.run",
             return_value=_completed(_fail_stdout("Device is protected"), returncode=1),
         ),
         pytest.raises(ProbeReadError, match="Device is protected"),
@@ -193,7 +194,7 @@ def test_unparseable_output_falls_back_to_stderr(scraper):
     """With no task_end record at all, stderr is the only clue worth reporting."""
     with (
         patch(
-            "backend.nrfutil.subprocess.run",
+            "zview.backend.nrfutil.subprocess.run",
             return_value=_completed("", stderr="no probe found", returncode=1),
         ),
         pytest.raises(ProbeReadError, match="no probe found"),
@@ -204,7 +205,7 @@ def test_unparseable_output_falls_back_to_stderr(scraper):
 def test_silent_failure_still_reports_something(scraper):
     """Empty stdout and stderr must not produce an empty error message."""
     with (
-        patch("backend.nrfutil.subprocess.run", return_value=_completed("", "", 1)),
+        patch("zview.backend.nrfutil.subprocess.run", return_value=_completed("", "", 1)),
         pytest.raises(ProbeReadError, match="no data returned"),
     ):
         scraper.read_bytes(0x20000000, 4)
@@ -213,7 +214,9 @@ def test_silent_failure_still_reports_something(scraper):
 def test_short_read_maps_to_malformed(scraper):
     """Fewer bytes than requested is a malformed answer, never a silent short read."""
     with (
-        patch("backend.nrfutil.subprocess.run", return_value=_completed(_success_stdout([1, 2]))),
+        patch(
+            "zview.backend.nrfutil.subprocess.run", return_value=_completed(_success_stdout([1, 2]))
+        ),
         pytest.raises(ProbeReadMalformed),
     ):
         scraper.read_bytes(0x20000000, 4)
@@ -223,14 +226,16 @@ def test_short_read_maps_to_malformed(scraper):
 def test_undecodable_values_map_to_malformed(scraper, values):
     """Out-of-range ints and non-int values both honor the documented contract."""
     with (
-        patch("backend.nrfutil.subprocess.run", return_value=_completed(_success_stdout(values))),
+        patch(
+            "zview.backend.nrfutil.subprocess.run", return_value=_completed(_success_stdout(values))
+        ),
         pytest.raises(ProbeReadMalformed, match="Malformed data"),
     ):
         scraper.read_bytes(0x20000000, 4)
 
 
 def test_connect_requires_the_nrfutil_binary():
-    with patch("backend.nrfutil.shutil.which", return_value=None):
+    with patch("zview.backend.nrfutil.shutil.which", return_value=None):
         scraper = NrfutilScraper("001057722700")
 
         with pytest.raises(ProbeConnectFailure, match="not found on PATH"):
@@ -242,7 +247,8 @@ def test_connect_requires_the_nrfutil_binary():
 def test_connect_validates_reachability_with_a_small_read(scraper):
     """Having no session of its own, connect proves the probe works by reading."""
     with patch(
-        "backend.nrfutil.subprocess.run", return_value=_completed(_success_stdout([0, 0, 0, 0]))
+        "zview.backend.nrfutil.subprocess.run",
+        return_value=_completed(_success_stdout([0, 0, 0, 0])),
     ) as run:
         scraper.connect()
 
@@ -258,7 +264,7 @@ def test_connect_wraps_read_failures_as_connect_failures(scraper):
     """A probe error during the reachability read is a connection problem."""
     with (
         patch(
-            "backend.nrfutil.subprocess.run",
+            "zview.backend.nrfutil.subprocess.run",
             return_value=_completed(_fail_stdout("No debuggers found"), returncode=1),
         ),
         pytest.raises(ProbeConnectFailure, match="No debuggers found"),
@@ -271,7 +277,8 @@ def test_connect_wraps_read_failures_as_connect_failures(scraper):
 def test_connect_is_idempotent(scraper):
     """A second connect must not re-probe an already connected target."""
     with patch(
-        "backend.nrfutil.subprocess.run", return_value=_completed(_success_stdout([0, 0, 0, 0]))
+        "zview.backend.nrfutil.subprocess.run",
+        return_value=_completed(_success_stdout([0, 0, 0, 0])),
     ) as run:
         scraper.connect()
         scraper.connect()
@@ -282,7 +289,8 @@ def test_connect_is_idempotent(scraper):
 def test_context_manager_connects_and_disconnects(scraper):
     with (
         patch(
-            "backend.nrfutil.subprocess.run", return_value=_completed(_success_stdout([0, 0, 0, 0]))
+            "zview.backend.nrfutil.subprocess.run",
+            return_value=_completed(_success_stdout([0, 0, 0, 0])),
         ),
         scraper as entered,
     ):

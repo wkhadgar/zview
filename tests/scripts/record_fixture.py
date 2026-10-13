@@ -18,9 +18,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from backend.gdb import GDBScraper  # noqa: E402
-from backend.recording import RecordingScraper  # noqa: E402
-from orchestrator import ZScraper  # noqa: E402
+from zview.backend.gdb import GDBScraper  # noqa: E402
+from zview.backend.recording import RecordingScraper  # noqa: E402
+from zview.orchestrator import ZScraper  # noqa: E402
 
 
 def main() -> int:

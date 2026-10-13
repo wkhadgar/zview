@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from backend.base import ProbeReadError
-from backend.image import ImageMismatch, elf_span, verify_target_image
+from zview.backend.base import ProbeReadError
+from zview.backend.image import ImageMismatch, elf_span, verify_target_image
 
 
 @pytest.fixture
