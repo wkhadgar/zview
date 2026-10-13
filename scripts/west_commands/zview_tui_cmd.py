@@ -5,7 +5,7 @@ from pathlib import Path
 from west.commands import WestCommand
 
 _zview_base = Path(__file__).parent.parent.parent
-sys.path.append(str(_zview_base / "src"))
+sys.path.insert(0, str(_zview_base / "src"))
 
 from zview import cli  # noqa: E402
 from zview.logging_setup import configure as configure_logging  # noqa: E402
