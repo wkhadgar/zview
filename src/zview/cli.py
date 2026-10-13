@@ -8,7 +8,7 @@ from collections.abc import Callable
 from yaml import YAMLError
 
 from zview.backend.gdb import GDBScraper
-from zview.backend.image import ImageMismatch, verify_target_image
+from zview.backend.image import verify_target_image
 from zview.backend.jlink import JLinkScraper
 from zview.backend.nrfutil import NrfutilScraper
 from zview.backend.pyocd import PyOCDScraper
@@ -413,6 +413,16 @@ def dispatch(args: argparse.Namespace) -> int:
     return _DISPATCH[args.cmd](args)
 
 
+def failure_report(error: Exception) -> str:
+    """Log ``error`` with its traceback; return the one line reported to the user."""
+    log_path = configure_logging()
+    message = str(error) or type(error).__name__
+
+    logger.error("Command failed: %s", message, exc_info=error)
+
+    return f"{message} (traceback in {log_path})"
+
+
 def main(
     argv: list[str] | None = None,
     prog: str = "zview",
@@ -424,8 +434,8 @@ def main(
 
     try:
         return dispatch(args)
-    except ImageMismatch as mismatch:
-        print(f"zview: {mismatch}", file=sys.stderr)
+    except Exception as error:
+        print(f"zview: {failure_report(error)}", file=sys.stderr)
         return 1
 
 
