@@ -1,7 +1,11 @@
 import argparse
 import curses
 import json
+import logging
 import sys
+from collections.abc import Callable
+
+from yaml import YAMLError
 
 from zview.backend.gdb import GDBScraper
 from zview.backend.image import ImageMismatch, verify_target_image
@@ -12,10 +16,15 @@ from zview.backend.replay import ReplayScraper
 from zview.frontend.zview_tui import tui_run
 from zview.logging_setup import configure as configure_logging
 from zview.orchestrator import ZScraper
+from zview.runner_config import BuildDirError, RunnerConfig, find_elf, image_dir, runners_yaml_path
 from zview.snapshot import dump_single_frame, record_session, serialize_frame
+
+logger = logging.getLogger("zview.cli")
 
 AVAILABLE_RUNNERS = ("gdb", "jlink", "nrfutil", "pyocd")
 KNOWN_COMMANDS = ("live", "record", "replay", "dump")
+PROBE_COMMANDS = ("live", "record")
+RUNNERS_NEEDING_TARGET = ("gdb", "jlink")
 
 
 def _normalize_argv(argv: list[str]) -> list[str]:
@@ -28,29 +37,38 @@ def _normalize_argv(argv: list[str]) -> list[str]:
     return ["live", *argv]
 
 
-def _add_elf(parser: argparse.ArgumentParser, *, required: bool = True) -> None:
+def _add_elf(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "-e",
         "--elf-file",
-        required=required,
         default=None,
         help="Path to the application's .elf firmware file.",
     )
+    parser.add_argument(
+        "-d",
+        "--build-dir",
+        metavar="DIR",
+        default=None,
+        help="Application build directory to read unset arguments from.",
+    )
+    parser.add_argument(
+        "--domain",
+        default=None,
+        help="Sysbuild domain to view (default: the build's default domain).",
+    )
 
 
-def _add_live_target(parser: argparse.ArgumentParser, *, required: bool = True) -> None:
+def _add_live_target(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "-r",
         "--runner",
         choices=AVAILABLE_RUNNERS,
-        required=required,
         default=None,
         help="Debug runner to attach to the live target.",
     )
     parser.add_argument(
         "-t",
         "--runner-target",
-        required=required,
         default=None,
         help="MCU descriptor for the chosen runner.",
     )
@@ -68,17 +86,13 @@ def _add_period(parser: argparse.ArgumentParser) -> None:
 def register_commands(
     sub: argparse._SubParsersAction,
     *,
-    auto_filled: frozenset[str] = frozenset(),
     subcommand_epilogs: dict[str, str] | None = None,
 ) -> None:
     """
     Add the live/record/replay/dump subparsers to ``sub``.
-    Flag names listed in ``auto_filled`` ({"elf", "target"}) are declared
-    non-required. ``subcommand_epilogs`` maps command name -> epilog text.
+    ``subcommand_epilogs`` maps command name -> epilog text.
     """
     epilogs = subcommand_epilogs or {}
-    elf_required = "elf" not in auto_filled
-    target_required = "target" not in auto_filled
 
     def _sub(name: str, summary: str) -> argparse.ArgumentParser:
         return sub.add_parser(
@@ -89,13 +103,13 @@ def register_commands(
         )
 
     p_live = _sub("live", "Attach to a probe and render the TUI (default).")
-    _add_elf(p_live, required=elf_required)
-    _add_live_target(p_live, required=target_required)
+    _add_elf(p_live)
+    _add_live_target(p_live)
     _add_period(p_live)
 
     p_record = _sub("record", "Capture a live session to a .ndjson.gz recording file.")
-    _add_elf(p_record, required=elf_required)
-    _add_live_target(p_record, required=target_required)
+    _add_elf(p_record)
+    _add_live_target(p_record)
     p_record.add_argument(
         "-o",
         "--output",
@@ -109,7 +123,7 @@ def register_commands(
     _add_period(p_record)
 
     p_replay = _sub("replay", "Render the TUI from a recording file.")
-    _add_elf(p_replay, required=elf_required)
+    _add_elf(p_replay)
     p_replay.add_argument(
         "-i",
         "--input",
@@ -124,9 +138,8 @@ def register_commands(
     )
 
     p_dump = _sub("dump", "Capture a single polling frame and exit (no TUI).")
-    _add_elf(p_dump, required=elf_required)
-    # Dump's runner/target are always optional (-i is the alternative source).
-    _add_live_target(p_dump, required=False)
+    _add_elf(p_dump)
+    _add_live_target(p_dump)
     p_dump.add_argument(
         "-i",
         "--input",
@@ -147,8 +160,82 @@ def register_commands(
     _add_period(p_dump)
 
 
+def _wants_runner(args: argparse.Namespace) -> bool:
+    """True when ``args`` attaches to a probe."""
+    if args.cmd == "dump":
+        return args.input is None
+
+    return args.cmd in PROBE_COMMANDS
+
+
+def needs_build_dir(args: argparse.Namespace) -> bool:
+    """True when ``args`` leaves the ELF, or the runner it attaches with, unset."""
+    if args.elf_file is None:
+        return True
+
+    if not _wants_runner(args):
+        return False
+
+    return args.runner is None or args.runner_target is None
+
+
+def fill_from_build_dir(args: argparse.Namespace, warn: Callable[[str], None]) -> None:
+    """
+    Fill the ELF, runner and target left unset in ``args`` from ``args.build_dir``.
+    Raises ``BuildDirError`` when the build directory lacks an unset artifact.
+    """
+    if not needs_build_dir(args):
+        return
+
+    image = image_dir(args.build_dir, args.domain)
+
+    if args.elf_file is None:
+        args.elf_file = str(find_elf(image))
+
+    if not _wants_runner(args):
+        return
+
+    if args.runner is not None and args.runner_target is not None:
+        return
+
+    yaml_path = runners_yaml_path(image)
+    try:
+        cfg = RunnerConfig(yaml_path)
+    except (OSError, YAMLError) as e:
+        raise BuildDirError(
+            f"Failed to parse '{yaml_path}': {e}. Please specify runner ('-r') and target ('-t')."
+        ) from e
+
+    runner, target_mcu = cfg.get_config(preferred_runner=args.runner)
+    if runner not in AVAILABLE_RUNNERS:
+        warn(
+            f"'{runner}' is not a valid runner for ZView. Try explicitly passing one of "
+            f"the following: {', '.join(AVAILABLE_RUNNERS)}"
+        )
+        warn("Trying to continue with PyOCD as runner...")
+        runner, target_mcu = cfg.get_config(preferred_runner="pyocd")
+
+    if args.runner is None:
+        args.runner = runner
+    if args.runner_target is None and target_mcu is not None:
+        args.runner_target = str(target_mcu)
+
+    logger.debug("Runner '%s', target '%s' from '%s'.", args.runner, args.runner_target, yaml_path)
+
+
 def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     """Post-parse cross-flag validation. Calls ``parser.error()`` on failure."""
+    if args.elf_file is None:
+        parser.error(f"{args.cmd}: requires --elf-file or --build-dir.")
+
+    probe_unset = args.cmd in PROBE_COMMANDS and (args.runner is None or args.runner_target is None)
+    if probe_unset and args.build_dir is None:
+        parser.error(f"{args.cmd}: requires --runner and --runner-target, or --build-dir.")
+
+    target_needed = args.cmd in PROBE_COMMANDS and args.runner in RUNNERS_NEEDING_TARGET
+    if target_needed and args.runner_target is None:
+        parser.error(f"{args.cmd}: runner '{args.runner}' requires --runner-target.")
+
     if args.cmd == "dump":
         if args.input and (args.runner or args.runner_target):
             parser.error("dump: --input is mutually exclusive with --runner/--runner-target.")
@@ -180,8 +267,20 @@ def _parse_args(
 ) -> argparse.Namespace:
     parser = _build_parser(prog=prog, subcommand_epilogs=subcommand_epilogs)
     args = parser.parse_args(argv)
+
+    if args.build_dir is not None:
+        try:
+            fill_from_build_dir(args, warn=_warn)
+        except BuildDirError as e:
+            parser.error(str(e))
+
     validate_args(parser, args)
+
     return args
+
+
+def _warn(message: str) -> None:
+    print(f"zview: warning: {message}", file=sys.stderr)
 
 
 def _build_live_backend(args):

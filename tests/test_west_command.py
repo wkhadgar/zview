@@ -16,7 +16,18 @@ pytest.importorskip("west")
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT / "scripts" / "west_commands"))
 
-from zview_tui_cmd import ZViewCommand, _command_wants_runner  # noqa: E402
+from zview_tui_cmd import ZViewCommand  # noqa: E402
+
+from zview import cli  # noqa: E402
+
+_RUNNERS_YAML = (
+    "flash-runner: jlink\n"
+    "config:\n"
+    "  elf_file: zephyr.elf\n"
+    "args:\n"
+    "  jlink:\n"
+    "    - --device=nRF5340_xxAA\n"
+)
 
 
 def _make_cmd() -> ZViewCommand:
@@ -24,126 +35,161 @@ def _make_cmd() -> ZViewCommand:
     cmd = ZViewCommand()
     cmd.config = MagicMock()
     cmd.config.getboolean.return_value = False
+    cmd.parser = cmd.do_add_parser(argparse.ArgumentParser().add_subparsers())
     return cmd
 
 
-def _ns(**kwargs) -> argparse.Namespace:
-    """Build a namespace with default fields; ``kwargs`` override."""
-    defaults = {
-        "cmd": "live",
-        "elf_file": None,
-        "runner": None,
-        "runner_target": None,
-        "input": None,
-        "period": 0.10,
-    }
-    defaults.update(kwargs)
-    return argparse.Namespace(**defaults)
+def _run(monkeypatch, argv: list[str]) -> tuple[int, argparse.Namespace | None]:
+    """Run ``west zview <argv>``; return (exit code, namespace handed to dispatch)."""
+    dispatched = []
+
+    def fake_dispatch(args: argparse.Namespace) -> int:
+        dispatched.append(args)
+        return 0
+
+    monkeypatch.setattr(cli, "dispatch", fake_dispatch)
+    cmd = _make_cmd()
+    args = cmd.parser.parse_args(argv)
+
+    with pytest.raises(SystemExit) as exc:
+        cmd.do_run(args, [])
+
+    return exc.value.code, (dispatched[0] if dispatched else None)
 
 
-def test_command_wants_runner_live():
-    assert _command_wants_runner(_ns(cmd="live")) is True
-
-
-def test_command_wants_runner_record():
-    assert _command_wants_runner(_ns(cmd="record")) is True
-
-
-def test_command_wants_runner_replay_never():
-    assert _command_wants_runner(_ns(cmd="replay")) is False
-
-
-def test_command_wants_runner_dump_with_input_no():
-    assert _command_wants_runner(_ns(cmd="dump", input="x.gz")) is False
-
-
-def test_command_wants_runner_dump_without_input_yes():
-    assert _command_wants_runner(_ns(cmd="dump", input=None)) is True
+def _write_build(image: Path, runners_yaml: str | None = _RUNNERS_YAML) -> Path:
+    """Populate ``image/zephyr`` with an empty ELF and a runners.yaml; return the ELF."""
+    zephyr_dir = image / "zephyr"
+    zephyr_dir.mkdir(parents=True)
+    elf = zephyr_dir / "zephyr.elf"
+    elf.write_bytes(b"")
+    if runners_yaml is not None:
+        (zephyr_dir / "runners.yaml").write_text(runners_yaml)
+    return elf
 
 
 @pytest.fixture
-def fake_build_dir(tmp_path, monkeypatch):
-    """``tmp_path`` with ``build/zephyr/zephyr.elf`` + ``runners.yaml`` populated."""
-    build = tmp_path / "build" / "zephyr"
-    build.mkdir(parents=True)
-    elf = build / "zephyr.elf"
-    elf.write_bytes(b"")
-    runners_yaml = build / "runners.yaml"
-    runners_yaml.write_text("flash-runner: jlink\nargs:\n  jlink:\n    - --device=nRF5340_xxAA\n")
-    monkeypatch.chdir(tmp_path)
-    return tmp_path
+def fake_zephyr(tmp_path, monkeypatch):
+    """``ZEPHYR_BASE`` whose ``run_common.get_build_dir`` answers ``tmp_path / "build"``."""
+    build = tmp_path / "build"
+    west_commands = tmp_path / "zephyr" / "scripts" / "west_commands"
+    west_commands.mkdir(parents=True)
+    (west_commands / "run_common.py").write_text(
+        f"def get_build_dir(args):\n    return {str(build)!r}\n"
+    )
+    monkeypatch.setenv("ZEPHYR_BASE", str(tmp_path / "zephyr"))
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.delitem(sys.modules, "run_common", raising=False)
+    return build
 
 
-def test_fill_elf_when_missing_uses_build_path(fake_build_dir):
-    cmd = _make_cmd()
-    args = _ns()
-    cmd._fill_elf(args)
-    assert args.elf_file == str(fake_build_dir / "build" / "zephyr" / "zephyr.elf")
+@pytest.fixture
+def no_zephyr(monkeypatch):
+    monkeypatch.delenv("ZEPHYR_BASE", raising=False)
 
 
-def test_fill_elf_skips_when_explicit(fake_build_dir):
-    cmd = _make_cmd()
-    args = _ns(elf_file="/custom/path.elf")
-    cmd._fill_elf(args)
+def test_bare_invocation_takes_everything_from_the_default_build_dir(fake_zephyr, monkeypatch):
+    elf = _write_build(fake_zephyr)
+
+    rc, args = _run(monkeypatch, [])
+
+    assert rc == 0
+    assert args.build_dir == str(fake_zephyr)
+    assert args.elf_file == str(elf)
+    assert args.runner == "jlink"
+    assert args.runner_target == "nRF5340_xxAA"
+
+
+def test_explicit_elf_still_takes_the_runner_from_the_build_dir(fake_zephyr, monkeypatch):
+    _write_build(fake_zephyr)
+
+    rc, args = _run(monkeypatch, ["live", "-e", "/custom/path.elf"])
+
+    assert rc == 0
     assert args.elf_file == "/custom/path.elf"
-
-
-def test_fill_elf_dies_when_build_missing(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    cmd = _make_cmd()
-    args = _ns()
-    with pytest.raises(SystemExit):
-        cmd._fill_elf(args)
-
-
-def test_fill_runner_for_live(fake_build_dir):
-    cmd = _make_cmd()
-    args = _ns(cmd="live")
-    cmd._fill_runner(args)
     assert args.runner == "jlink"
     assert args.runner_target == "nRF5340_xxAA"
 
 
-def test_fill_runner_for_record(fake_build_dir):
-    cmd = _make_cmd()
-    args = _ns(cmd="record")
-    cmd._fill_runner(args)
-    assert args.runner == "jlink"
-    assert args.runner_target == "nRF5340_xxAA"
+def test_explicit_build_dir_needs_no_zephyr_base(tmp_path, monkeypatch, no_zephyr):
+    elf = _write_build(tmp_path / "out")
+
+    rc, args = _run(monkeypatch, ["live", "-d", str(tmp_path / "out")])
+
+    assert rc == 0
+    assert args.elf_file == str(elf)
 
 
-def test_fill_runner_skips_when_both_explicit(fake_build_dir):
-    cmd = _make_cmd()
-    args = _ns(cmd="live", runner="pyocd", runner_target="stm32h753zitx")
-    cmd._fill_runner(args)
+def test_fully_explicit_run_skips_the_build_dir(monkeypatch, no_zephyr):
+    rc, args = _run(
+        monkeypatch, ["live", "-e", "/custom/path.elf", "-r", "pyocd", "-t", "stm32h753zitx"]
+    )
+
+    assert rc == 0
+    assert args.build_dir is None
     assert args.runner == "pyocd"
     assert args.runner_target == "stm32h753zitx"
 
 
-def test_fill_runner_fills_only_missing_target(fake_build_dir):
-    cmd = _make_cmd()
-    args = _ns(cmd="live", runner="jlink", runner_target=None)
-    cmd._fill_runner(args)
-    assert args.runner == "jlink"  # untouched
-    assert args.runner_target == "nRF5340_xxAA"
+def test_replay_takes_only_the_elf(tmp_path, monkeypatch, no_zephyr):
+    elf = _write_build(tmp_path, runners_yaml=None)
+
+    rc, args = _run(monkeypatch, ["replay", "-d", str(tmp_path), "-i", "x.ndjson.gz"])
+
+    assert rc == 0
+    assert args.elf_file == str(elf)
+    assert args.runner is None
+
+
+def test_domain_selects_the_sysbuild_image(tmp_path, monkeypatch, no_zephyr):
+    (tmp_path / "domains.yaml").write_text(
+        f"default: app\n"
+        f"build_dir: {tmp_path}\n"
+        f"domains:\n"
+        f"  - name: app\n"
+        f"    build_dir: {tmp_path / 'app'}\n"
+        f"  - name: remote\n"
+        f"    build_dir: {tmp_path / 'remote'}\n"
+    )
+    _write_build(tmp_path / "app")
+    remote_elf = _write_build(tmp_path / "remote")
+
+    rc, args = _run(monkeypatch, ["live", "-d", str(tmp_path), "--domain", "remote"])
+
+    assert rc == 0
+    assert args.elf_file == str(remote_elf)
+
+
+def test_missing_zephyr_base_is_fatal(monkeypatch, capsys, no_zephyr):
+    rc, args = _run(monkeypatch, [])
+
+    assert rc != 0
+    assert args is None
+    assert "ZEPHYR_BASE" in capsys.readouterr().err
+
+
+def test_missing_firmware_is_fatal(tmp_path, monkeypatch, capsys, no_zephyr):
+    rc, args = _run(monkeypatch, ["live", "-d", str(tmp_path)])
+
+    assert rc != 0
+    assert args is None
+    assert "Could not find firmware" in capsys.readouterr().err
 
 
 def test_parser_bare_invocation_defaults_to_live():
     cmd = _make_cmd()
-    subparsers = argparse.ArgumentParser().add_subparsers()
-    parser = cmd.do_add_parser(subparsers)
-    args = parser.parse_args([])
+    args = cmd.parser.parse_args([])
     assert args.cmd == "live"
     assert args.elf_file is None
+    assert args.build_dir is None
+    assert args.domain is None
     assert args.runner is None
     assert args.runner_target is None
 
 
 def test_parser_dump_command_parses_input_and_json():
     cmd = _make_cmd()
-    subparsers = argparse.ArgumentParser().add_subparsers()
-    parser = cmd.do_add_parser(subparsers)
-    args = parser.parse_args(["dump", "-i", "x.gz", "--json"])
+    args = cmd.parser.parse_args(["dump", "-i", "x.gz", "--json"])
     assert args.cmd == "dump"
     assert args.input == "x.gz"
     assert args.json is True

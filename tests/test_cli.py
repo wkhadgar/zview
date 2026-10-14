@@ -4,9 +4,12 @@
 
 """CLI wiring coverage for zview.cli.main."""
 
+import argparse
 import json
 import sys
 from pathlib import Path
+
+import pytest
 
 from zview import cli
 
@@ -326,3 +329,140 @@ def test_replay_no_pacing_passes_to_scraper(monkeypatch, capsys):
     )
     assert rc == 0
     assert captured["honor_timing"] is False
+
+
+_RUNNERS_YAML = (
+    "flash-runner: jlink\n"
+    "config:\n"
+    "  elf_file: zephyr.elf\n"
+    "args:\n"
+    "  jlink:\n"
+    "    - --device=nRF5340_xxAA\n"
+)
+
+
+def _write_build(image: Path, runners_yaml: str | None = _RUNNERS_YAML) -> Path:
+    """Populate ``image/zephyr`` with an empty ELF and a runners.yaml; return the ELF."""
+    zephyr_dir = image / "zephyr"
+    zephyr_dir.mkdir(parents=True)
+    elf = zephyr_dir / "zephyr.elf"
+    elf.write_bytes(b"")
+    if runners_yaml is not None:
+        (zephyr_dir / "runners.yaml").write_text(runners_yaml)
+    return elf
+
+
+def _capture_dispatch(monkeypatch) -> list[argparse.Namespace]:
+    """Replace ``dispatch``; return the list each dispatched namespace lands in."""
+    dispatched = []
+
+    def fake_dispatch(args: argparse.Namespace) -> int:
+        dispatched.append(args)
+        return 0
+
+    monkeypatch.setattr(cli, "dispatch", fake_dispatch)
+    return dispatched
+
+
+@pytest.mark.parametrize(
+    ("cmd", "input_file", "expected"),
+    [
+        ("live", None, True),
+        ("record", None, True),
+        ("dump", None, True),
+        ("dump", "x.gz", False),
+        ("replay", "x.gz", False),
+    ],
+)
+def test_wants_runner_by_command(cmd, input_file, expected):
+    args = argparse.Namespace(cmd=cmd, input=input_file)
+
+    assert cli._wants_runner(args) is expected
+
+
+def test_needs_no_build_dir_for_a_replay_with_an_elf():
+    args = argparse.Namespace(cmd="replay", input="x.gz", elf_file="x.elf")
+
+    assert cli.needs_build_dir(args) is False
+
+
+def test_build_dir_fills_the_live_elf_runner_and_target(monkeypatch, capsys, tmp_path):
+    elf = _write_build(tmp_path)
+    dispatched = _capture_dispatch(monkeypatch)
+
+    rc, _, _ = _invoke(monkeypatch, capsys, ["-d", str(tmp_path)])
+
+    assert rc == 0
+    assert dispatched[0].elf_file == str(elf)
+    assert dispatched[0].runner == "jlink"
+    assert dispatched[0].runner_target == "nRF5340_xxAA"
+
+
+def test_neither_elf_nor_build_dir_is_a_usage_error(monkeypatch, capsys):
+    rc, _, err = _invoke(monkeypatch, capsys, ["replay", "-i", str(_FIXTURE)])
+
+    assert rc == 2
+    assert "--build-dir" in err
+
+
+def test_build_dir_without_runners_yaml_asks_for_the_runner(monkeypatch, capsys, tmp_path):
+    _write_build(tmp_path, runners_yaml=None)
+
+    rc, _, err = _invoke(monkeypatch, capsys, ["-d", str(tmp_path)])
+
+    assert rc == 2
+    assert "Please specify runner" in err
+
+
+def test_foreign_flash_runner_falls_back_to_pyocd(monkeypatch, capsys, tmp_path):
+    _write_build(
+        tmp_path,
+        runners_yaml=(
+            "flash-runner: stm32cubeprogrammer\nargs:\n  pyocd:\n    - --target=stm32h753zitx\n"
+        ),
+    )
+    dispatched = _capture_dispatch(monkeypatch)
+
+    rc, _, err = _invoke(monkeypatch, capsys, ["-d", str(tmp_path)])
+
+    assert rc == 0
+    assert dispatched[0].runner == "pyocd"
+    assert dispatched[0].runner_target == "stm32h753zitx"
+    assert "zview: warning: 'stm32cubeprogrammer'" in err
+
+
+@pytest.mark.parametrize("runner", ["nrfutil", "pyocd"])
+def test_build_dir_may_leave_the_target_unset(monkeypatch, capsys, tmp_path, runner):
+    """nrfutil picks the sole J-Link and pyocd auto-detects the MCU without a target."""
+    _write_build(tmp_path, runners_yaml=f"flash-runner: {runner}\n")
+    dispatched = _capture_dispatch(monkeypatch)
+
+    rc, _, _ = _invoke(monkeypatch, capsys, ["-d", str(tmp_path)])
+
+    assert rc == 0
+    assert dispatched[0].runner == runner
+    assert dispatched[0].runner_target is None
+
+
+@pytest.mark.parametrize("runner", ["gdb", "jlink"])
+def test_runner_needing_a_target_rejects_an_unset_one(monkeypatch, capsys, tmp_path, runner):
+    _write_build(tmp_path, runners_yaml="flash-runner: jlink\n")
+
+    rc, _, err = _invoke(monkeypatch, capsys, ["-d", str(tmp_path), "-r", runner])
+
+    assert rc == 2
+    assert f"runner '{runner}' requires --runner-target" in err
+
+
+def test_explicit_runner_and_target_need_no_runners_yaml(monkeypatch, capsys, tmp_path):
+    """A QEMU build without runners.yaml takes only its ELF from the build directory."""
+    elf = _write_build(tmp_path, runners_yaml=None)
+    dispatched = _capture_dispatch(monkeypatch)
+
+    rc, _, _ = _invoke(
+        monkeypatch, capsys, ["-d", str(tmp_path), "-r", "gdb", "-t", "localhost:1234"]
+    )
+
+    assert rc == 0
+    assert dispatched[0].elf_file == str(elf)
+    assert dispatched[0].runner_target == "localhost:1234"

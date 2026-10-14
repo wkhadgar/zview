@@ -46,6 +46,9 @@ pip install .
 ```
 # Example: nRF5340 DK via JLink
 zview -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA
+
+# Same, with the ELF, runner and target read from the build directory
+zview -d build
 ```
 
 
@@ -65,6 +68,8 @@ ZView is invoked through one of four commands. Bare `zview ...` is a shortcut fo
 | Argument | Used by | Description |
 | --- | --- | --- |
 | `-e, --elf-file` | all | Path to the firmware `.elf` file. |
+| `-d, --build-dir` | all | Application build directory to read unset `-e`, `-r` and `-t` from. |
+| `--domain` | all | Sysbuild domain to view (default: the build's default domain). |
 | `-r, --runner` | `live`, `record`, `dump` | Debug runner: `jlink`, `nrfutil`, `pyocd`, or `gdb`. |
 | `-t, --runner-target` | `live`, `record`, `dump` | MCU descriptor for the chosen runner (see below). |
 | `--period` | `live`, `record`, `dump` | Polling period in seconds (default: `0.10`). |
