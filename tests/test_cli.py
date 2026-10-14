@@ -8,10 +8,12 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from zview import cli
+from zview.backend.image import ImageMismatch
 
 _TESTS_DIR = Path(__file__).parent
 _FIXTURE = _TESTS_DIR / "fixtures" / "recordings" / "sys_heap_v4.3.ndjson.gz"
@@ -466,3 +468,35 @@ def test_explicit_runner_and_target_need_no_runners_yaml(monkeypatch, capsys, tm
     assert rc == 0
     assert dispatched[0].elf_file == str(elf)
     assert dispatched[0].runner_target == "localhost:1234"
+
+
+@pytest.fixture
+def spied_log(monkeypatch, tmp_path):
+    """Point ``configure_logging`` at ``tmp_path``; return (log path, logger spy)."""
+    log_path = tmp_path / "zview.log"
+    spy = MagicMock()
+    monkeypatch.setattr(cli, "configure_logging", lambda: log_path)
+    monkeypatch.setattr(cli, "logger", spy)
+    return log_path, spy
+
+
+def test_a_failing_command_reports_one_line(monkeypatch, capsys, spied_log):
+    log_path, spy = spied_log
+    error = ImageMismatch("target image differs from the ELF")
+
+    def failing_dispatch(args: argparse.Namespace) -> int:
+        raise error
+
+    monkeypatch.setattr(cli, "dispatch", failing_dispatch)
+
+    rc, _, err = _invoke(monkeypatch, capsys, ["replay", "-e", str(_ELF), "-i", str(_FIXTURE)])
+
+    assert rc == 1
+    assert err == f"zview: {error} (traceback in {log_path})\n"
+    assert spy.error.call_args.kwargs["exc_info"] is error
+
+
+def test_a_failure_without_a_message_reports_its_type(spied_log):
+    log_path, _ = spied_log
+
+    assert cli.failure_report(ValueError()) == f"ValueError (traceback in {log_path})"

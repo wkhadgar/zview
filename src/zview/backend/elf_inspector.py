@@ -135,8 +135,13 @@ class ElfInspector:
 
         if not self._load_cache():
             print("Loading ELF. This may take a while...", end="", flush=True, file=sys.stderr)
-            self._perform_single_pass_scan()
-            self._save_cache()
+            try:
+                self._perform_single_pass_scan()
+                self._save_cache()
+            except Exception:
+                print(" failed.", file=sys.stderr)
+                raise
+
             print(" OK.", file=sys.stderr)
         else:
             print(f"Loaded cached ELF @ {self._cache_file}", file=sys.stderr)

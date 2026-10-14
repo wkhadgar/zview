@@ -80,7 +80,13 @@ class ZViewCommand(WestCommand):
             self.die(str(e))
 
         cli.validate_args(self.parser, args)
-        sys.exit(cli.dispatch(args))
+
+        try:
+            rc = cli.dispatch(args)
+        except Exception as error:
+            self.die(cli.failure_report(error))
+
+        sys.exit(rc)
 
     def _find_build_dir(self, args: argparse.Namespace) -> str:
         zephyr_base = os.environ.get("ZEPHYR_BASE")

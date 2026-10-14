@@ -176,6 +176,27 @@ def test_missing_firmware_is_fatal(tmp_path, monkeypatch, capsys, no_zephyr):
     assert "Could not find firmware" in capsys.readouterr().err
 
 
+def test_a_failing_command_dies_with_one_line(monkeypatch, capsys, tmp_path, no_zephyr):
+    log_path = tmp_path / "zview.log"
+
+    def failing_dispatch(args: argparse.Namespace) -> int:
+        raise ConnectionError("Could not connect to localhost:1.")
+
+    monkeypatch.setattr(cli, "configure_logging", lambda: log_path)
+    monkeypatch.setattr(cli, "logger", MagicMock())
+    monkeypatch.setattr(cli, "dispatch", failing_dispatch)
+    cmd = _make_cmd()
+    args = cmd.parser.parse_args(["live", "-e", "/x.elf", "-r", "gdb", "-t", "localhost:1"])
+
+    with pytest.raises(SystemExit) as exc:
+        cmd.do_run(args, [])
+
+    err = capsys.readouterr().err
+    assert exc.value.code == 1
+    assert f"Could not connect to localhost:1. (traceback in {log_path})" in err
+    assert "Traceback" not in err
+
+
 def test_parser_bare_invocation_defaults_to_live():
     cmd = _make_cmd()
     args = cmd.parser.parse_args([])
