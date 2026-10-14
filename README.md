@@ -318,7 +318,7 @@ Only statically declared objects are listed. `K_SEM_DEFINE`, `K_MUTEX_DEFINE`, `
 <summary><strong>How it works</strong></summary>
 <br>
 
-ZView achieves a minimal footprint by avoiding on-target processing or UART/Shell output. It utilizes the debug probe's ability to read memory via the APB bus without halting the CPU. By parsing the ELF file, ZView identifies kernel object locations, performs analysis of stack watermarks, thread CPU usages, and executes a deterministic walk of physical heap chunks to map memory fragmentation.
+ZView achieves a minimal footprint by avoiding on-target processing or UART/Shell output. It utilizes the debug probe's ability to read memory through the AHB-AP (a MEM-AP on the system bus) without halting the CPU. By parsing the ELF file, ZView identifies kernel object locations, performs analysis of stack watermarks, thread CPU usages, and executes a deterministic walk of physical heap chunks to map memory fragmentation.
 
 Every value is sampled at the polling period, so state that appears and disappears between two polls is never seen: a lock taken and released, a thread that starts and exits, an allocation made and freed. The high-water marks are the exception, since a stack watermark and a slab's peak usage hold their maximum between reads.
 
