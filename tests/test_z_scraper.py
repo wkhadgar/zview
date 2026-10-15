@@ -365,6 +365,24 @@ def test_read_mem_raw_happy_path_returns_decoded_bytes():
     assert result == b"\xde\xad\xbe\xef"
 
 
+def test_gdb_failed_connect_leaves_no_socket_to_resume_on():
+    """A refused connect surfaces as itself, not as a broken pipe from the batch cleanup."""
+    scraper = GDBScraper("localhost:1234")
+    refused = MagicMock()
+    refused.connect.side_effect = ConnectionRefusedError()
+
+    with (
+        patch("zview.backend.gdb.socket.socket", return_value=refused),
+        pytest.raises(ConnectionError, match="Is QEMU running"),
+    ):
+        scraper.connect()
+
+    scraper.end_batch()
+
+    assert scraper.sock is None
+    refused.sendall.assert_not_called()
+
+
 def _serving(memory: dict[int, int], reply_cap: int | None = None):
     """
     ``_read_response`` stand-in answering each ``m`` packet from ``memory``.
