@@ -53,7 +53,9 @@ class GDBScraper(AbstractScraper):
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.settimeout(self.timeout)
             self.sock.connect((self.host, self.port))
-        except (ConnectionRefusedError, ConnectionResetError) as e:
+        except OSError as e:
+            self.sock.close()
+            self.sock = None
             raise ConnectionError(
                 f"Could not connect to {self.host}:{self.port}. Is QEMU running with -s?"
             ) from e

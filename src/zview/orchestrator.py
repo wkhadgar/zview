@@ -44,16 +44,30 @@ class ZScraper:
         max_threads: int = 64,
     ):
         self._all_threads_info: dict[str, ThreadInfo] = {}
-        self._elf_inspector: ElfInspector = ElfInspector(elf_path)
-        self._endianess: Literal["little", "big"] = (
-            "little" if self._elf_inspector._little_endian else "big"
-        )
         self._m_scraper: AbstractScraper = meta_scraper
-        self._m_scraper.endianess = "<" if self._endianess == "little" else ">"
         self._polling_thread: threading.Thread | None = None
         self._thread_pool: list[ThreadInfo] | None = None
         self._stop_event: Event | None = None
         self.inspection_period = 0.2
+        # Set False by the TUI outside the kernel objects view; dump and record
+        # leave it on.
+        self.poll_kernel_objects: bool = True
+        self._MAX_THREADS: int = max_threads
+
+        self._load_elf(elf_path)
+
+    def reload_elf(self) -> None:
+        """Re-parse the ELF at the same path and rebuild everything derived from it."""
+        self._load_elf(self.elf_path)
+
+    def _load_elf(self, elf_path) -> None:
+        """Parse ``elf_path`` and resolve the layout, addresses and features it provides."""
+        self.elf_path = elf_path
+        self._elf_inspector: ElfInspector = ElfInspector(elf_path)
+        self._endianess: Literal["little", "big"] = (
+            "little" if self._elf_inspector._little_endian else "big"
+        )
+        self._m_scraper.endianess = "<" if self._endianess == "little" else ">"
 
         self.has_heaps: bool = True
         self.has_usage: bool = True
@@ -74,9 +88,6 @@ class ZScraper:
         # field per frame, so replaying it keeps asking that way.
         self.merged_thread_meta: bool = True
         self._thread_entry_cache: dict[int, int] = {}
-        # Set False by the TUI outside the kernel objects view; dump and record
-        # leave it on.
-        self.poll_kernel_objects: bool = True
 
         # Built Zephyr version (when the ELF is in its build tree) and the wait
         # queue layout.
@@ -86,8 +97,6 @@ class ZScraper:
         self.has_stack_fill: bool = compat.has_kconfig(
             self._elf_inspector, compat.CONFIG_INIT_STACKS
         )
-
-        self._MAX_THREADS: int = max_threads
 
         self._layout = self._resolve_layout()
         self._resolve_addresses()
