@@ -4,6 +4,7 @@
 
 import contextlib
 import curses
+import io
 import queue
 import threading
 import time
@@ -21,6 +22,7 @@ from zview.backend.base import (
     ThreadInfo,
     WorkqInfo,
 )
+from zview.backend.image import verify_target_image
 from zview.frontend.tui.views.base import (
     Any,
     BaseStateView,
@@ -45,7 +47,7 @@ from zview.orchestrator import ZScraper
 _GLOBAL_KEYBINDINGS: list[Keybind] = [
     Keybind("?", "Help", "Toggle this help overlay"),
     Keybind("m", "Messages", "Toggle the message log"),
-    Keybind("R", "Reconnect", "Disconnect probe and reattach (full cycle)"),
+    Keybind("R", "Reload", "Re-parse the ELF and reattach the probe (full cycle)"),
     Keybind("q", "Quit", "Exit ZView"),
 ]
 
@@ -267,19 +269,21 @@ class ZView:
             self.data_queue.queue.clear()
 
     def attempt_reconnect(self):
-        """Executes hardware reconnection and data pipeline reset."""
+        """Reload the ELF, reattach the probe and restart the data pipeline."""
         if not self.scraper._m_scraper.is_live:
             self.report("Reconnect is not available in replay mode.")
             return
 
-        self.report("Attempting to reconnect...")
+        self.report("Reloading the ELF and reconnecting...")
         self.scraper.finish_polling_thread()
         self.scraper._m_scraper.disconnect()
         self.purge_queue()
+        self._clear_histories()
 
         self.stop_event.clear()
 
         try:
+            self._reload_and_verify()
             self.scraper.update_available_threads()
             self.scraper.reset_thread_pool()
             self.scraper.reset_runtime_state()
@@ -290,6 +294,34 @@ class ZView:
             self.stdscr.clear()
         except Exception as e:
             self.process_data({"fatal_error": f"Reconnection failed: {e}"})
+
+    def _reload_and_verify(self) -> None:
+        """Re-parse the ELF, reconnect, and check the target runs it; its stderr goes to the log."""
+        overlay = self._overlay
+        self._overlay = "messages"
+        self.draw_frame()
+
+        captured = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(captured):
+                self.scraper.reload_elf()
+                self.scraper._m_scraper.connect()
+                verify_target_image(self.scraper._m_scraper, self.scraper.elf_path)
+        finally:
+            for line in captured.getvalue().splitlines():
+                self.report(line)
+            self._overlay = overlay
+
+        for notice in self.scraper.absent_features():
+            self.report(notice)
+
+    def _clear_histories(self) -> None:
+        """Drop the per-object samples, whose addresses a rebuilt ELF can reassign."""
+        self.mutex_history.clear()
+        self.sem_history.clear()
+        self.msgq_history.clear()
+        self.mem_slab_history.clear()
+        self.workq_history.clear()
 
     def draw_frame(self) -> None:
         """Draw one frame, dropping it if the screen shrank under its writes."""

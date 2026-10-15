@@ -165,7 +165,7 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
 * **k**: Access the **Kernel Objects** view listing semaphores, mutexes, message queues, memory slabs, heaps and work queues (hit k again to return).
 * **f**: In the kernel objects view, cycle the type filter (ALL, SEM, MTX, MSG, HEP, SLB, WKQ).
 * **r**: Soft refresh, re-walks the kernel thread list and clears runtime baselines.
-* **R**: Full reconnect, tears down the polling thread, disconnects the probe, reconnects, and resumes.
+* **R**: Full reload, tears down the polling thread, disconnects the probe, re-parses the ELF, reconnects, checks the target runs that ELF, and resumes. After a rebuild, press it once the target runs the new image.
 
 ### See your threads
 

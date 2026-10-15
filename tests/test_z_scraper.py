@@ -383,6 +383,22 @@ def test_gdb_failed_connect_leaves_no_socket_to_resume_on():
     refused.sendall.assert_not_called()
 
 
+def test_reload_elf_rebuilds_features_and_keeps_tui_settings(elf_path):
+    meta = MagicMock()
+    meta.is_live = True
+    scraper = ZScraper(meta, elf_path=elf_path)
+    has_heaps = scraper.has_heaps
+    scraper.has_heaps = not has_heaps
+    scraper.poll_kernel_objects = False
+    scraper.inspection_period = 1.5
+
+    scraper.reload_elf()
+
+    assert scraper.has_heaps is has_heaps
+    assert scraper.poll_kernel_objects is False
+    assert scraper.inspection_period == 1.5
+
+
 def _serving(memory: dict[int, int], reply_cap: int | None = None):
     """
     ``_read_response`` stand-in answering each ``m`` packet from ``memory``.

@@ -6,12 +6,15 @@
 
 import curses
 import queue
+import sys
 from collections import deque
 from unittest.mock import MagicMock
 
 import pytest
 
 from zview.backend.base import HeapInfo, ThreadInfo, WorkqInfo
+from zview.backend.image import ImageMismatch
+from zview.frontend import zview_tui
 from zview.frontend.tui.views.base import ZViewState
 from zview.frontend.zview_tui import ZView
 
@@ -209,3 +212,45 @@ def test_contention_history_is_bounded(app):
         app.process_data({"threads": [], "mutexes": [mutex]})
 
     assert len(app.mutex_history[0x3000]) == 256
+
+
+@pytest.fixture
+def reloading_app(app):
+    """``app`` ready for ``R``: a live scraper, no drawing, every history present."""
+    app.stop_event = MagicMock()
+    app.msgq_history = {}
+    app.mem_slab_history = {}
+    app.sem_history = {0x10: deque([1, 2])}
+    app.scraper._m_scraper.is_live = True
+    app.scraper.absent_features.return_value = ()
+    app.draw_frame = MagicMock()
+    app.transition_to = MagicMock()
+    return app
+
+
+def test_reload_reports_its_stderr_and_restarts_polling(reloading_app, monkeypatch):
+    def reload_elf():
+        print("Loaded cached ELF @ cache.bin", file=sys.stderr)
+
+    reloading_app.scraper.reload_elf.side_effect = reload_elf
+    monkeypatch.setattr(zview_tui, "verify_target_image", lambda scraper, elf_path: None)
+
+    reloading_app.attempt_reconnect()
+
+    assert any(entry.text == "Loaded cached ELF @ cache.bin" for entry in reloading_app.messages)
+    reloading_app.scraper.start_polling_thread.assert_called_once()
+    assert reloading_app.sem_history == {}
+    assert reloading_app._overlay is None
+
+
+def test_reload_onto_a_target_running_another_image_is_fatal(reloading_app, monkeypatch):
+    def mismatch(scraper, elf_path):
+        raise ImageMismatch("the target is not running this ELF")
+
+    monkeypatch.setattr(zview_tui, "verify_target_image", mismatch)
+
+    reloading_app.attempt_reconnect()
+
+    assert reloading_app.state is ZViewState.FATAL_ERROR
+    assert "the target is not running this ELF" in reloading_app.status_message
+    reloading_app.scraper.start_polling_thread.assert_not_called()
