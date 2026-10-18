@@ -73,10 +73,9 @@ def app() -> ZView:
     a.status_message = ""
     a.messages = deque(maxlen=_MESSAGE_LOG_SIZE)
     a.update_count = 0
-    a.idle_thread = None
     a.data_queue = queue.Queue()
     a.scraper = MagicMock()
-    a.scraper.idle_threads_address = 0xDEAD
+    a.scraper.idle_thread_addresses = (0xDEAD,)
     a.state = ZViewState.THREAD_LIST_VIEW
     a.stdscr = MagicMock()
     a._theme = ZViewTUIAttributes.create_mono()

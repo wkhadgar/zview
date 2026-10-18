@@ -157,14 +157,11 @@ class ZScraper:
         self._kernel_base_address = elf.get_symbol_info("_kernel", "address")[0]
         if self.has_thread_list:
             self._threads_address = self._kernel_base_address + self._layout.threads_head
-        self.idle_threads_address = elf.get_symbol_info("z_idle_threads", "address")[0]
-
         # z_idle_threads holds one idle thread per CPU.
+        idle = elf.get_symbol_info("z_idle_threads", "address")[0]
         thread_size = elf.get_struct_size("k_thread")
         cpus = max(1, elf.get_symbol_info("z_idle_threads", "size")[0] // thread_size)
-        self.idle_thread_addresses = tuple(
-            self.idle_threads_address + i * thread_size for i in range(cpus)
-        )
+        self.idle_thread_addresses = tuple(idle + i * thread_size for i in range(cpus))
 
         self._usage_stamps: tuple[int, ...] = ()
         if self.has_usage:

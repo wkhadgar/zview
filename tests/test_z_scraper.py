@@ -204,7 +204,7 @@ def _make_strike_scraper(elf_path):
     scraper = ZScraper(mock, elf_path=elf_path, max_threads=2)
     scraper.has_heaps = False
     scraper.has_usage = False
-    scraper.idle_threads_address = 0x9999
+    scraper.idle_thread_addresses = (0x9999,)
     scraper.thread_pool = [
         ThreadInfo(address=0x1000, stack_start=0x0, stack_size=1000, name="t1", runtime=None),
     ]
