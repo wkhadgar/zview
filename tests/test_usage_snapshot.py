@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from zview.backend.base import AbstractScraper
 from zview.kernel.usage import read_usage_snapshot
 
 _USAGE = 0x40
@@ -15,7 +16,12 @@ class RunningTarget:
     def __init__(self, switches_after: tuple[int, ...] = ()):
         self.words = {_STAMP: 500, _IDLE + _USAGE: 9000, _WORKER + _USAGE: 300}
         self.reads: list[int] = []
+        self.batches = 0
         self._switches_after = switches_after
+
+    def read_many(self, reads):
+        self.batches += 1
+        yield from AbstractScraper.read_many(self, reads)
 
     def _served(self, at: int) -> int:
         value = self.words[at]
@@ -40,6 +46,16 @@ def test_a_quiet_target_is_read_in_one_pass():
 
     assert counters == {_IDLE: 9000, _WORKER: 300}
     assert target.reads == [_STAMP, _IDLE + _USAGE, _WORKER + _USAGE, _STAMP]
+
+
+def test_each_pass_is_one_batch():
+    """A backend that queues reads sends a whole pass together."""
+    quiet, switching = RunningTarget(), RunningTarget(switches_after=(2,))
+
+    read_usage_snapshot(quiet, (_IDLE, _WORKER), _USAGE, (_STAMP,))
+    read_usage_snapshot(switching, (_IDLE, _WORKER), _USAGE, (_STAMP,))
+
+    assert (quiet.batches, switching.batches) == (1, 2)
 
 
 def test_a_switch_between_the_counter_reads_is_read_again():
