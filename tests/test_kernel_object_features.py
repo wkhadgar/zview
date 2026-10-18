@@ -22,6 +22,8 @@ def _scraper(**enabled: bool) -> ZScraper:
     s.has_heap_waiters = enabled.get("heap_waiters", s.has_heaps)
     s.has_stack_fill = enabled.get("stack_fill", True)
     s.has_thread_list = enabled.get("thread_list", True)
+    s.has_usage = enabled.get("usage", False)
+    s.usage_snapshot = True
     s.merged_thread_meta = True
     s.poll_kernel_objects = True
     return s
@@ -199,6 +201,21 @@ def test_a_recording_that_skipped_the_scan_skips_it_again():
     s._restrict_features_to_recording()
 
     assert not s.has_stack_fill
+
+
+def test_the_usage_snapshot_is_a_recorded_feature():
+    """It moves every counter read to the start of the frame."""
+    assert "usage_snapshot" in _scraper(usage=True).active_features()
+    assert "usage_snapshot" not in _scraper().active_features()
+
+
+def test_a_recording_from_before_the_snapshot_reads_the_counters_its_way():
+    s = _scraper(usage=True)
+    s._m_scraper = MagicMock(is_live=False, features=("threads", "merged_thread_meta"))
+
+    s._restrict_features_to_recording()
+
+    assert not s.usage_snapshot
 
 
 def test_a_build_with_only_work_queues_has_objects_to_show():

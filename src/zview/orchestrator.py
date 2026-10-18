@@ -23,6 +23,7 @@ from zview.kernel.msgqs import walk_msgqs
 from zview.kernel.mutexes import walk_mutexes
 from zview.kernel.semaphores import walk_semaphores
 from zview.kernel.threads import walk_static_threads, walk_thread_list
+from zview.kernel.usage import read_usage_snapshot
 from zview.kernel.workqs import walk_workqs
 
 logger = logging.getLogger("zview.scraper")
@@ -33,8 +34,6 @@ class _BrokenFrame(Exception):
 
 
 class ZScraper:
-    last_cpu_cycles: int | None
-    last_cpu_delta: int
     last_thread_cycles: dict[int, int]
 
     def __init__(
@@ -88,6 +87,10 @@ class ZScraper:
         # field per frame, so replaying it keeps asking that way.
         self.merged_thread_meta: bool = True
         self._thread_entry_cache: dict[int, int] = {}
+        # Every thread's usage counter read first, as of one instant. A
+        # recording taken before that read the kernel-wide counter first and
+        # each thread's own beside its stack.
+        self.usage_snapshot: bool = True
 
         # Built Zephyr version (when the ELF is in its build tree) and the wait
         # queue layout.
@@ -145,6 +148,7 @@ class ZScraper:
         fields.update(compat.resolve_optional_fields(elf, compat.MEM_SLAB_OPTIONAL_FIELDS))
         fields.update(compat.resolve_optional_fields(elf, compat.HEAP_OPTIONAL_FIELDS))
         fields.update(compat.resolve_optional_fields(elf, compat.WORKQ_OPTIONAL_FIELDS))
+        fields.update(compat.resolve_fields(elf, compat.USAGE_STAMP_FIELDS) or {})
 
         return KernelLayout(**fields)
 
@@ -154,8 +158,26 @@ class ZScraper:
         if self.has_thread_list:
             self._threads_address = self._kernel_base_address + self._layout.threads_head
         self.idle_threads_address = elf.get_symbol_info("z_idle_threads", "address")[0]
+
+        # z_idle_threads holds one idle thread per CPU.
+        thread_size = elf.get_struct_size("k_thread")
+        cpus = max(1, elf.get_symbol_info("z_idle_threads", "size")[0] // thread_size)
+        self.idle_thread_addresses = tuple(
+            self.idle_threads_address + i * thread_size for i in range(cpus)
+        )
+
+        self._usage_stamps: tuple[int, ...] = ()
         if self.has_usage:
             self._cpu_usage_address = self._kernel_base_address + self._layout.cpu_usage
+            if self._layout.cpu_usage0 is not None:
+                cpu_size = elf.get_struct_size("_cpu")
+                self._usage_stamps = tuple(
+                    self._kernel_base_address
+                    + self._layout.kernel_cpus
+                    + i * cpu_size
+                    + self._layout.cpu_usage0
+                    for i in range(cpus)
+                )
 
     def _discover_heap_addresses(self) -> None:
         """Populate ``_k_heap_addresses`` from ``k_heap`` globals; clears ``has_heaps`` if none."""
@@ -225,6 +247,7 @@ class ZScraper:
         self.merged_thread_meta = "merged_thread_meta" in features
         # A recording from before the scan was skipped scanned every stack.
         self.has_stack_fill = self.has_stack_fill or "unfilled_stacks" not in features
+        self.usage_snapshot = "usage_snapshot" in features
 
     def active_features(self) -> tuple[str, ...]:
         """The features this session polls, as recorded in a recording header."""
@@ -239,6 +262,7 @@ class ZScraper:
             (self.has_heaps and self.has_heap_waiters, "heap_waiters"),
             (self.has_workqs, "workqs"),
             (not self.has_stack_fill, "unfilled_stacks"),
+            (self.has_usage and self.usage_snapshot, "usage_snapshot"),
         ):
             if enabled:
                 features.append(name)
@@ -393,8 +417,6 @@ class ZScraper:
     def reset_runtime_state(self) -> None:
         """Clear watermark/cycle caches; baselines are re-seeded by the next poll."""
         self._m_scraper.watermark_cache.clear()
-        self.last_cpu_cycles = None
-        self.last_cpu_delta = 0
         self.last_thread_cycles = {}
 
     def start_polling_thread(
@@ -453,9 +475,9 @@ class ZScraper:
                 self._m_scraper.begin_batch()
                 in_batch = True
 
-                cpu_cycles_delta = self._read_cpu_cycles_delta()
-                polled_raw, cpu_cycles_delta = self._poll_threads(cpu_cycles_delta)
-                final_threads = self._finalize_threads(polled_raw, cpu_cycles_delta)
+                deltas = self._read_usage_deltas()
+                polled_raw = self._poll_threads(deltas)
+                final_threads = self._finalize_threads(polled_raw, deltas)
 
                 frame: dict = {"threads": final_threads}
                 if self.has_heaps:
@@ -496,58 +518,62 @@ class ZScraper:
             elapsed = time.perf_counter() - cycle_start
             time.sleep(max(0.0, inspection_period - elapsed))
 
-    def _read_cpu_cycles_delta(self) -> int:
-        """Cycles elapsed since the last frame; ``-1`` when ``has_usage`` is False."""
+    def _usage_delta(self, address: int, cycles: int) -> int:
+        """A thread's cycles since the last frame, 0 on its first. A regression breaks the frame."""
+        prev = self.last_thread_cycles.get(address)
+        self.last_thread_cycles[address] = cycles
+        if prev is None:
+            return 0
+        if cycles < prev:
+            raise _BrokenFrame(f"usage counter of the thread at 0x{address:X} regressed")
+        return cycles - prev
+
+    def _read_usage_deltas(self) -> dict[int, int]:
+        """
+        Every known thread's cycles since the last frame, ``{address: cycles}``.
+
+        Empty when the build counts no usage or the view polls no thread, and on
+        a recording from before the snapshot, whose counters sit beside each
+        thread's stack.
+        """
         if not self.has_usage:
-            return -1
+            return {}
+
+        if not self.usage_snapshot:
+            # The kernel-wide counter that recording read first. Its value is unused.
+            self._m_scraper.read32(self._cpu_usage_address)
+            return {}
+
+        if not self.thread_pool:
+            return {}
 
         try:
-            current = self._m_scraper.read32(self._cpu_usage_address)[0]
+            counters = read_usage_snapshot(
+                self._m_scraper,
+                [t.address for t in self.all_threads.values()],
+                self._layout.thread_usage,
+                self._usage_stamps,
+            )
         except Exception as e:
-            raise RuntimeError(f"Error reading global CPU cycles: {e}") from e
+            raise RuntimeError(f"Error polling thread usage: {e}") from e
 
-        if self.last_cpu_cycles is None:
-            self.last_cpu_cycles = current
-            return 0
+        return {address: self._usage_delta(address, cycles) for address, cycles in counters.items()}
 
-        delta = current - self.last_cpu_cycles
-        self.last_cpu_cycles = current
-        if delta < 0:
-            raise _BrokenFrame("global CPU cycle counter regressed")
-        self.last_cpu_delta = delta
-        return delta
-
-    def _poll_threads(self, cpu_cycles_delta: int) -> tuple[list[dict], int]:
-        """Read per-thread usage + watermark. Returns (raw_data, adjusted_cpu_cycles_delta)."""
+    def _poll_threads(self, deltas: dict[int, int]) -> list[dict]:
+        """Read each polled thread's watermark and metadata, beside its share of ``deltas``."""
         if self.thread_pool is None:
             raise RuntimeError("Thread pool is uninitialized.")
 
         polled: list[dict] = []
         for thread in self.thread_pool:
-            if self.has_usage:
+            usage_delta = deltas.get(thread.address, 0)
+            if self.has_usage and not self.usage_snapshot:
                 try:
-                    thread_usage = self._m_scraper.read64(
-                        thread.address + self._layout.thread_usage
-                    )[0]
+                    cycles = self._m_scraper.read64(thread.address + self._layout.thread_usage)[0]
                 except Exception as e:
                     raise RuntimeError(f"Error polling thread usage {thread.name}: {e}") from e
-
-                prev = self.last_thread_cycles.get(thread.address)
-                self.last_thread_cycles[thread.address] = thread_usage
-
-                if prev is None:
-                    usage_delta = 0
-                    is_active = False
-                else:
-                    usage_delta = thread_usage - prev
-                    if usage_delta < 0:
-                        raise _BrokenFrame(f"thread {thread.name} usage counter regressed")
-                    if thread.address == self.idle_threads_address:
-                        cpu_cycles_delta += usage_delta
-                    is_active = usage_delta > 0
-            else:
-                usage_delta = 0
-                is_active = False
+                usage_delta = self._usage_delta(thread.address, cycles)
+            is_active = usage_delta > 0
 
             watermark = stack_usage_pct = None
             if self.has_stack_fill and thread.stack_size is not None:
@@ -579,7 +605,7 @@ class ZScraper:
                 }
             )
 
-        return polled, cpu_cycles_delta
+        return polled
 
     def _read_thread_meta(self, thread: ThreadInfo) -> dict:
         """Read priority/state/options/entry for a thread; missing offsets yield ``None``."""
@@ -674,28 +700,27 @@ class ZScraper:
         cache[addr] = sym
         return sym
 
-    def _finalize_threads(self, polled: list[dict], cpu_cycles_delta: int) -> list[ThreadInfo]:
-        """Build ``ThreadInfo`` objects from raw polling state, computing CPU% and load%."""
-        idle = next(
-            (d for d in polled if d["info"].address == self.idle_threads_address),
-            None,
-        )
-        active_total = (cpu_cycles_delta - idle["usage_delta"]) if idle else cpu_cycles_delta
+    def _finalize_threads(self, polled: list[dict], deltas: dict[int, int]) -> list[ThreadInfo]:
+        """
+        Build ``ThreadInfo`` objects from raw polling state, computing CPU% and load%.
+
+        Both are shares of the threads' own cycles: CPU% of every thread's, load%
+        of every busy thread's. Read as one snapshot or not, the shares add up
+        to 100% and none passes it.
+        """
+        # A recording from before the snapshot has counters for the polled threads only.
+        deltas = deltas or {d["info"].address: d["usage_delta"] for d in polled}
+        total = sum(deltas.values())
+        busy = total - sum(deltas.get(address, 0) for address in self.idle_thread_addresses)
 
         final: list[ThreadInfo] = []
         for data in polled:
-            # The two counters are read at different instants, so a share can
-            # land above the total it divides.
-            absolute_cpu = (
-                min((data["usage_delta"] / cpu_cycles_delta) * 100.0, 100.0)
-                if cpu_cycles_delta > 0
-                else 0.0
-            )
+            absolute_cpu = (data["usage_delta"] / total * 100.0) if total > 0 else 0.0
 
-            if data["info"].address == self.idle_threads_address:
+            if data["info"].address in self.idle_thread_addresses:
                 load_pct = 0.0
-            elif active_total > 0:
-                load_pct = min((data["usage_delta"] / active_total) * 100.0, 100.0)
+            elif busy > 0:
+                load_pct = data["usage_delta"] / busy * 100.0
             else:
                 load_pct = 0.0
 

@@ -75,74 +75,126 @@ def elf_path():
     return base_dir / "fixtures" / "zephyr.elf"
 
 
-def test_poll_thread_worker_math_and_queue(elf_path):
-    """CPU normalization and watermark percentage propagate to the emitted frame."""
+_USAGE = 0x10
+_MAIN, _IDLE, _WORKER = 0x1000, 0x2000, 0x3000
 
-    mock_meta_scraper = MagicMock()
-    mock_meta_scraper.is_connected = True
 
-    scraper = ZScraper(mock_meta_scraper, elf_path=elf_path, max_threads=2)
-    scraper.has_heaps = False
-    scraper.has_usage = True
-    scraper.idle_threads_address = 0x2000
+def _thread(address: int, name: str) -> ThreadInfo:
+    return ThreadInfo(address=address, stack_start=0x0, stack_size=1000, name=name, runtime=None)
 
+
+def _usage_scraper(elf_path, threads, before: dict[int, int], now: dict[int, int]):
+    """``ZScraper`` over a target whose usage counters moved from ``before`` to ``now``."""
     from dataclasses import replace as dc_replace
 
-    scraper._layout = dc_replace(scraper._layout, thread_usage=0x10)
-    scraper._cpu_usage_address = 0x1000
-    scraper.last_cpu_cycles = 100
-    scraper.last_cpu_delta = 100
+    mock = MagicMock()
+    mock.is_connected = True
+    mock.watermark_cache = {}
+    scraper = ZScraper(mock, elf_path=elf_path, max_threads=len(threads))
+    scraper.has_heaps = False
+    scraper.has_usage = True
+    scraper.idle_thread_addresses = (_IDLE,)
+    scraper._usage_stamps = ()
+    scraper._layout = dc_replace(scraper._layout, thread_usage=_USAGE)
+    scraper._all_threads_info = {t.name: t for t in threads}
+    scraper.thread_pool = list(threads)
+    scraper.last_thread_cycles = dict(before)
+    mock.read64.side_effect = lambda address, amount=1: [now.get(address - _USAGE, 0)]
+    mock.calculate_dynamic_watermark.return_value = 250
+    return scraper, mock
 
-    scraper.thread_pool = [
-        ThreadInfo(address=0x1000, stack_start=0x0, stack_size=1000, name="main", runtime=None),
-        ThreadInfo(address=0x2000, stack_start=0x0, stack_size=1000, name="idle", runtime=None),
-    ]
 
-    scraper.last_thread_cycles = {0x1000: 50, 0x2000: 50}
-
-    mock_meta_scraper.read32.return_value = [200]
-
-    def mock_read64(address):
-        if address == 0x1000 + 0x10:
-            return [60]
-        elif address == 0x2000 + 0x10:
-            return [130]
-        return [0]
-
-    mock_meta_scraper.read64.side_effect = mock_read64
-    mock_meta_scraper.calculate_dynamic_watermark.return_value = 250
-
-    data_queue = queue.Queue()
+def _one_frame(scraper: ZScraper) -> dict:
+    """Run the polling loop for exactly one frame and return what it emitted."""
+    data_queue: queue.Queue = queue.Queue()
     stop_event = threading.Event()
-    stop_event.clear()  # Ensure the loop starts
-
     with patch("time.sleep", side_effect=lambda _: stop_event.set()):
         scraper._poll_thread_worker(data_queue, stop_event, 0)
+    return data_queue.get(timeout=1.0)
 
-    result = data_queue.get(timeout=1.0)
 
-    assert "threads" in result
-    threads = result["threads"]
-    assert len(threads) == 2
+def test_shares_are_of_the_threads_own_cycles(elf_path):
+    """CPU% divides by every thread's cycles, load% by the busy threads' only."""
+    scraper, _ = _usage_scraper(
+        elf_path,
+        [_thread(_MAIN, "main"), _thread(_WORKER, "worker"), _thread(_IDLE, "idle")],
+        before={_MAIN: 50, _WORKER: 0, _IDLE: 50},
+        now={_MAIN: 60, _WORKER: 30, _IDLE: 110},
+    )
 
-    main_thread = next(t for t in threads if t.name == "main")
-    idle_thread = next(t for t in threads if t.name == "idle")
+    runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
 
-    # Idle thread: 80 / 180 = 44.444% Absolute CPU
-    # cpu_normalized represents the Absolute CPU %
-    assert idle_thread.runtime.cpu_normalized == pytest.approx(44.4444, abs=1e-3)
-    # The idle thread by definition has 0% relative Load
-    assert idle_thread.runtime.cpu == 0.0
+    # 10, 30 and 60 cycles out of 100.
+    assert {n: r.cpu_normalized for n, r in runtimes.items()} == pytest.approx(
+        {"main": 10.0, "worker": 30.0, "idle": 60.0}
+    )
+    # 10 and 30 out of the 40 busy cycles.
+    assert {n: r.cpu for n, r in runtimes.items()} == pytest.approx(
+        {"main": 25.0, "worker": 75.0, "idle": 0.0}
+    )
+    assert runtimes["main"].stack_watermark_percent == 25.0
 
-    # Main thread: 10 / 180 = 5.555% Absolute CPU
-    assert main_thread.runtime.cpu_normalized == pytest.approx(5.5555, abs=1e-3)
 
-    # Main thread Load: 10 cycles / 100 non-idle cycles = 10.0%
-    # cpu represents the Relative Load %
-    assert main_thread.runtime.cpu == pytest.approx(10.0, abs=1e-3)
+def test_every_idle_thread_counts_as_idle(elf_path):
+    """An SMP build idles on each CPU, and neither idle thread is load."""
+    second_idle = 0x2100
+    scraper, _ = _usage_scraper(
+        elf_path,
+        [_thread(_MAIN, "main"), _thread(_IDLE, "idle 00"), _thread(second_idle, "idle 01")],
+        before={_MAIN: 0, _IDLE: 0, second_idle: 0},
+        now={_MAIN: 20, _IDLE: 90, second_idle: 90},
+    )
+    scraper.idle_thread_addresses = (_IDLE, second_idle)
 
-    # Stack watermark remains 250 / 1000 = 25%
-    assert main_thread.runtime.stack_watermark_percent == 25.0
+    runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
+
+    assert runtimes["main"].cpu == 100.0
+    assert runtimes["idle 01"].cpu == 0.0
+    assert runtimes["main"].cpu_normalized == pytest.approx(10.0)
+
+
+def test_a_detail_view_shares_count_the_threads_it_does_not_scan(elf_path):
+    """Only the pool's stacks are scanned, but every thread's cycles are read."""
+    main, worker, idle = _thread(_MAIN, "main"), _thread(_WORKER, "worker"), _thread(_IDLE, "idle")
+    scraper, mock = _usage_scraper(
+        elf_path,
+        [main, worker, idle],
+        before={_MAIN: 0, _WORKER: 0, _IDLE: 0},
+        now={_MAIN: 10, _WORKER: 30, _IDLE: 60},
+    )
+    scraper.thread_pool = [main, idle]
+
+    runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
+
+    assert set(runtimes) == {"main", "idle"}
+    assert runtimes["main"].cpu == pytest.approx(25.0)
+    assert mock.calculate_dynamic_watermark.call_count == 2
+
+
+def test_a_recording_from_before_the_snapshot_reads_counters_beside_the_stacks(elf_path):
+    """It read the kernel-wide counter first, and each thread's own after the one before's stack."""
+    scraper, mock = _usage_scraper(
+        elf_path,
+        [_thread(_MAIN, "main"), _thread(_IDLE, "idle")],
+        before={_MAIN: 0, _IDLE: 0},
+        now={_MAIN: 10, _IDLE: 30},
+    )
+    scraper.usage_snapshot = False
+    scraper._cpu_usage_address = 0x9000
+
+    runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
+
+    reads = [
+        c for c in mock.mock_calls if c[0] in ("read32", "read64", "calculate_dynamic_watermark")
+    ]
+    assert [c[0] for c in reads[:4]] == [
+        "read32",
+        "read64",
+        "calculate_dynamic_watermark",
+        "read64",
+    ]
+    assert reads[0].args == (0x9000,)
+    assert runtimes["main"].cpu_normalized == pytest.approx(25.0)
 
 
 def _make_strike_scraper(elf_path):
@@ -271,38 +323,21 @@ def test_reset_runtime_state_clears_caches_and_invalidates_baseline(elf_path):
     scraper._m_scraper = mock
     scraper.has_usage = True
     scraper.last_thread_cycles = {0x1000: 50, 0x2000: 75}
-    scraper.last_cpu_cycles = 1234
-    scraper.last_cpu_delta = 1234
 
     scraper.reset_runtime_state()
 
     assert mock.watermark_cache == {}
     assert scraper.last_thread_cycles == {}
-    assert scraper.last_cpu_cycles is None
-    assert scraper.last_cpu_delta == 0
     mock.read64.assert_not_called()
 
 
 def test_broken_frame_resyncs_and_skips_emission(elf_path):
     """Counter regression triggers resync; no frame is emitted, no error counted."""
-    mock_meta_scraper = MagicMock()
-    mock_meta_scraper.is_connected = True
-    mock_meta_scraper.watermark_cache = {0x1000: 100}
-
-    scraper = ZScraper(mock_meta_scraper, elf_path=elf_path, max_threads=2)
-    scraper.has_heaps = False
-    scraper.has_usage = True
-    scraper.idle_threads_address = 0x2000
-    scraper._cpu_usage_address = 0x1000
-    scraper.thread_pool = [
-        ThreadInfo(address=0x1000, stack_start=0x0, stack_size=1000, name="main", runtime=None),
-    ]
-
-    # Seed a stale baseline; current read goes backwards -> _BrokenFrame.
-    scraper.last_cpu_cycles = 5_000
-    scraper.last_thread_cycles = {0x1000: 1_000}
-    mock_meta_scraper.read32.return_value = [100]
-    mock_meta_scraper.read64.return_value = [0]
+    # The thread's counter reads below its baseline.
+    scraper, mock_meta_scraper = _usage_scraper(
+        elf_path, [_thread(_MAIN, "main")], before={_MAIN: 1_000}, now={_MAIN: 0}
+    )
+    mock_meta_scraper.watermark_cache = {_MAIN: 100}
 
     q: queue.Queue = queue.Queue()
     stop_event = threading.Event()
@@ -319,7 +354,6 @@ def test_broken_frame_resyncs_and_skips_emission(elf_path):
     # Nothing was emitted (no frame, no error, no fatal_error).
     assert q.empty()
     # State was wiped: next poll will re-baseline cleanly.
-    assert scraper.last_cpu_cycles is None
     assert scraper.last_thread_cycles == {}
     assert mock_meta_scraper.watermark_cache == {}
 
@@ -460,47 +494,25 @@ def test_an_empty_reply_is_malformed():
         scraper._read_mem_raw(0x1000, 16)
 
 
-def test_cpu_share_cannot_exceed_the_total_it_divides(elf_path):
-    """A thread reading more cycles than the global counter caps at 100%."""
-    mock_meta_scraper = MagicMock()
-    mock_meta_scraper.is_connected = True
+def test_bursts_read_after_the_frame_began_still_share_out_to_100(elf_path):
+    """
+    The six philosophers' frame. Divided by a kernel-wide counter that saw 400 of
+    their 1000 busy cycles, these loads read 100%, 100% and 50%.
+    """
+    first, second, third = 0x4000, 0x4100, 0x4200
+    scraper, _ = _usage_scraper(
+        elf_path,
+        [_thread(first, "P0"), _thread(second, "P1"), _thread(third, "P2"), _thread(_IDLE, "idle")],
+        before={first: 0, second: 0, third: 0, _IDLE: 0},
+        now={first: 400, second: 400, third: 200, _IDLE: 9000},
+    )
 
-    scraper = ZScraper(mock_meta_scraper, elf_path=elf_path, max_threads=2)
-    scraper.has_heaps = False
-    scraper.has_usage = True
-    scraper.idle_threads_address = 0x2000
+    runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
 
-    from dataclasses import replace as dc_replace
-
-    scraper._layout = dc_replace(scraper._layout, thread_usage=0x10)
-    scraper._cpu_usage_address = 0x1000
-    scraper.last_cpu_cycles = 100
-    scraper.last_cpu_delta = 100
-
-    scraper.thread_pool = [
-        ThreadInfo(address=0x1000, stack_start=0x0, stack_size=1000, name="burst", runtime=None),
-        ThreadInfo(address=0x2000, stack_start=0x0, stack_size=1000, name="idle", runtime=None),
-    ]
-    scraper.last_thread_cycles = {0x1000: 50, 0x2000: 50}
-
-    # The global counter advances by 100, the thread's own by 4950.
-    mock_meta_scraper.read32.return_value = [200]
-    mock_meta_scraper.read64.side_effect = lambda address: {
-        0x1000 + 0x10: [5000],
-        0x2000 + 0x10: [55],
-    }.get(address, [0])
-    mock_meta_scraper.calculate_dynamic_watermark.return_value = 250
-
-    data_queue: queue.Queue = queue.Queue()
-    stop_event = threading.Event()
-
-    with patch("time.sleep", side_effect=lambda _: stop_event.set()):
-        scraper._poll_thread_worker(data_queue, stop_event, 0)
-
-    burst = next(t for t in data_queue.get(timeout=1.0)["threads"] if t.name == "burst")
-
-    assert burst.runtime.cpu_normalized == 100.0
-    assert burst.runtime.cpu == 100.0
+    assert {n: r.cpu for n, r in runtimes.items()} == pytest.approx(
+        {"P0": 40.0, "P1": 40.0, "P2": 20.0, "idle": 0.0}
+    )
+    assert sum(r.cpu_normalized for r in runtimes.values()) == pytest.approx(100.0)
 
 
 def _one_thread(scraper: ZScraper, stack_start=0x1000, stack_size=512) -> ThreadInfo:
@@ -510,9 +522,9 @@ def _one_thread(scraper: ZScraper, stack_start=0x1000, stack_size=512) -> Thread
             address=0x2000, stack_start=stack_start, stack_size=stack_size, name="t", runtime=None
         )
     ]
-    delta = scraper._read_cpu_cycles_delta()
-    polled, delta = scraper._poll_threads(delta)
-    return scraper._finalize_threads(polled, delta)[0]
+    deltas = scraper._read_usage_deltas()
+    polled = scraper._poll_threads(deltas)
+    return scraper._finalize_threads(polled, deltas)[0]
 
 
 def test_an_unfilled_build_skips_the_scan_and_reports_no_stack_usage(elf_path):
