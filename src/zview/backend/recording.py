@@ -14,7 +14,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import IO
 
-from zview.backend.base import AbstractScraper
+from zview.backend.base import AbstractScraper, Read
 
 logger = logging.getLogger("zview.recording")
 
@@ -139,3 +139,15 @@ class RecordingScraper(AbstractScraper):
 
     def read64(self, at: int, amount: int = 1) -> Sequence[int]:
         return self._record_read("read64", self._wrapped.read64, at, amount)
+
+    def read_many(self, reads: Sequence[Read]) -> Iterator[bytes | Sequence[int]]:
+        """Each read as its own entry, so a replay serves the batch one read at a time."""
+        results = self._wrapped.read_many(reads)
+        for method, at, amount in reads:
+            args = {"at": at, "amount": amount}
+            with self._failure_recorded(method, args):
+                result = next(results)
+            self._emit(
+                method, args, bytes(result).hex() if method == "read_bytes" else list(result)
+            )
+            yield result
