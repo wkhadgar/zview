@@ -25,6 +25,8 @@ class KernelLayout:
     # Optional: per-thread CPU usage (CONFIG_THREAD_RUNTIME_STATS)
     cpu_usage: int | None = None  # z_kernel.usage
     thread_usage: int | None = None  # k_thread -> k_cycle_stats.total
+    kernel_cpus: int | None = None  # z_kernel.cpus
+    cpu_usage0: int | None = None  # _cpu.usage0
 
     # Optional: thread metadata mirroring `kernel threads list` shell output.
     thread_priority: int | None = None  # k_thread.base.prio (signed 8-bit)

@@ -204,6 +204,15 @@ def test_usage_group_needs_the_kernel_wide_counter():
     assert compat.resolve_fields(elf, compat.USAGE_FIELDS) is None
 
 
+def test_the_switch_stamp_is_found_inside_each_cpu():
+    elf = FakeElf({("z_kernel", "cpus"): 0, ("_cpu", "usage0"): 20})
+
+    assert compat.resolve_fields(elf, compat.USAGE_STAMP_FIELDS) == {
+        "kernel_cpus": 0,
+        "cpu_usage0": 20,
+    }
+
+
 def test_the_thread_list_resolves_without_the_stack_geometry():
     """CONFIG_THREAD_STACK_INFO adds k_thread.stack_info, the monitor adds the list."""
     elf = FakeElf({("z_kernel", "threads"): 8, ("k_thread", "next_thread"): 96})
