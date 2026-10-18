@@ -37,6 +37,13 @@ class RecordingScraper(AbstractScraper):
         self._stack = ExitStack()
         self.endianess = wrapped.endianess
         self._features: tuple[str, ...] = ()
+        # A recording of a replay keeps the read shape of the one it replays.
+        self.is_live = wrapped.is_live
+
+    @property
+    def features(self) -> tuple[str, ...] | None:
+        """The features of the replay this records, None over a live target."""
+        return getattr(self._wrapped, "features", None)
 
     def declare_features(self, features: Sequence[str]) -> None:
         """

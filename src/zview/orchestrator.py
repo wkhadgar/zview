@@ -228,8 +228,9 @@ class ZScraper:
 
     def active_features(self) -> tuple[str, ...]:
         """The features this session polls, as recorded in a recording header."""
-        features = ["threads", "merged_thread_meta"]
+        features = ["threads"]
         for enabled, name in (
+            (self.merged_thread_meta, "merged_thread_meta"),
             (self.has_heaps, "heaps"),
             (self.has_semaphores, "semaphores"),
             (self.has_mutexes, "mutexes"),

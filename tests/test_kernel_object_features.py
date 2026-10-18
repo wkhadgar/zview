@@ -22,6 +22,7 @@ def _scraper(**enabled: bool) -> ZScraper:
     s.has_heap_waiters = enabled.get("heap_waiters", s.has_heaps)
     s.has_stack_fill = enabled.get("stack_fill", True)
     s.has_thread_list = enabled.get("thread_list", True)
+    s.merged_thread_meta = True
     s.poll_kernel_objects = True
     return s
 
