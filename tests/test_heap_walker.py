@@ -289,6 +289,8 @@ def test_a_recording_without_a_chunk_map_stops_asking_for_one():
 class LiveHeapRefusingChunkMap(FakeHeapMemory):
     """A live heap whose chunk map read the stub refuses, as QEMU's did at 2 KB."""
 
+    is_live = True
+
     def connect(self) -> None:
         pass
 

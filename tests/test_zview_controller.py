@@ -34,10 +34,9 @@ def app() -> ZView:
     a.status_message = ""
     a.messages = deque(maxlen=64)
     a.update_count = 0
-    a.idle_thread = None
     a.data_queue = queue.Queue()
     a.scraper = MagicMock()
-    a.scraper.idle_threads_address = 0xDEAD
+    a.scraper.idle_thread_addresses = (0xDEAD,)
     a.state = ZViewState.THREAD_LIST_VIEW
     a.stdscr = MagicMock()
     a._overlay = None
@@ -95,13 +94,33 @@ def test_a_frame_with_work_queues_records_their_backlog(app):
     assert list(app.workq_history[0x6000]) == [1]
 
 
-def test_process_data_idle_thread_pulled_into_dedicated_field(app):
-    """Idle thread is recognized by address and stripped out of ``threads_data``."""
+def test_process_data_strips_every_idle_thread(app):
+    """An SMP build idles on each CPU, and none of its idle threads is listed."""
+    app.scraper.idle_thread_addresses = (0xDEAD, 0xBEEF)
     main = ThreadInfo(address=0x1000, stack_start=0, stack_size=512, name="main", runtime=None)
-    idle = ThreadInfo(address=0xDEAD, stack_start=0, stack_size=128, name="idle", runtime=None)
-    app.process_data({"threads": [main, idle]})
-    assert app.idle_thread == idle
+    idle_00 = ThreadInfo(
+        address=0xDEAD, stack_start=0, stack_size=128, name="idle 00", runtime=None
+    )
+    idle_01 = ThreadInfo(
+        address=0xBEEF, stack_start=0, stack_size=128, name="idle 01", runtime=None
+    )
+
+    app.process_data({"threads": [main, idle_00, idle_01]})
+
     assert app.threads_data == [main]
+
+
+def test_a_thread_detail_scans_only_the_detailed_threads_stack(app):
+    """The idle thread's cycles are read with every other thread's, so it needs no slot."""
+    main = ThreadInfo(address=0x1000, stack_start=0, stack_size=512, name="main", runtime=None)
+    app.views = {ZViewState.THREAD_DETAIL_VIEW: MagicMock()}
+    app.detailing_thread = "main"
+    app.scraper.all_threads = {"main": main}
+    app.scraper._m_scraper.is_live = True
+
+    app.transition_to(ZViewState.THREAD_DETAIL_VIEW)
+
+    assert app.scraper.thread_pool == [main]
 
 
 def test_process_data_heaps_payload_captured(app):

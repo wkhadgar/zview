@@ -69,6 +69,13 @@ USAGE_FIELDS: FieldTable = {
     ),
 }
 
+# CONFIG_SCHED_THREAD_USAGE. Each CPU's switch stamp, rewritten whenever the
+# kernel adds to a usage counter.
+USAGE_STAMP_FIELDS: FieldTable = {
+    "kernel_cpus": ((("z_kernel", "cpus"),),),
+    "cpu_usage0": ((("_cpu", "usage0"),),),
+}
+
 # Metadata mirroring `kernel threads list`. Resolved individually.
 THREAD_META_FIELDS: FieldTable = {
     "thread_priority": ((("k_thread", "base"), ("_thread_base", "prio")),),

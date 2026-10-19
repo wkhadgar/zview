@@ -65,18 +65,23 @@ class ReplayScraper(AbstractScraper):
     # drifting against the recording.
     is_live = False
 
-    # Overwritten from the header on load.
-    features: tuple[str, ...] = LEGACY_FEATURES
-
     def __init__(self, source_path: Path | str, honor_timing: bool = True):
         super().__init__(target_mcu=None)
         self._source_path = Path(source_path)
+        # Overwritten from the header on load.
+        self._features: tuple[str, ...] = LEGACY_FEATURES
         self._entries: list[dict] = []
         self._cursor: int = 0
         self._loaded: bool = False
         self._honor_timing = honor_timing
         self._anchor_wall: float | None = None
         self._anchor_recording: float | None = None
+
+    @property
+    def features(self) -> tuple[str, ...]:
+        """The polling features the recording holds, read from its header before connect too."""
+        self._load()
+        return self._features
 
     def _load(self) -> None:
         """Parse header and buffer all entries. Idempotent. Raises UnsupportedSchema."""
@@ -95,7 +100,7 @@ class ReplayScraper(AbstractScraper):
                 )
 
             self.endianess = header.get("endianess", "<")
-            self.features = tuple(header.get("features") or LEGACY_FEATURES)
+            self._features = tuple(header.get("features") or LEGACY_FEATURES)
 
             for line in fp:
                 line = line.strip()

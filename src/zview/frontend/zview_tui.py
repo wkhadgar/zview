@@ -143,7 +143,6 @@ class ZView:
         self.detailing_workq_address: int | None = None
         # Wait queues are walkable only in the dlist (simple) flavor.
         self.waiters_unknown: bool = scraper.waitq_flavor != "simple"
-        self.idle_thread: ThreadInfo | None = None
         # Name of the open overlay ("help" or "messages"), or None.
         self._overlay: str | None = None
 
@@ -411,18 +410,9 @@ class ZView:
                     return
 
                 if live:
-                    new_pool = [target_thread]
-                    idle_t = next(
-                        (
-                            t
-                            for t in self.scraper.all_threads.values()
-                            if t.address == self.scraper.idle_threads_address
-                        ),
-                        None,
-                    )
-                    if idle_t and idle_t.address != new_pool[0].address:
-                        new_pool.append(idle_t)
-                    self.scraper.thread_pool = new_pool
+                    # Every thread's cycles are read whatever the pool, so it
+                    # names only the stack to scan.
+                    self.scraper.thread_pool = [target_thread]
 
                 self.purge_queue()
 
@@ -498,14 +488,9 @@ class ZView:
             heaps_data: list[HeapInfo] = data.get("heaps", [])
 
             if len(threads_data):
-                idle_thread = next(
-                    (t for t in threads_data if t.address == self.scraper.idle_threads_address),
-                    None,
-                )
-                if idle_thread:
-                    self.idle_thread = idle_thread
-                    threads_data.remove(idle_thread)
-                self.threads_data = threads_data
+                # One idle thread per CPU, none of them listed.
+                idle = self.scraper.idle_thread_addresses
+                self.threads_data = [t for t in threads_data if t.address not in idle]
             if len(heaps_data):
                 self.heaps_data = heaps_data
 
