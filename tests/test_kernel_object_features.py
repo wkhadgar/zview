@@ -223,6 +223,31 @@ def test_a_build_with_only_work_queues_has_objects_to_show():
     assert _scraper(workqs=True).has_kernel_objects()
 
 
+def test_a_group_walker_gets_only_the_selected_labels():
+    """Matched against the labels rows carry, ``name@0x...`` for a name with several."""
+    from zview.selection import Selection
+
+    s = _scraper(semaphores=True)
+    s._m_scraper = MagicMock()
+    s._elf_inspector = MagicMock()
+    s._layout = MagicMock()
+    s._k_sem_addresses = {"sem_a": [0x100], "sem_b": [0x200, 0x300]}
+    s._k_mutex_addresses = s._k_msgq_addresses = s._k_mem_slab_addresses = {}
+    s._k_workq_addresses = {}
+    s.waitq_flavor = "simple"
+    s._thread_names = lambda: {}
+    s.selection = Selection(exclude=("sem_a",), muted=frozenset({("semaphores", "sem_b@0x300")}))
+    given: list[dict] = []
+
+    with patch(
+        "zview.orchestrator.walk_semaphores",
+        lambda scraper, elf, addresses, *_a, **_kw: given.append(addresses) or {},
+    ):
+        s._poll_kernel_objects(queue.Queue())
+
+    assert given == [{"sem_b@0x200": [0x200]}]
+
+
 def test_the_poll_reads_the_work_queues_last():
     """Appended after the other groups, so a recording's earlier reads keep their order."""
     s = _scraper(semaphores=True, workqs=True)

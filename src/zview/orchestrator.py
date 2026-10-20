@@ -21,10 +21,12 @@ from zview.kernel.layout import KernelLayout
 from zview.kernel.mem_slabs import walk_mem_slabs
 from zview.kernel.msgqs import walk_msgqs
 from zview.kernel.mutexes import walk_mutexes
+from zview.kernel.object_names import label_instances
 from zview.kernel.semaphores import walk_semaphores
 from zview.kernel.threads import walk_static_threads, walk_thread_list
 from zview.kernel.usage import read_usage_snapshot
 from zview.kernel.workqs import walk_workqs
+from zview.selection import Selection
 
 logger = logging.getLogger("zview.scraper")
 
@@ -35,6 +37,8 @@ class _BrokenFrame(Exception):
 
 class ZScraper:
     last_thread_cycles: dict[int, int]
+    # The groups and rows a frame reads.
+    selection: Selection = Selection()
 
     def __init__(
         self,
@@ -329,11 +333,17 @@ class ZScraper:
             if not enabled:
                 continue
 
+            # Matched against the labels the rows will carry.
+            selected = {
+                label: [address]
+                for label, address in label_instances(addresses)
+                if self.selection.reads(key, label)
+            }
             try:
                 objects = walker(
                     self._m_scraper,
                     self._elf_inspector,
-                    addresses,
+                    selected,
                     self._layout,
                     thread_names,
                     walk_waiters=walk_waiters,
@@ -543,7 +553,8 @@ class ZScraper:
             self._m_scraper.read32(self._cpu_usage_address)
             return {}
 
-        if not self.thread_pool:
+        # A muted thread keeps its counter, so the others' shares stay whole.
+        if not self.thread_pool or not self.selection.reads_group("threads"):
             return {}
 
         try:
@@ -565,6 +576,8 @@ class ZScraper:
 
         polled: list[dict] = []
         for thread in self.thread_pool:
+            if not self.selection.reads("threads", thread.name):
+                continue
             usage_delta = deltas.get(thread.address, 0)
             if self.has_usage and not self.usage_snapshot:
                 try:
@@ -762,6 +775,8 @@ class ZScraper:
         )
         thread_names = self._thread_names() if walk_waiters else {}
         for heap_name, heap_addresses in self._k_heap_addresses.items():
+            if not self.selection.reads("heaps", heap_name):
+                continue
             for heap_address in heap_addresses:
                 try:
                     heap_struct = self._m_scraper.read32(heap_address)[0]
