@@ -19,6 +19,7 @@ from zview.backend.base import (
 from zview.backend.gdb import GDBScraper
 from zview.backend.pyocd import PyOCDScraper
 from zview.orchestrator import ZScraper
+from zview.selection import Selection
 
 
 def test_gdb_scraper_endianness():
@@ -451,13 +452,13 @@ def test_reload_elf_rebuilds_features_and_keeps_tui_settings(elf_path):
     scraper = ZScraper(meta, elf_path=elf_path)
     has_heaps = scraper.available["heaps"]
     scraper.available["heaps"] = not has_heaps
-    scraper.poll_kernel_objects = False
+    scraper.view = Selection(groups=frozenset({"threads"}))
     scraper.inspection_period = 1.5
 
     scraper.reload_elf()
 
     assert scraper.available["heaps"] is has_heaps
-    assert scraper.poll_kernel_objects is False
+    assert scraper.view == Selection(groups=frozenset({"threads"}))
     assert scraper.inspection_period == 1.5
 
 

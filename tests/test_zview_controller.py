@@ -111,16 +111,18 @@ def test_process_data_strips_every_idle_thread(app):
 
 
 def test_a_thread_detail_scans_only_the_detailed_threads_stack(app):
-    """The idle thread's cycles are read with every other thread's, so it needs no slot."""
-    main = ThreadInfo(address=0x1000, stack_start=0, stack_size=512, name="main", runtime=None)
+    """The idle thread's cycles are read with every other thread's, so the view names only it."""
+    main = ThreadInfo(address=0x1000, stack_start=0, stack_size=512, name="main[0]", runtime=None)
     app.views = {ZViewState.THREAD_DETAIL_VIEW: MagicMock()}
-    app.detailing_thread = "main"
-    app.scraper.all_threads = {"main": main}
+    app.detailing_thread = "main[0]"
+    app.scraper.all_threads = {"main[0]": main}
     app.scraper._m_scraper.is_live = True
 
     app.transition_to(ZViewState.THREAD_DETAIL_VIEW)
 
-    assert app.scraper.thread_pool == [main]
+    assert app.scraper.view.reads("threads", "main[0]")
+    assert not app.scraper.view.reads("threads", "main0")
+    assert not app.scraper.view.reads_group("semaphores")
 
 
 def test_process_data_heaps_payload_captured(app):

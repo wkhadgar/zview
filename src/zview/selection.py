@@ -13,20 +13,21 @@ class Selection:
     """
     The groups a frame reads, narrowed by name.
 
-    A row is read when its group is selected, its name matches an ``include``
-    pattern or none are given, it matches no ``exclude`` pattern, and it is
-    not ``muted``. Patterns are shell globs. ``muted`` holds exact
-    ``(group, name)`` pairs, since a name such as ``z_idle_threads[0]`` reads
-    as a glob.
+    A row is read when its group is in ``groups`` and not in ``skipped``, its
+    name matches an ``include`` pattern or none are given, it matches no
+    ``exclude`` pattern, and it is not ``muted``. Patterns are shell globs.
+    ``muted`` holds exact ``(group, name)`` pairs, since a name such as
+    ``z_idle_threads[0]`` reads as a glob.
     """
 
     groups: frozenset[str] | None = None
+    skipped: frozenset[str] = frozenset()
     include: tuple[str, ...] = ()
     exclude: tuple[str, ...] = ()
     muted: frozenset[tuple[str, str]] = frozenset()
 
     def reads_group(self, group: str) -> bool:
-        return self.groups is None or group in self.groups
+        return (self.groups is None or group in self.groups) and group not in self.skipped
 
     def reads(self, group: str, name: str) -> bool:
         if not self.reads_group(group) or (group, name) in self.muted:

@@ -4,6 +4,7 @@
 
 import contextlib
 import curses
+import glob
 import io
 import queue
 import threading
@@ -43,6 +44,11 @@ from zview.frontend.tui.views.thread_list import ThreadListView
 from zview.frontend.tui.views.workq_detail import WorkqDetailView
 from zview.frontend.tui.widgets import PopupRow, TUIPopup
 from zview.orchestrator import ZScraper
+from zview.selection import Selection
+
+# What each kind of view reads from a live target, within the session's selection.
+_THREADS_VIEW = Selection(groups=frozenset({"threads"}))
+_OBJECTS_VIEW = Selection(skipped=frozenset({"threads"}))
 
 _GLOBAL_KEYBINDINGS: list[Keybind] = [
     Keybind("?", "Help", "Toggle this help overlay"),
@@ -181,7 +187,7 @@ class ZView:
         # The opening view is the thread list. A replay keeps polling whatever
         # its recording holds.
         if self.scraper._m_scraper.is_live:
-            self.scraper.poll_kernel_objects = False
+            self.scraper.view = _THREADS_VIEW
 
     def _init_curses(self) -> ZViewTUIAttributes:
         """
@@ -397,8 +403,7 @@ class ZView:
         match new_state:
             case ZViewState.THREAD_LIST_VIEW:
                 if live:
-                    self.scraper.thread_pool = list(self.scraper.all_threads.values())
-                    self.scraper.poll_kernel_objects = False
+                    self.scraper.view = _THREADS_VIEW
                 self.purge_queue()
 
             case ZViewState.THREAD_DETAIL_VIEW:
@@ -410,9 +415,11 @@ class ZView:
                     return
 
                 if live:
-                    # Every thread's cycles are read whatever the pool, so it
-                    # names only the stack to scan.
-                    self.scraper.thread_pool = [target_thread]
+                    # Every thread's cycles are still read, so the view names
+                    # only the stack to scan.
+                    self.scraper.view = Selection(
+                        groups=frozenset({"threads"}), include=(glob.escape(target_thread.name),)
+                    )
 
                 self.purge_queue()
 
@@ -425,10 +432,8 @@ class ZView:
                 | ZViewState.WORKQ_DETAIL_VIEW
             ):
                 if live:
-                    # This view reads only the primitives.
                     self.scraper.extra_info_heap_address = None
-                    self.scraper.thread_pool = []
-                    self.scraper.poll_kernel_objects = True
+                    self.scraper.view = _OBJECTS_VIEW
                 self.purge_queue()
 
             case ZViewState.HEAPS_DETAIL_VIEW:

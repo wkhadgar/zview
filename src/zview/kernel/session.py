@@ -10,15 +10,14 @@ from zview.backend.base import AbstractScraper
 from zview.backend.elf_inspector import ElfInspector
 from zview.kernel.compat import WaitQFlavor
 from zview.kernel.layout import KernelLayout
-from zview.selection import Selection
 
 
 @dataclass
 class Session:
     """
-    The probe, the ELF and its layout, the selection, and what one frame
-    shares across groups: the wait queue layout and the names of the threads a
-    wait queue can hold. ``parts`` are the groups' parts that are on.
+    The probe, the ELF and its layout, and what one frame shares across
+    groups: the wait queue layout and the names of the threads a wait queue
+    can hold. ``parts`` are the groups' parts that are on.
     ``state`` keeps each group's own values across frames, and ``errors``
     collects the failures a walk reports without giving up.
     """
@@ -26,7 +25,6 @@ class Session:
     scraper: AbstractScraper
     elf: ElfInspector
     layout: KernelLayout
-    selection: Selection = field(default_factory=Selection)
     waitq_flavor: WaitQFlavor = "simple"
     thread_names: dict[int, str] = field(default_factory=dict)
     parts: frozenset[str] = frozenset()

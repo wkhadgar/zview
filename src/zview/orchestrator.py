@@ -34,8 +34,11 @@ class _BrokenFrame(Exception):
 
 class ZScraper:
     last_thread_cycles: dict[int, int]
-    # The groups and rows a frame reads.
+    # What the session reads, and what the view on screen needs: a frame reads
+    # what both allow. The TUI sets ``view`` on a live target only, dump and
+    # record leave it reading everything.
     selection: Selection = Selection()
+    view: Selection = Selection()
 
     def __init__(
         self,
@@ -49,9 +52,6 @@ class ZScraper:
         self._thread_pool: list[ThreadInfo] | None = None
         self._stop_event: Event | None = None
         self.inspection_period = 0.2
-        # Set False by the TUI outside the kernel objects view; dump and record
-        # leave it on.
-        self.poll_kernel_objects: bool = True
         self._MAX_THREADS: int = max_threads
 
         self._load_elf(elf_path)
@@ -182,7 +182,6 @@ class ZScraper:
             scraper=self._m_scraper,
             elf=self._elf_inspector,
             layout=self._layout,
-            selection=self.selection,
             waitq_flavor=self.waitq_flavor,
             thread_names=self._thread_names(),
             parts=frozenset(self.parts),
@@ -282,6 +281,14 @@ class ZScraper:
         """True while any object group is live, so the objects view has rows to draw."""
         return any(self.available.values())
 
+    def _reads_group(self, group: str) -> bool:
+        """Both the session's selection and the view's read ``group``."""
+        return self.selection.reads_group(group) and self.view.reads_group(group)
+
+    def _reads(self, group: str, name: str) -> bool:
+        """Both the session's selection and the view's read the row ``name``."""
+        return self.selection.reads(group, name) and self.view.reads(group, name)
+
     def _poll_kernel_objects(self, data_queue: queue.Queue) -> dict:
         """
         Read the kernel objects. A failing group is skipped, and the rows a
@@ -291,19 +298,16 @@ class ZScraper:
         ``waiters`` is ``None``.
         """
         frame: dict = {}
-        if not self.poll_kernel_objects or not self.has_kernel_objects():
-            return frame
-
         session = self._session()
         for group in GROUPS:
-            if not self.available[group.key]:
+            if not self.available[group.key] or not self._reads_group(group.key):
                 continue
 
             # Matched against the labels the rows will carry.
             selected = {
                 label: [address]
                 for label, address in label_instances(self.rows[group.key])
-                if self.selection.reads(group.key, label)
+                if self._reads(group.key, label)
             }
             try:
                 objects = group.walk(session, selected)
@@ -515,7 +519,7 @@ class ZScraper:
             return {}
 
         # A muted thread keeps its counter, so the others' shares stay whole.
-        if not self.thread_pool or not self.selection.reads_group("threads"):
+        if not self.thread_pool or not self._reads_group("threads"):
             return {}
 
         try:
@@ -537,7 +541,7 @@ class ZScraper:
 
         polled: list[dict] = []
         for thread in self.thread_pool:
-            if not self.selection.reads("threads", thread.name):
+            if not self._reads("threads", thread.name):
                 continue
             usage_delta = deltas.get(thread.address, 0)
             if self.has_usage and not self.usage_snapshot:

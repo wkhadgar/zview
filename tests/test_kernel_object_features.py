@@ -24,7 +24,6 @@ def _scraper(**enabled: bool) -> ZScraper:
     s.has_usage = enabled.get("usage", False)
     s.usage_snapshot = True
     s.merged_thread_meta = True
-    s.poll_kernel_objects = True
     s._layout = KernelLayout(heap_free_bytes=4 if enabled.get("heap_stats", True) else None)
     s._elf_inspector = MagicMock(find_struct_instances=lambda struct: {"test_heap": [0x1000]})
     return s
@@ -119,7 +118,7 @@ def test_a_scraper_reporting_no_features_is_left_alone():
 
 
 def test_nothing_is_polled_when_no_group_is_enabled():
-    s = _scraper()
+    s = _polling_scraper()
 
     assert not s.has_kernel_objects()
     assert s._poll_kernel_objects(queue.Queue()) == {}
@@ -130,11 +129,14 @@ def test_a_build_with_only_heaps_still_has_objects_to_show():
     assert _scraper(heaps=True).has_kernel_objects()
 
 
-def test_the_view_gate_skips_the_reads():
-    s = _scraper(msgqs=True)
-    s.poll_kernel_objects = False
+def test_a_view_without_a_group_skips_its_reads():
+    from zview.selection import Selection
+
+    s = _polling_scraper(msgqs={"msgq": [0x100]})
+    s.view = Selection(groups=frozenset({"threads"}))
 
     assert s._poll_kernel_objects(queue.Queue()) == {}
+    assert not s._m_scraper.method_calls
 
 
 def test_absent_features_name_the_kconfig_they_need():
