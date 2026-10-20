@@ -18,19 +18,23 @@ from zview.backend.base import AbstractScraper, ProbeConnectFailure, ProbeReadFa
 # read's address and data.
 _QUEUED_WORDS = 16
 
+# The SWD clock, in Hz, when none is given. pyOCD's own default is 1 MHz.
+DEFAULT_FREQUENCY = 4_000_000
+
 
 class PyOCDScraper(AbstractScraper):
-    def __init__(self, target_mcu: str | None):
+    def __init__(self, target_mcu: str | None, frequency: int | None = None):
         super().__init__(target_mcu)
         self.session: Session | None = None
         self.target: Target | None = None
+        self.frequency = frequency or DEFAULT_FREQUENCY
 
     def connect(self):
         if self._is_connected:
             return
 
         self.session = ConnectHelper.session_with_chosen_probe(
-            target_override=self._target_mcu, connect_mode="attach"
+            target_override=self._target_mcu, connect_mode="attach", frequency=self.frequency
         )
         if self.session is None:
             raise ProbeConnectFailure("Unable to create a PyOCD session.")
