@@ -8,6 +8,7 @@ import logging
 import os
 from pathlib import Path
 
+from pyocd.utility.cmdline import convert_frequency
 from yaml import safe_load
 
 logger = logging.getLogger("zview.build")
@@ -56,6 +57,17 @@ class RunnerConfig:
             mcu = self._find_arg(args, "--target")
 
         return runner, mcu
+
+    def frequency(self, runner: str) -> int | None:
+        """The SWD clock the board passes ``runner``, in Hz, or ``None`` for the probe's own."""
+        args = self.data.get("args", {}).get(runner, [])
+        if runner == "jlink":
+            # In kHz, or "auto" and "adaptive", which leave it to the J-Link.
+            speed = self._find_arg(args, "--speed")
+            return int(speed) * 1000 if speed and speed.isdigit() else None
+
+        value = self._find_arg(args, "--frequency")
+        return None if value is None else convert_frequency(value)
 
     def _find_arg(self, args_list, prefix):
         """Helper to find an argument starting with a specific prefix"""
