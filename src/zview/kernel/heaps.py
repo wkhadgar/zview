@@ -2,11 +2,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Zephyr sys_heap chunk walker and k_heap wait queue reader."""
+"""Zephyr ``k_heap`` walker, with its sys_heap chunk walker and wait queue reader."""
 
 import struct
 
-from zview.backend.base import AbstractScraper
+from zview.backend.base import AbstractScraper, HeapInfo
+from zview.backend.replay import ReplayMismatch
+from zview.kernel.object_names import label_instances
+from zview.kernel.session import Session
 from zview.kernel.wait_queues import resolve_waiter_names, walk_wait_queue
 
 
@@ -95,3 +98,69 @@ def walk_heap_waiters(
         walk_wait_queue(scraper, heap_address + wait_q_offset, qnode_offset),
         thread_names,
     )
+
+
+def walk_heaps(session: Session, addresses: dict[str, list[int]]) -> dict[str, HeapInfo]:
+    """
+    Read every statically declared ``k_heap`` and return ``{label: HeapInfo}``.
+
+    Each heap costs four reads for its statistics, its wait queue with the
+    ``heap_waiters`` part on, and its chunk map when ``state["all_chunks"]`` is
+    set or it is the ``state["detailed"]`` heap. A heap that fails to read is
+    reported in ``session.errors`` and left out.
+    """
+    scraper, layout = session.scraper, session.layout
+    state = session.state.setdefault("heaps", {})
+    walk_waiters = (
+        session.has_part("heap_waiters")
+        and session.walks_waiters
+        and layout.heap_wait_q is not None
+        and layout.thread_qnode is not None
+    )
+
+    heaps: dict[str, HeapInfo] = {}
+    for label, address in label_instances(addresses):
+        try:
+            heap_struct = scraper.read32(address)[0]
+            free = scraper.read32(heap_struct + layout.heap_free_bytes)[0]
+            allocated = scraper.read32(heap_struct + layout.heap_allocated_bytes)[0]
+            max_allocated = scraper.read32(heap_struct + layout.heap_max_allocated_bytes)[0]
+        except Exception as e:
+            session.errors.append(f"Error reading heap info for {label}: {e}")
+            continue
+
+        waiters = None
+        if walk_waiters:
+            try:
+                waiters = walk_heap_waiters(
+                    scraper, address, layout.heap_wait_q, layout.thread_qnode, session.thread_names
+                )
+            except Exception as e:
+                session.errors.append(f"Error reading waiters for {label}: {e}")
+
+        chunks = None
+        if state.get("all_chunks") or state.get("detailed") == heap_struct:
+            try:
+                chunks = walk_heap_fragmentation(scraper, heap_struct, layout.heap_end_chunk)
+            except ReplayMismatch:
+                # A recording taken without the chunk map has no such read to
+                # serve. A drift leaves the cursor untouched, so the session
+                # goes on without asking again.
+                state["all_chunks"] = False
+                state["detailed"] = None
+            except Exception as e:
+                session.errors.append(f"Error reading sparsity for {label}: {e}")
+
+        total = allocated + free
+        heaps[label] = HeapInfo(
+            label,
+            heap_struct,
+            free,
+            allocated,
+            max_allocated,
+            (allocated / total * 100) if total > 0 else 0.0,
+            chunks,
+            waiters,
+        )
+
+    return heaps

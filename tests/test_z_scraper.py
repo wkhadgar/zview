@@ -97,7 +97,7 @@ def _usage_scraper(elf_path, threads, before: dict[int, int], now: dict[int, int
     mock.is_connected = True
     mock.watermark_cache = {}
     scraper = ZScraper(mock, elf_path=elf_path, max_threads=len(threads))
-    scraper.has_heaps = False
+    scraper.available["heaps"] = False
     scraper.has_usage = True
     scraper.idle_thread_addresses = (_IDLE,)
     scraper._usage_stamps = ()
@@ -226,11 +226,11 @@ def test_a_recording_from_before_the_snapshot_reads_counters_beside_the_stacks(e
 
 
 def _make_strike_scraper(elf_path):
-    """``ZScraper`` shim with ``has_usage``/``has_heaps`` disabled."""
+    """``ZScraper`` shim with its usage counters and heaps left unread."""
     mock = MagicMock()
     mock.is_connected = True
     scraper = ZScraper(mock, elf_path=elf_path, max_threads=2)
-    scraper.has_heaps = False
+    scraper.available["heaps"] = False
     scraper.has_usage = False
     scraper.idle_thread_addresses = (0x9999,)
     scraper.thread_pool = [
@@ -449,14 +449,14 @@ def test_reload_elf_rebuilds_features_and_keeps_tui_settings(elf_path):
     meta = MagicMock()
     meta.is_live = True
     scraper = ZScraper(meta, elf_path=elf_path)
-    has_heaps = scraper.has_heaps
-    scraper.has_heaps = not has_heaps
+    has_heaps = scraper.available["heaps"]
+    scraper.available["heaps"] = not has_heaps
     scraper.poll_kernel_objects = False
     scraper.inspection_period = 1.5
 
     scraper.reload_elf()
 
-    assert scraper.has_heaps is has_heaps
+    assert scraper.available["heaps"] is has_heaps
     assert scraper.poll_kernel_objects is False
     assert scraper.inspection_period == 1.5
 

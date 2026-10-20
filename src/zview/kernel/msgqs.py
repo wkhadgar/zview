@@ -4,31 +4,23 @@
 
 """Zephyr ``k_msgq`` walker."""
 
-from zview.backend.base import AbstractScraper, MsgqInfo
-from zview.backend.elf_inspector import ElfInspector
-from zview.kernel.layout import KernelLayout
+from zview.backend.base import MsgqInfo
 from zview.kernel.object_names import label_instances
+from zview.kernel.session import Session
 from zview.kernel.structs import struct_words
 from zview.kernel.wait_queues import resolve_waiter_names, walk_wait_queue
 
 
-def walk_msgqs(
-    scraper: AbstractScraper,
-    elf: ElfInspector,
-    addresses: dict[str, list[int]],
-    layout: KernelLayout,
-    thread_names: dict[int, str] | None = None,
-    *,
-    walk_waiters: bool = True,
-) -> dict[str, MsgqInfo]:
+def walk_msgqs(session: Session, addresses: dict[str, list[int]]) -> dict[str, MsgqInfo]:
     """
     Read every statically declared ``k_msgq`` and return ``{label: MsgqInfo}``.
 
     ``addresses`` maps a symbol name to its instance addresses. Each queue
-    costs one bulk struct read plus one read per waiting thread.
-    ``walk_waiters=False`` skips the wait queue and leaves ``waiters`` as
-    ``None``; required on a non-walkable (scalable) layout.
+    costs one bulk struct read plus one read per waiting thread. On a wait
+    queue layout that cannot be walked (scalable), ``waiters`` is ``None``.
     """
+    scraper, elf, layout = session.scraper, session.elf, session.layout
+    walk_waiters, thread_names = session.walks_waiters, session.thread_names
     words_to_read = struct_words(elf, "k_msgq")
     used_idx = layout.msgq_used_msgs // 4
     max_idx = layout.msgq_max_msgs // 4

@@ -12,20 +12,17 @@ import time
 from threading import Event
 from typing import Literal
 
-from zview.backend.base import AbstractScraper, HeapInfo, ThreadInfo, ThreadRuntime
+from zview.backend.base import AbstractScraper, ThreadInfo, ThreadRuntime
 from zview.backend.elf_inspector import ElfInspector
-from zview.backend.replay import ReplayComplete, ReplayMismatch
+from zview.backend.replay import ReplayComplete
 from zview.kernel import compat
-from zview.kernel.heaps import walk_heap_fragmentation, walk_heap_waiters
+from zview.kernel.groups import GROUPS
+from zview.kernel.heaps import walk_heap_fragmentation
 from zview.kernel.layout import KernelLayout
-from zview.kernel.mem_slabs import walk_mem_slabs
-from zview.kernel.msgqs import walk_msgqs
-from zview.kernel.mutexes import walk_mutexes
 from zview.kernel.object_names import label_instances
-from zview.kernel.semaphores import walk_semaphores
+from zview.kernel.session import Session
 from zview.kernel.threads import walk_static_threads, walk_thread_list
 from zview.kernel.usage import read_usage_snapshot
-from zview.kernel.workqs import walk_workqs
 from zview.selection import Selection
 
 logger = logging.getLogger("zview.scraper")
@@ -72,20 +69,17 @@ class ZScraper:
         )
         self._m_scraper.endianess = "<" if self._endianess == "little" else ">"
 
-        self.has_heaps: bool = True
         self.has_usage: bool = True
         self.has_names: bool = True
         self.has_thread_list: bool = True
         self.has_stack_info: bool = True
-        self.has_semaphores: bool = True
-        self.has_mutexes: bool = True
-        self.has_msgqs: bool = True
-        self.has_mem_slabs: bool = True
-        self.has_workqs: bool = True
-        # The heap wait queue walk reads per heap per frame, so it is its own
-        # feature: a recording taken before it has no such read to replay.
-        self.has_heap_waiters: bool = True
-        self.capture_all_heap_chunks: bool = False
+        # Per group key: whether it is read, the rows its discover found, and
+        # the values its walk keeps across frames.
+        self.available: dict[str, bool] = {}
+        self.rows: dict[str, dict] = {}
+        self.group_state: dict[str, dict] = {}
+        # Every group's parts start on, and a replay keeps those its recording names.
+        self.parts: set[str] = {part for group in GROUPS for part in group.parts}
         # The thread metadata bytes in one read, and the entry pointer read
         # once per thread. A recording taken before that holds one read per
         # field per frame, so replaying it keeps asking that way.
@@ -108,14 +102,12 @@ class ZScraper:
         self._layout = self._resolve_layout()
         self._resolve_addresses()
 
-        self._discover_heap_addresses()
-
-        self._discover_kernel_object_addresses()
+        self._discover_groups()
         self._restrict_features_to_recording()
 
         # A recording covers every heap's chunk map or none of it; the poll
         # finds out on its first read and backs off if there is none.
-        if not self._m_scraper.is_live and self.has_heaps:
+        if not self._m_scraper.is_live and self.available["heaps"]:
             self.capture_all_heap_chunks = True
 
         self.reset_runtime_state()
@@ -131,26 +123,23 @@ class ZScraper:
             (compat.THREAD_STACK_FIELDS, "has_stack_info"),
             (compat.THREAD_NAME_FIELDS, "has_names"),
             (compat.USAGE_FIELDS, "has_usage"),
-            (compat.HEAP_FIELDS, "has_heaps"),
-            (compat.SEMAPHORE_FIELDS, "has_semaphores"),
-            (compat.MUTEX_FIELDS, "has_mutexes"),
-            (compat.MSGQ_FIELDS, "has_msgqs"),
-            (compat.MEM_SLAB_FIELDS, "has_mem_slabs"),
-            # A queue's pending items are k_work nodes, so both must resolve.
-            (compat.WORKQ_FIELDS, "has_workqs"),
-            (compat.WORK_FIELDS, "has_workqs"),
         ):
             if (extras := compat.resolve_fields(elf, group)) is not None:
                 fields.update(extras)
             else:
                 setattr(self, flag, False)
 
+        for group in GROUPS:
+            required = [compat.resolve_fields(elf, table) for table in group.required]
+            self.available[group.key] = None not in required
+            for found in (t for t in required if t is not None):
+                fields.update(found)
+            for table in group.optional:
+                fields.update(compat.resolve_optional_fields(elf, table))
+
         # Metadata members and the qnode link resolve independently.
         fields.update(compat.resolve_optional_fields(elf, compat.THREAD_META_FIELDS))
         fields.update(compat.resolve_optional_fields(elf, compat.THREAD_QNODE_FIELDS))
-        fields.update(compat.resolve_optional_fields(elf, compat.MEM_SLAB_OPTIONAL_FIELDS))
-        fields.update(compat.resolve_optional_fields(elf, compat.HEAP_OPTIONAL_FIELDS))
-        fields.update(compat.resolve_optional_fields(elf, compat.WORKQ_OPTIONAL_FIELDS))
         fields.update(compat.resolve_fields(elf, compat.USAGE_STAMP_FIELDS) or {})
 
         return KernelLayout(**fields)
@@ -179,50 +168,44 @@ class ZScraper:
                     for i in range(cpus)
                 )
 
-    def _discover_heap_addresses(self) -> None:
-        """Populate ``_k_heap_addresses`` from ``k_heap`` globals; clears ``has_heaps`` if none."""
-        self._k_heap_addresses = self._elf_inspector.find_struct_instances("k_heap")
-        if not self._k_heap_addresses:
-            self.has_heaps = False
-            return
-        self.extra_info_heap_address: int | None = None
+    def _discover_groups(self) -> None:
+        """Find each available group's rows; a group with none is not read."""
+        session = self._session()
+        for group in GROUPS:
+            found = group.discover(session, group) if self.available[group.key] else {}
+            self.rows[group.key] = found
+            self.available[group.key] = bool(found)
 
-    def _discover_kernel_object_addresses(self) -> None:
-        """Populate kernel object addresses; clears the flag when none exist."""
-        self._k_sem_addresses: dict[str, list[int]] = {}
-        self._k_mutex_addresses: dict[str, list[int]] = {}
-        self._k_msgq_addresses: dict[str, list[int]] = {}
-        self._k_mem_slab_addresses: dict[str, list[int]] = {}
-        self._k_workq_addresses: dict[str, list[int]] = {}
+    def _session(self) -> Session:
+        """What the groups read with, as of now."""
+        return Session(
+            scraper=self._m_scraper,
+            elf=self._elf_inspector,
+            layout=self._layout,
+            selection=self.selection,
+            waitq_flavor=self.waitq_flavor,
+            thread_names=self._thread_names(),
+            parts=frozenset(self.parts),
+            state=self.group_state,
+        )
 
-        if self.has_semaphores:
-            self._k_sem_addresses = self._discover_struct_instances("k_sem")
-            self.has_semaphores = bool(self._k_sem_addresses)
+    @property
+    def capture_all_heap_chunks(self) -> bool:
+        """Every heap's chunk map is read each frame, as a recording keeps them all."""
+        return self.group_state.setdefault("heaps", {}).get("all_chunks", False)
 
-        if self.has_mutexes:
-            self._k_mutex_addresses = self._discover_struct_instances("k_mutex")
-            self.has_mutexes = bool(self._k_mutex_addresses)
+    @capture_all_heap_chunks.setter
+    def capture_all_heap_chunks(self, value: bool) -> None:
+        self.group_state.setdefault("heaps", {})["all_chunks"] = value
 
-        if self.has_msgqs:
-            self._k_msgq_addresses = self._discover_struct_instances("k_msgq")
-            self.has_msgqs = bool(self._k_msgq_addresses)
+    @property
+    def extra_info_heap_address(self) -> int | None:
+        """The heap whose chunk map is read for its detail view."""
+        return self.group_state.setdefault("heaps", {}).get("detailed")
 
-        if self.has_mem_slabs:
-            self._k_mem_slab_addresses = self._discover_struct_instances("k_mem_slab")
-            self.has_mem_slabs = bool(self._k_mem_slab_addresses)
-
-        if self.has_workqs:
-            self._k_workq_addresses = self._discover_struct_instances("k_work_q")
-            self.has_workqs = bool(self._k_workq_addresses)
-
-    def _discover_struct_instances(self, struct_name: str) -> dict[str, list[int]]:
-        """
-        Map ``{symbol: addresses}`` for every global instance of ``struct_name``.
-
-        Only statically declared objects (``K_SEM_DEFINE`` and friends) have a
-        symbol. A DWARF variable with no matching data symbol is skipped.
-        """
-        return self._elf_inspector.find_struct_instances(struct_name)
+    @extra_info_heap_address.setter
+    def extra_info_heap_address(self, value: int | None) -> None:
+        self.group_state.setdefault("heaps", {})["detailed"] = value
 
     def _restrict_features_to_recording(self) -> None:
         """
@@ -238,12 +221,9 @@ class ZScraper:
         if features is None:
             return
 
-        self.has_semaphores = self.has_semaphores and "semaphores" in features
-        self.has_mutexes = self.has_mutexes and "mutexes" in features
-        self.has_msgqs = self.has_msgqs and "msgqs" in features
-        self.has_mem_slabs = self.has_mem_slabs and "mem_slabs" in features
-        self.has_workqs = self.has_workqs and "workqs" in features
-        self.has_heap_waiters = self.has_heap_waiters and "heap_waiters" in features
+        for group in GROUPS:
+            self.available[group.key] = self.available[group.key] and group.key in features
+        self.parts &= set(features)
         self.merged_thread_meta = "merged_thread_meta" in features
         # A recording from before the scan was skipped scanned every stack.
         self.has_stack_fill = self.has_stack_fill or "unfilled_stacks" not in features
@@ -252,15 +232,13 @@ class ZScraper:
     def active_features(self) -> tuple[str, ...]:
         """The features this session polls, as recorded in a recording header."""
         features = ["threads"]
+        if self.merged_thread_meta:
+            features.append("merged_thread_meta")
+        # A group read, then each of its parts that is on.
+        for group in GROUPS:
+            if self.available[group.key]:
+                features += [group.key, *(part for part in group.parts if part in self.parts)]
         for enabled, name in (
-            (self.merged_thread_meta, "merged_thread_meta"),
-            (self.has_heaps, "heaps"),
-            (self.has_semaphores, "semaphores"),
-            (self.has_mutexes, "mutexes"),
-            (self.has_msgqs, "msgqs"),
-            (self.has_mem_slabs, "mem_slabs"),
-            (self.has_heaps and self.has_heap_waiters, "heap_waiters"),
-            (self.has_workqs, "workqs"),
             (not self.has_stack_fill, "unfilled_stacks"),
             (self.has_usage and self.usage_snapshot, "usage_snapshot"),
         ):
@@ -277,7 +255,9 @@ class ZScraper:
                 (self.has_names, "Warning: no thread names (CONFIG_THREAD_NAME=n)"),
                 (self.has_usage, "Warning: no cpu stats (CONFIG_THREAD_RUNTIME_STATS=n)"),
                 (
-                    self.has_heaps or not self._k_heap_addresses,
+                    # Only a build that declares heaps misses their stats.
+                    self._layout.heap_free_bytes is not None
+                    or not self._elf_inspector.find_struct_instances("k_heap"),
                     "Warning: no heap stats (CONFIG_SYS_HEAP_RUNTIME_STATS=n)",
                 ),
                 (
@@ -300,18 +280,12 @@ class ZScraper:
 
     def has_kernel_objects(self) -> bool:
         """True while any object group is live, so the objects view has rows to draw."""
-        return (
-            self.has_semaphores
-            or self.has_mutexes
-            or self.has_msgqs
-            or self.has_mem_slabs
-            or self.has_heaps
-            or self.has_workqs
-        )
+        return any(self.available.values())
 
     def _poll_kernel_objects(self, data_queue: queue.Queue) -> dict:
         """
-        Read the kernel objects. A failing group is skipped.
+        Read the kernel objects. A failing group is skipped, and the rows a
+        walk reports as failed are passed on as ``error`` frames.
 
         Wait queues are walked only on the ``simple`` layout; otherwise
         ``waiters`` is ``None``.
@@ -320,39 +294,28 @@ class ZScraper:
         if not self.poll_kernel_objects or not self.has_kernel_objects():
             return frame
 
-        walk_waiters = self.waitq_flavor == "simple"
-        thread_names = self._thread_names()
-
-        for enabled, key, walker, addresses in (
-            (self.has_semaphores, "semaphores", walk_semaphores, self._k_sem_addresses),
-            (self.has_mutexes, "mutexes", walk_mutexes, self._k_mutex_addresses),
-            (self.has_msgqs, "msgqs", walk_msgqs, self._k_msgq_addresses),
-            (self.has_mem_slabs, "mem_slabs", walk_mem_slabs, self._k_mem_slab_addresses),
-            (self.has_workqs, "workqs", walk_workqs, self._k_workq_addresses),
-        ):
-            if not enabled:
+        session = self._session()
+        for group in GROUPS:
+            if not self.available[group.key]:
                 continue
 
             # Matched against the labels the rows will carry.
             selected = {
                 label: [address]
-                for label, address in label_instances(addresses)
-                if self.selection.reads(key, label)
+                for label, address in label_instances(self.rows[group.key])
+                if self.selection.reads(group.key, label)
             }
             try:
-                objects = walker(
-                    self._m_scraper,
-                    self._elf_inspector,
-                    selected,
-                    self._layout,
-                    thread_names,
-                    walk_waiters=walk_waiters,
-                )
+                objects = group.walk(session, selected)
             except Exception as e:
-                data_queue.put({"error": f"Error reading {key}: {e}"}, block=False)
+                data_queue.put({"error": f"Error reading {group.key}: {e}"}, block=False)
                 continue
+            finally:
+                for message in session.errors:
+                    data_queue.put({"error": message}, block=False)
+                session.errors.clear()
 
-            frame[key] = list(objects.values())
+            frame[group.key] = list(objects.values())
 
         return frame
 
@@ -489,8 +452,6 @@ class ZScraper:
                 final_threads = self._finalize_threads(polled_raw, deltas)
 
                 frame: dict = {"threads": final_threads}
-                if self.has_heaps:
-                    frame["heaps"] = self._poll_heaps(data_queue)
                 frame.update(self._poll_kernel_objects(data_queue))
                 data_queue.put(frame, block=False)
 
@@ -763,82 +724,3 @@ class ZScraper:
     def _thread_names(self) -> dict[int, str]:
         """``{address: name}`` for the threads a wait queue can name."""
         return {t.address: t.name for t in self._all_threads_info.values()}
-
-    def _poll_heaps(self, data_queue: queue.Queue) -> list[HeapInfo]:
-        """Read all heap metadata. Per-heap read failures emit ``error`` frames and are skipped."""
-        heaps: list[HeapInfo] = []
-        walk_waiters = (
-            self.has_heap_waiters
-            and self.waitq_flavor == "simple"
-            and self._layout.heap_wait_q is not None
-            and self._layout.thread_qnode is not None
-        )
-        thread_names = self._thread_names() if walk_waiters else {}
-        for heap_name, heap_addresses in self._k_heap_addresses.items():
-            if not self.selection.reads("heaps", heap_name):
-                continue
-            for heap_address in heap_addresses:
-                try:
-                    heap_struct = self._m_scraper.read32(heap_address)[0]
-                    free = self._m_scraper.read32(heap_struct + self._layout.heap_free_bytes)[0]
-                    allocated = self._m_scraper.read32(
-                        heap_struct + self._layout.heap_allocated_bytes
-                    )[0]
-                    max_allocated = self._m_scraper.read32(
-                        heap_struct + self._layout.heap_max_allocated_bytes
-                    )[0]
-                except Exception as e:
-                    data_queue.put(
-                        {"error": f"Error reading heap info for {heap_name}: {e}"},
-                        block=False,
-                    )
-                    continue
-
-                waiters = None
-                if walk_waiters:
-                    try:
-                        waiters = walk_heap_waiters(
-                            self._m_scraper,
-                            heap_address,
-                            self._layout.heap_wait_q,
-                            self._layout.thread_qnode,
-                            thread_names,
-                        )
-                    except Exception as e:
-                        data_queue.put(
-                            {"error": f"Error reading waiters for {heap_name}: {e}"},
-                            block=False,
-                        )
-
-                chunks = None
-                if self.capture_all_heap_chunks or self.extra_info_heap_address == heap_struct:
-                    try:
-                        chunks = self.get_heap_fragmentation(heap_struct)
-                    except ReplayMismatch:
-                        # A recording taken without the chunk map has no such
-                        # read to serve. A drift leaves the cursor untouched,
-                        # so the session goes on without asking again.
-                        self.capture_all_heap_chunks = False
-                        self.extra_info_heap_address = None
-                    except Exception as e:
-                        data_queue.put(
-                            {"error": f"Error reading sparsity for {heap_name}: {e}"},
-                            block=False,
-                        )
-
-                total = allocated + free
-                usage_pct = (allocated / total * 100) if total > 0 else 0.0
-
-                heaps.append(
-                    HeapInfo(
-                        heap_name,
-                        heap_struct,
-                        free,
-                        allocated,
-                        max_allocated,
-                        usage_pct,
-                        chunks,
-                        waiters,
-                    )
-                )
-        return heaps

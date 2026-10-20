@@ -4,33 +4,25 @@
 
 """Zephyr ``k_mem_slab`` walker."""
 
-from zview.backend.base import AbstractScraper, MemSlabInfo
-from zview.backend.elf_inspector import ElfInspector
-from zview.kernel.layout import KernelLayout
+from zview.backend.base import MemSlabInfo
 from zview.kernel.object_names import label_instances
+from zview.kernel.session import Session
 from zview.kernel.structs import struct_words
 from zview.kernel.wait_queues import resolve_waiter_names, walk_wait_queue
 
 
-def walk_mem_slabs(
-    scraper: AbstractScraper,
-    elf: ElfInspector,
-    addresses: dict[str, list[int]],
-    layout: KernelLayout,
-    thread_names: dict[int, str] | None = None,
-    *,
-    walk_waiters: bool = True,
-) -> dict[str, MemSlabInfo]:
+def walk_mem_slabs(session: Session, addresses: dict[str, list[int]]) -> dict[str, MemSlabInfo]:
     """
     Read every statically declared ``k_mem_slab`` and return ``{label: MemSlabInfo}``.
 
     ``addresses`` maps a symbol name to its instance addresses. Each slab costs
-    one bulk struct read plus one read per waiting thread.
-    ``walk_waiters=False`` skips the wait queue and leaves ``waiters`` as
-    ``None``; required on a non-walkable (scalable) layout.
+    one bulk struct read plus one read per waiting thread. On a wait queue
+    layout that cannot be walked (scalable), ``waiters`` is ``None``.
 
     ``max_used`` is read only where the layout resolved it.
     """
+    scraper, elf, layout = session.scraper, session.elf, session.layout
+    walk_waiters, thread_names = session.walks_waiters, session.thread_names
     words_to_read = struct_words(elf, "k_mem_slab")
     blocks_idx = layout.mem_slab_num_blocks // 4
     size_idx = layout.mem_slab_block_size // 4

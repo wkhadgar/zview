@@ -8,6 +8,7 @@ from zview.backend.base import AbstractScraper, WorkqInfo
 from zview.backend.elf_inspector import ElfInspector
 from zview.kernel.layout import KernelLayout
 from zview.kernel.object_names import label_instances
+from zview.kernel.session import Session
 from zview.kernel.wait_queues import resolve_waiter_names, walk_wait_queue
 
 _MAX_PENDING = 16
@@ -52,13 +53,9 @@ def _item_name(elf: ElfInspector, item: int, handler: int) -> str:
 
 
 def walk_workqs(
-    scraper: AbstractScraper,
-    elf: ElfInspector,
+    session: Session,
     addresses: dict[str, list[int]],
-    layout: KernelLayout,
-    thread_names: dict[int, str] | None = None,
     *,
-    walk_waiters: bool = True,
     max_pending: int = _MAX_PENDING,
 ) -> dict[str, WorkqInfo]:
     """
@@ -67,9 +64,11 @@ def walk_workqs(
     ``addresses`` maps a symbol name to its instance addresses. Each queue
     costs one read of the span its fields sit in, plus one per pending item and
     per draining thread; the struct itself is mostly a deprecated embedded
-    ``k_thread``. ``walk_waiters=False`` leaves ``waiters`` as ``None``;
-    required on a non-walkable (scalable) layout.
+    ``k_thread``. On a wait queue layout that cannot be walked (scalable),
+    ``waiters`` is ``None``.
     """
+    scraper, elf, layout = session.scraper, session.elf, session.layout
+    walk_waiters, thread_names = session.walks_waiters, session.thread_names
     offsets = [layout.workq_thread_id, layout.workq_pending, layout.workq_flags]
     if layout.workq_drainq is not None:
         offsets.append(layout.workq_drainq)

@@ -2,13 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import queue
 import struct
 
 import pytest
 
 from zview.backend.base import ProbeReadError
-from zview.kernel.heaps import walk_heap_waiters
+from zview.kernel.heaps import walk_heap_waiters, walk_heaps
+from zview.kernel.session import Session
 from zview.orchestrator import ZScraper
 
 
@@ -212,17 +212,11 @@ class FakeHeapMemory:
             raise AssertionError(f"unexpected read32 @ 0x{at:X}") from e
 
 
-def _heap_poller(words: dict[int, int], *, wait_q: int | None, flavor: str = "simple") -> ZScraper:
-    """``ZScraper`` seeded with one heap and nothing else."""
+def _heap_session(words: dict[int, int], *, wait_q: int | None, flavor: str = "simple") -> Session:
+    """A session over one heap and nothing else."""
     from zview.kernel.layout import KernelLayout
 
-    poller = object.__new__(ZScraper)
-    poller._m_scraper = FakeHeapMemory(words)
-    poller._layout = KernelLayout(
-        threads_head=0,
-        thread_next=0,
-        stack_start=0,
-        stack_size=0,
+    layout = KernelLayout(
         heap_free_bytes=4,
         heap_allocated_bytes=8,
         heap_max_allocated_bytes=12,
@@ -230,13 +224,14 @@ def _heap_poller(words: dict[int, int], *, wait_q: int | None, flavor: str = "si
         heap_wait_q=wait_q,
         thread_qnode=0,
     )
-    poller._k_heap_addresses = {"bench_heap": [_HEAP]}
-    poller.capture_all_heap_chunks = False
-    poller.extra_info_heap_address = None
-    poller.waitq_flavor = flavor
-    poller.has_heap_waiters = True
-    poller._all_threads_info = {}
-    return poller
+    return Session(
+        FakeHeapMemory(words), None, layout, waitq_flavor=flavor, parts=frozenset({"heap_waiters"})
+    )
+
+
+def _poll(session: Session) -> list:
+    """One frame of the single ``bench_heap``."""
+    return list(walk_heaps(session, {"bench_heap": [_HEAP]}).values())
 
 
 _SYS_HEAP = 0x9000
@@ -246,13 +241,13 @@ _STATS = {_HEAP: _SYS_HEAP, _SYS_HEAP + 4: 1536, _SYS_HEAP + 8: 2560, _SYS_HEAP 
 
 def test_a_polled_heap_reports_the_threads_waiting_for_memory():
     thread = 0x3000
-    poller = _heap_poller(
+    session = _heap_session(
         {**_STATS, _HEAP + _WAIT_Q: thread, thread: _HEAP + _WAIT_Q},
         wait_q=_WAIT_Q,
     )
-    poller._all_threads_info = {1: type("T", (), {"address": thread, "name": "worker"})()}
+    session.thread_names = {thread: "worker"}
 
-    heaps = poller._poll_heaps(queue.Queue())
+    heaps = _poll(session)
 
     assert heaps[0].waiters == ("worker",)
     assert heaps[0].free_bytes == 1536
@@ -260,30 +255,29 @@ def test_a_polled_heap_reports_the_threads_waiting_for_memory():
 
 def test_a_heap_without_a_resolved_queue_reports_no_waiter_list():
     """``waiters`` is None, not empty: nothing was walked."""
-    poller = _heap_poller(_STATS, wait_q=None)
+    session = _heap_session(_STATS, wait_q=None)
 
-    assert poller._poll_heaps(queue.Queue())[0].waiters is None
+    assert _poll(session)[0].waiters is None
 
 
-def test_a_recording_without_a_chunk_map_stops_asking_for_one():
+def test_a_recording_without_a_chunk_map_stops_asking_for_one(monkeypatch):
     """A drift leaves the replay cursor untouched, so the heap is still reported."""
     from zview.backend.replay import ReplayMismatch
 
-    def drift(_address):
+    def drift(*_args):
         raise ReplayMismatch("Replay drift at index 19: expected end_batch, got read_bytes.")
 
     quiet_queue = {_HEAP + _WAIT_Q: _HEAP + _WAIT_Q}
-    poller = _heap_poller({**_STATS, **quiet_queue}, wait_q=_WAIT_Q)
-    poller.capture_all_heap_chunks = True
-    poller.get_heap_fragmentation = drift
-    reported: queue.Queue = queue.Queue()
+    session = _heap_session({**_STATS, **quiet_queue}, wait_q=_WAIT_Q)
+    session.state["heaps"] = {"all_chunks": True}
+    monkeypatch.setattr("zview.kernel.heaps.walk_heap_fragmentation", drift)
 
-    heap = poller._poll_heaps(reported)[0]
+    heap = _poll(session)[0]
 
     assert heap.chunks is None
     assert heap.free_bytes == 1536
-    assert not poller.capture_all_heap_chunks
-    assert reported.empty()
+    assert not session.state["heaps"]["all_chunks"]
+    assert session.errors == []
 
 
 class LiveHeapRefusingChunkMap(FakeHeapMemory):
@@ -316,39 +310,38 @@ def test_a_chunk_map_the_live_stub_refused_replays_frame_after_frame(tmp_path):
     words = {**_STATS, _HEAP + _WAIT_Q: _HEAP + _WAIT_Q, _SYS_HEAP: 264}
     path = tmp_path / "refused.ndjson.gz"
 
-    live = _heap_poller(words, wait_q=_WAIT_Q)
-    live.capture_all_heap_chunks = True
+    live = _heap_session(words, wait_q=_WAIT_Q)
+    live.state["heaps"] = {"all_chunks": True}
     with RecordingScraper(LiveHeapRefusingChunkMap(words), path) as recorder:
-        live._m_scraper = recorder
+        live.scraper = recorder
         for _ in range(3):
             recorder.begin_batch()
-            live._poll_heaps(queue.Queue())
+            _poll(live)
             recorder.end_batch()
 
-    replayed = _heap_poller(words, wait_q=_WAIT_Q)
-    replayed.capture_all_heap_chunks = True
-    reported: queue.Queue = queue.Queue()
+    replayed = _heap_session(words, wait_q=_WAIT_Q)
+    replayed.state["heaps"] = {"all_chunks": True}
     with ReplayScraper(path, honor_timing=False) as replay:
-        replayed._m_scraper = replay
+        replayed.scraper = replay
         for _ in range(3):
             replay.begin_batch()
-            assert replayed._poll_heaps(reported)[0].free_bytes == 1536
+            assert _poll(replayed)[0].free_bytes == 1536
             replay.end_batch()
 
-    assert [reported.get()["error"] for _ in range(reported.qsize())] == [
-        "Error reading sparsity for bench_heap: GDB error at 0x9000: E22"
-    ] * 3
+    assert (
+        replayed.errors == ["Error reading sparsity for bench_heap: GDB error at 0x9000: E22"] * 3
+    )
 
 
 def test_a_recording_that_never_walked_the_queue_reports_no_waiter_list():
     """Replay matches a read sequence, so a feature the recording lacks must not be read."""
-    poller = _heap_poller(_STATS, wait_q=_WAIT_Q)
-    poller.has_heap_waiters = False
+    session = _heap_session(_STATS, wait_q=_WAIT_Q)
+    session.parts = frozenset()
 
-    assert poller._poll_heaps(queue.Queue())[0].waiters is None
+    assert _poll(session)[0].waiters is None
 
 
 def test_a_scalable_wait_queue_is_left_unwalked():
-    poller = _heap_poller(_STATS, wait_q=_WAIT_Q, flavor="scalable")
+    session = _heap_session(_STATS, wait_q=_WAIT_Q, flavor="scalable")
 
-    assert poller._poll_heaps(queue.Queue())[0].waiters is None
+    assert _poll(session)[0].waiters is None

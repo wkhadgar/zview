@@ -109,7 +109,7 @@ def record_session(
     with recorder:
         scraper.update_available_threads()
         scraper.reset_thread_pool()
-        scraper.capture_all_heap_chunks = scraper.has_heaps
+        scraper.capture_all_heap_chunks = scraper.available["heaps"]
 
         data_queue: queue.Queue = queue.Queue()
         stop = threading.Event()

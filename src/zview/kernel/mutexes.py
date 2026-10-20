@@ -4,30 +4,23 @@
 
 """Zephyr ``k_mutex`` walker."""
 
-from zview.backend.base import AbstractScraper, MutexInfo
-from zview.backend.elf_inspector import ElfInspector
-from zview.kernel.layout import KernelLayout
+from zview.backend.base import MutexInfo
 from zview.kernel.object_names import label_instances
+from zview.kernel.session import Session
 from zview.kernel.structs import struct_words
 from zview.kernel.wait_queues import resolve_waiter_names, walk_wait_queue
 
 
-def walk_mutexes(
-    scraper: AbstractScraper,
-    elf: ElfInspector,
-    addresses: dict[str, list[int]],
-    layout: KernelLayout,
-    thread_names: dict[int, str] | None = None,
-    *,
-    walk_waiters: bool = True,
-) -> dict[str, MutexInfo]:
+def walk_mutexes(session: Session, addresses: dict[str, list[int]]) -> dict[str, MutexInfo]:
     """
     Read every statically declared ``k_mutex`` and return ``{label: MutexInfo}``.
 
-    The owner pointer is resolved against ``thread_names``. Each mutex costs
-    one bulk struct read plus one read per waiting thread. A lock taken and
-    released between two calls is not observed.
+    The owner pointer is resolved against the session's thread names. Each
+    mutex costs one bulk struct read plus one read per waiting thread. A lock
+    taken and released between two calls is not observed.
     """
+    scraper, elf, layout = session.scraper, session.elf, session.layout
+    walk_waiters, thread_names = session.walks_waiters, session.thread_names
     words_to_read = struct_words(elf, "k_mutex")
     owner_idx = layout.mutex_owner // 4
     lock_count_idx = layout.mutex_lock_count // 4

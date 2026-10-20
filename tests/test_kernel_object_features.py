@@ -7,26 +7,46 @@
 import queue
 from unittest.mock import MagicMock, patch
 
+from zview.kernel.groups import GROUPS
+from zview.kernel.layout import KernelLayout
 from zview.orchestrator import ZScraper
 
 
 def _scraper(**enabled: bool) -> ZScraper:
     """``ZScraper`` with only the feature flags set, without touching an ELF."""
     s = ZScraper.__new__(ZScraper)
-    s.has_heaps = enabled.get("heaps", False)
-    s.has_semaphores = enabled.get("semaphores", False)
-    s.has_mutexes = enabled.get("mutexes", False)
-    s.has_msgqs = enabled.get("msgqs", False)
-    s.has_mem_slabs = enabled.get("mem_slabs", False)
-    s.has_workqs = enabled.get("workqs", False)
-    s.has_heap_waiters = enabled.get("heap_waiters", s.has_heaps)
+    s.available = {group.key: enabled.get(group.key, False) for group in GROUPS}
+    s.rows = {group.key: {} for group in GROUPS}
+    s.group_state = {}
+    s.parts = {"heap_waiters"} if enabled.get("heap_waiters", s.available["heaps"]) else set()
     s.has_stack_fill = enabled.get("stack_fill", True)
     s.has_thread_list = enabled.get("thread_list", True)
     s.has_usage = enabled.get("usage", False)
     s.usage_snapshot = True
     s.merged_thread_meta = True
     s.poll_kernel_objects = True
+    s._layout = KernelLayout(heap_free_bytes=4 if enabled.get("heap_stats", True) else None)
+    s._elf_inspector = MagicMock(find_struct_instances=lambda struct: {"test_heap": [0x1000]})
     return s
+
+
+def _polling_scraper(**rows: dict[str, list[int]]) -> ZScraper:
+    """``_scraper`` with ``rows`` discovered per group, ready to poll them."""
+    s = _scraper(**{key: True for key in rows})
+    s.rows.update(rows)
+    s._m_scraper = MagicMock()
+    s._elf_inspector = MagicMock()
+    s._layout = MagicMock()
+    s.waitq_flavor = "simple"
+    s._thread_names = lambda: {}
+    return s
+
+
+def _with_walks(**walks):
+    """``GROUPS`` with these groups' ``walk`` replaced."""
+    from dataclasses import replace
+
+    return tuple(replace(group, walk=walks.get(group.key, group.walk)) for group in GROUPS)
 
 
 def test_active_features_lists_only_what_is_polled():
@@ -36,10 +56,10 @@ def test_active_features_lists_only_what_is_polled():
         "threads",
         "merged_thread_meta",
         "heaps",
+        "heap_waiters",
         "semaphores",
         "msgqs",
         "mem_slabs",
-        "heap_waiters",
     )
 
 
@@ -50,8 +70,8 @@ def test_a_recording_without_the_heap_wait_queue_reads_does_not_replay_them():
 
     s._restrict_features_to_recording()
 
-    assert s.has_heaps
-    assert not s.has_heap_waiters
+    assert s.available["heaps"]
+    assert "heap_waiters" not in s.parts
 
 
 def test_threads_are_always_a_feature():
@@ -64,7 +84,7 @@ def test_a_live_session_is_not_restricted():
 
     s._restrict_features_to_recording()
 
-    assert (s.has_semaphores, s.has_mutexes, s.has_msgqs) == (True, True, True)
+    assert [s.available[key] for key in ("semaphores", "mutexes", "msgqs")] == [True] * 3
 
 
 def test_a_recording_without_a_group_turns_it_off():
@@ -74,10 +94,10 @@ def test_a_recording_without_a_group_turns_it_off():
 
     s._restrict_features_to_recording()
 
-    assert s.has_semaphores
-    assert not s.has_mutexes
-    assert not s.has_msgqs
-    assert not s.has_mem_slabs
+    assert s.available["semaphores"]
+    assert not s.available["mutexes"]
+    assert not s.available["msgqs"]
+    assert not s.available["mem_slabs"]
 
 
 def test_a_group_absent_from_the_elf_stays_off_even_if_recorded():
@@ -86,7 +106,7 @@ def test_a_group_absent_from_the_elf_stays_off_even_if_recorded():
 
     s._restrict_features_to_recording()
 
-    assert not s.has_msgqs
+    assert not s.available["msgqs"]
 
 
 def test_a_scraper_reporting_no_features_is_left_alone():
@@ -95,7 +115,7 @@ def test_a_scraper_reporting_no_features_is_left_alone():
 
     s._restrict_features_to_recording()
 
-    assert s.has_msgqs
+    assert s.available["msgqs"]
 
 
 def test_nothing_is_polled_when_no_group_is_enabled():
@@ -118,11 +138,9 @@ def test_the_view_gate_skips_the_reads():
 
 
 def test_absent_features_name_the_kconfig_they_need():
-    s = _scraper(stack_fill=False, thread_list=False)
+    s = _scraper(stack_fill=False, thread_list=False, heap_stats=False)
     s.has_names = False
     s.has_usage = True
-    s.has_heaps = False
-    s._k_heap_addresses = {"test_heap": [0x1000]}
     s.has_stack_info = False
 
     assert s.absent_features() == (
@@ -175,8 +193,8 @@ def test_a_recording_without_work_queues_does_not_replay_them():
 
     s._restrict_features_to_recording()
 
-    assert not s.has_workqs
-    assert s.has_semaphores
+    assert not s.available["workqs"]
+    assert s.available["semaphores"]
 
 
 def test_a_skipped_stack_scan_is_a_recorded_feature():
@@ -227,21 +245,13 @@ def test_a_group_walker_gets_only_the_selected_labels():
     """Matched against the labels rows carry, ``name@0x...`` for a name with several."""
     from zview.selection import Selection
 
-    s = _scraper(semaphores=True)
-    s._m_scraper = MagicMock()
-    s._elf_inspector = MagicMock()
-    s._layout = MagicMock()
-    s._k_sem_addresses = {"sem_a": [0x100], "sem_b": [0x200, 0x300]}
-    s._k_mutex_addresses = s._k_msgq_addresses = s._k_mem_slab_addresses = {}
-    s._k_workq_addresses = {}
-    s.waitq_flavor = "simple"
-    s._thread_names = lambda: {}
+    s = _polling_scraper(semaphores={"sem_a": [0x100], "sem_b": [0x200, 0x300]})
     s.selection = Selection(exclude=("sem_a",), muted=frozenset({("semaphores", "sem_b@0x300")}))
     given: list[dict] = []
 
     with patch(
-        "zview.orchestrator.walk_semaphores",
-        lambda scraper, elf, addresses, *_a, **_kw: given.append(addresses) or {},
+        "zview.orchestrator.GROUPS",
+        _with_walks(semaphores=lambda session, rows: given.append(rows) or {}),
     ):
         s._poll_kernel_objects(queue.Queue())
 
@@ -250,23 +260,15 @@ def test_a_group_walker_gets_only_the_selected_labels():
 
 def test_the_poll_reads_the_work_queues_last():
     """Appended after the other groups, so a recording's earlier reads keep their order."""
-    s = _scraper(semaphores=True, workqs=True)
-    s._m_scraper = MagicMock()
-    s._elf_inspector = MagicMock()
-    s._layout = MagicMock()
-    s._k_sem_addresses = {"sem": [0x100]}
-    s._k_mutex_addresses = s._k_msgq_addresses = s._k_mem_slab_addresses = {}
-    s._k_workq_addresses = {"k_sys_work_q": [0x200]}
-    s.waitq_flavor = "simple"
-    s._thread_names = lambda: {}
+    s = _polling_scraper(semaphores={"sem": [0x100]}, workqs={"k_sys_work_q": [0x200]})
     order: list[str] = []
 
     def walker(key):
-        return lambda *_a, **_kw: order.append(key) or {key: key}
+        return lambda session, rows: order.append(key) or {key: key}
 
-    with (
-        patch("zview.orchestrator.walk_semaphores", walker("semaphores")),
-        patch("zview.orchestrator.walk_workqs", walker("workqs")),
+    with patch(
+        "zview.orchestrator.GROUPS",
+        _with_walks(semaphores=walker("semaphores"), workqs=walker("workqs")),
     ):
         frame = s._poll_kernel_objects(queue.Queue())
 

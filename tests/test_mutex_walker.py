@@ -4,6 +4,7 @@
 
 from zview.kernel.layout import KernelLayout
 from zview.kernel.mutexes import walk_mutexes
+from zview.kernel.session import Session
 
 
 class FakeScraper:
@@ -57,11 +58,22 @@ def _mutex_words(
     }
 
 
+def _session(scraper, elf, layout, thread_names=None, *, walk_waiters=True) -> Session:
+    """The session a walker reads with, from the arguments it used to take."""
+    return Session(
+        scraper,
+        elf,
+        layout,
+        waitq_flavor="simple" if walk_waiters else "scalable",
+        thread_names=thread_names or {},
+    )
+
+
 def test_free_mutex():
     mutex = 0x2000
     scraper = FakeScraper(_mutex_words(mutex, owner=0, lock_count=0))
 
-    info = walk_mutexes(scraper, FakeElf(), {"uart_mutex": [mutex]}, LAYOUT)["uart_mutex"]
+    info = walk_mutexes(_session(scraper, FakeElf(), LAYOUT), {"uart_mutex": [mutex]})["uart_mutex"]
 
     assert not info.is_locked
     assert info.owner_address == 0
@@ -74,9 +86,9 @@ def test_locked_mutex_resolves_its_owner():
     mutex, owner = 0x2000, 0x3000
     scraper = FakeScraper(_mutex_words(mutex, owner=owner, lock_count=1))
 
-    info = walk_mutexes(scraper, FakeElf(), {"spi_bus": [mutex]}, LAYOUT, {owner: "spi_task"})[
-        "spi_bus"
-    ]
+    info = walk_mutexes(
+        _session(scraper, FakeElf(), LAYOUT, {owner: "spi_task"}), {"spi_bus": [mutex]}
+    )["spi_bus"]
 
     assert info.is_locked
     assert info.owner_name == "spi_task"
@@ -87,7 +99,9 @@ def test_recursive_lock_depth_is_reported():
     mutex, owner = 0x2000, 0x3000
     scraper = FakeScraper(_mutex_words(mutex, owner=owner, lock_count=3))
 
-    info = walk_mutexes(scraper, FakeElf(), {"m": [mutex]}, LAYOUT, {owner: "worker"})["m"]
+    info = walk_mutexes(_session(scraper, FakeElf(), LAYOUT, {owner: "worker"}), {"m": [mutex]})[
+        "m"
+    ]
 
     assert info.lock_count == 3
 
@@ -97,7 +111,7 @@ def test_unknown_owner_keeps_the_address():
     mutex, owner = 0x2000, 0x3000
     scraper = FakeScraper(_mutex_words(mutex, owner=owner, lock_count=1))
 
-    info = walk_mutexes(scraper, FakeElf(), {"m": [mutex]}, LAYOUT, {})["m"]
+    info = walk_mutexes(_session(scraper, FakeElf(), LAYOUT, {}), {"m": [mutex]})["m"]
 
     assert info.is_locked
     assert info.owner_address == owner
@@ -111,11 +125,13 @@ def test_contended_mutex_lists_its_wait_queue():
     words |= {first: second, second: mutex}
 
     info = walk_mutexes(
-        FakeScraper(words),
-        FakeElf(),
+        _session(
+            FakeScraper(words),
+            FakeElf(),
+            LAYOUT,
+            {owner: "spi_task", first: "sensor_task", second: "logger_task"},
+        ),
         {"spi_bus": [mutex]},
-        LAYOUT,
-        {owner: "spi_task", first: "sensor_task", second: "logger_task"},
     )["spi_bus"]
 
     assert info.owner_name == "spi_task"
@@ -127,7 +143,7 @@ def test_walk_waiters_disabled_reports_unknown():
     scraper = FakeScraper(_mutex_words(mutex, owner=owner, lock_count=1))
 
     info = walk_mutexes(
-        scraper, FakeElf(), {"m": [mutex]}, LAYOUT, {owner: "t"}, walk_waiters=False
+        _session(scraper, FakeElf(), LAYOUT, {owner: "t"}, walk_waiters=False), {"m": [mutex]}
     )["m"]
 
     assert info.waiters is None
@@ -138,10 +154,12 @@ def test_same_symbol_at_several_addresses_gets_unique_labels():
     first, second = 0x2000, 0x2100
     words = _mutex_words(first, owner=0, lock_count=0) | _mutex_words(second, owner=0, lock_count=0)
 
-    mutexes = walk_mutexes(FakeScraper(words), FakeElf(), {"locks": [first, second]}, LAYOUT)
+    mutexes = walk_mutexes(
+        _session(FakeScraper(words), FakeElf(), LAYOUT), {"locks": [first, second]}
+    )
 
     assert list(mutexes) == ["locks@0x2000", "locks@0x2100"]
 
 
 def test_no_instances_returns_empty():
-    assert walk_mutexes(FakeScraper({}), FakeElf(), {}, LAYOUT) == {}
+    assert walk_mutexes(_session(FakeScraper({}), FakeElf(), LAYOUT), {}) == {}
