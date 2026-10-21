@@ -18,13 +18,15 @@ class QueueingTarget:
 
     A fault fails the way pyOCD's does: one faulting word aborts its whole
     packet, reported at the packet's first word, and a faulting block read
-    leaves every result still waiting broken.
+    leaves every result still waiting broken. A queued word holds a level of
+    the probe lock until its result is collected, once.
     """
 
     def __init__(self, words: dict[int, int], faults: tuple[int, ...] = ()):
         self.words = words
         self.faults = faults
         self.sent: list[tuple[str, int]] = []
+        self.held = 0
         self._queue: list[int] = []
         self._failed: dict[int, Exception] = {}
 
@@ -40,8 +42,15 @@ class QueueingTarget:
     def read_memory(self, addr: int, transfer_size: int = 32, now: bool = True):
         assert transfer_size == 32 and not now
         self._queue.append(addr)
+        self.held += 1
+        collected = False
 
         def result() -> int:
+            nonlocal collected
+            if collected:
+                raise RuntimeError("cannot release un-acquired lock")
+            collected = True
+            self.held -= 1
             self._send()
             if addr in self._failed:
                 raise self._failed[addr]
@@ -120,6 +129,8 @@ def test_a_failing_word_raises_in_its_place_after_the_results_before_it():
     assert tuple(next(results)) == (0x1_0000_0002,)
     with pytest.raises(TransferFault, match="0x3010"):
         next(results)
+    # Every queued word was collected, so the probe lock is free.
+    assert target.held == 0
 
 
 def test_a_failing_block_read_raises_its_own_fault_after_the_results_before_it():
@@ -134,3 +145,4 @@ def test_a_failing_block_read_raises_its_own_fault_after_the_results_before_it()
     assert tuple(next(results)) == (0x1_0000_0002,)
     with pytest.raises(TransferFault, match="0x4000"):
         next(results)
+    assert target.held == 0

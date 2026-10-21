@@ -4,7 +4,9 @@
 
 """PyOCDScraper: AbstractScraper backend wrapping a pyOCD session."""
 
+import contextlib
 import struct
+from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 
 from pyocd.core.helpers import ConnectHelper
@@ -94,32 +96,39 @@ class PyOCDScraper(AbstractScraper):
         if self.target is None:
             raise ProbeReadFailure("No target available.")
 
+        queued: deque[Callable[[], int]] = deque()
         try:
-            collectors = [self._queue(method, at, amount) for method, at, amount in reads]
+            collectors = [self._queue(method, at, amount, queued) for method, at, amount in reads]
             results = [collect() for collect in collectors]
         except Exception:
+            # A queued word holds a level of pyOCD's probe lock until collected.
+            while queued:
+                with contextlib.suppress(Exception):
+                    queued.popleft()()
             yield from super().read_many(reads)
             return
 
         yield from results
 
-    def _queue(self, method: str, at: int, amount: int) -> Callable[[], bytes | Sequence[int]]:
-        """A callable returning the read's result: queued words, or a read made now."""
+    def _queue(
+        self, method: str, at: int, amount: int, queued: deque[Callable[[], int]]
+    ) -> Callable[[], bytes | Sequence[int]]:
+        """A callable returning the read's result: words off ``queued``, or a read made now."""
         words_per_item = {"read32": 1, "read64": 2}.get(method)
         if words_per_item is None or amount * words_per_item > _QUEUED_WORDS:
             result = getattr(self, method)(at, amount)
             return lambda: result
 
-        words = [
-            self.target.read_memory(at + 4 * i, 32, now=False)
-            for i in range(amount * words_per_item)
-        ]
+        count = amount * words_per_item
+        for i in range(count):
+            queued.append(self.target.read_memory(at + 4 * i, 32, now=False))
         if method == "read32":
-            return lambda: tuple(word() for word in words)
+            return lambda: tuple(queued.popleft()() for _ in range(count))
 
         def as_longs() -> tuple[int, ...]:
             raw = b"".join(
-                word().to_bytes(4, "little" if self.endianess == "<" else "big") for word in words
+                queued.popleft()().to_bytes(4, "little" if self.endianess == "<" else "big")
+                for _ in range(count)
             )
             return struct.unpack(f"{self.endianess}{amount}Q", raw)
 
