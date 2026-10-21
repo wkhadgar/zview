@@ -24,6 +24,7 @@ from zview.backend.base import (
     WorkqInfo,
 )
 from zview.backend.image import verify_target_image
+from zview.frames import Fatal, Frame, Notice, ReplayEnd
 from zview.frontend.tui.views.base import (
     Any,
     BaseStateView,
@@ -297,7 +298,7 @@ class ZView:
             self.transition_to(ZViewState.THREAD_LIST_VIEW)
             self.stdscr.clear()
         except Exception as e:
-            self.process_data({"fatal_error": f"Reconnection failed: {e}"})
+            self.process_data(Fatal(f"Reconnection failed: {e}"))
 
     def _reload_and_verify(self) -> None:
         """Re-parse the ELF, reconnect, and check the target runs it; its stderr goes to the log."""
@@ -479,46 +480,46 @@ class ZView:
         if new_state and new_state != self.state:
             self.transition_to(new_state)
 
-    def process_data(self, data):
-        if data.get("fatal_error"):
-            self.state = ZViewState.FATAL_ERROR
-            self.report(f"TARGET LOST\n\n{data['fatal_error']}")
-            return
+    def process_data(self, data: Frame | Notice | Fatal | ReplayEnd):
+        match data:
+            case Fatal(text):
+                self.state = ZViewState.FATAL_ERROR
+                self.report(f"TARGET LOST\n\n{text}")
+            case ReplayEnd():
+                self.report("Recording ended; replay complete.")
+            case Notice(text):
+                self.report(f"Error: {text}")
+            case Frame(groups):
+                self._process_frame(groups)
 
-        if data.get("replay_complete"):
-            self.report("Recording ended; replay complete.")
-            return
+    def _process_frame(self, groups: dict[str, list]) -> None:
+        self.status_message = f"Running{'.' * (self.update_count % 4)}"
+        self.update_count += 1
+        threads_data: list[ThreadInfo] = groups.get("threads", [])
+        heaps_data: list[HeapInfo] = groups.get("heaps", [])
 
-        if data.get("error"):
-            self.report(f"Error: {data['error']}")
-        else:
-            self.status_message = f"Running{'.' * (self.update_count % 4)}"
-            self.update_count += 1
-            threads_data: list[ThreadInfo] = data.get("threads", [])
-            heaps_data: list[HeapInfo] = data.get("heaps", [])
+        if len(threads_data):
+            # One idle thread per CPU, none of them listed.
+            idle = self.scraper.groups["threads"].idle_addresses
+            self.threads_data = [t for t in threads_data if t.address not in idle]
+        if len(heaps_data):
+            self.heaps_data = heaps_data
 
-            if len(threads_data):
-                # One idle thread per CPU, none of them listed.
-                idle = self.scraper.groups["threads"].idle_addresses
-                self.threads_data = [t for t in threads_data if t.address not in idle]
-            if len(heaps_data):
-                self.heaps_data = heaps_data
-
-            if "semaphores" in data:
-                self.semaphores_data = data["semaphores"]
-                self._record_counts(self.semaphores_data)
-            if "mutexes" in data:
-                self.mutexes_data = data["mutexes"]
-                self._record_contention(self.mutexes_data)
-            if "msgqs" in data:
-                self.msgqs_data = data["msgqs"]
-                self._record_depths(self.msgqs_data)
-            if "mem_slabs" in data:
-                self.mem_slabs_data = data["mem_slabs"]
-                self._record_usage(self.mem_slabs_data)
-            if "workqs" in data:
-                self.workqs_data = data["workqs"]
-                self._record_backlog(self.workqs_data)
+        if "semaphores" in groups:
+            self.semaphores_data = groups["semaphores"]
+            self._record_counts(self.semaphores_data)
+        if "mutexes" in groups:
+            self.mutexes_data = groups["mutexes"]
+            self._record_contention(self.mutexes_data)
+        if "msgqs" in groups:
+            self.msgqs_data = groups["msgqs"]
+            self._record_depths(self.msgqs_data)
+        if "mem_slabs" in groups:
+            self.mem_slabs_data = groups["mem_slabs"]
+            self._record_usage(self.mem_slabs_data)
+        if "workqs" in groups:
+            self.workqs_data = groups["workqs"]
+            self._record_backlog(self.workqs_data)
 
     def _record_counts(self, semaphores: list[SemaphoreInfo]) -> None:
         """Append one count sample per semaphore, per frame."""

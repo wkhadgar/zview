@@ -15,6 +15,7 @@ from typing import Literal
 from zview.backend.base import AbstractScraper
 from zview.backend.elf_inspector import ElfInspector
 from zview.backend.replay import ReplayComplete
+from zview.frames import Fatal, Frame, Notice, ReplayEnd
 from zview.kernel import compat
 from zview.kernel.group import BrokenFrame, Group
 from zview.kernel.groups import GROUPS
@@ -224,7 +225,7 @@ class ZScraper:
     ):
         """Start the polling daemon thread. No-op if one is already running."""
         if self._polling_thread is not None:
-            data_queue.put({"error": "Already started..."})
+            data_queue.put(Notice("Already started..."))
             return
 
         self.inspection_period = inspection_period
@@ -261,7 +262,7 @@ class ZScraper:
             if not self._m_scraper.is_connected:
                 self._m_scraper.connect()
         except Exception as e:
-            data_queue.put({"fatal_error": f"Failed to connect to target: {e}"})
+            data_queue.put(Fatal(f"Failed to connect to target: {e}"))
             return
 
         consecutive_errors = 0
@@ -272,13 +273,13 @@ class ZScraper:
                 self._m_scraper.begin_batch()
                 in_batch = True
 
-                data_queue.put(self._poll_groups(), block=False)
+                data_queue.put(Frame(self._poll_groups()), block=False)
 
                 consecutive_errors = 0
             except queue.Full:
                 pass
             except ReplayComplete as e:
-                data_queue.put({"replay_complete": str(e)})
+                data_queue.put(ReplayEnd(str(e)))
                 break
             except BrokenFrame as e:
                 logger.warning("Broken frame captured (%s); resyncing baselines.", e)
@@ -287,15 +288,12 @@ class ZScraper:
                 consecutive_errors += 1
                 if consecutive_errors >= self._MAX_TOLERATED_ERRORS:
                     data_queue.put(
-                        {
-                            "fatal_error": f"Target lost after "
-                            f"{self._MAX_TOLERATED_ERRORS} retries: {e}"
-                        }
+                        Fatal(f"Target lost after {self._MAX_TOLERATED_ERRORS} retries: {e}")
                     )
                     break
                 # One message per fault, not one per attempt: the message log
                 # counts the repeats, which is the retry number.
-                data_queue.put({"error": f"Transient read fault: {e}"}, block=False)
+                data_queue.put(Notice(f"Transient read fault: {e}"), block=False)
             finally:
                 if in_batch:
                     with contextlib.suppress(Exception):

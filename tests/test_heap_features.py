@@ -60,5 +60,5 @@ def test_heap_warnings_and_polling(monkeypatch, tmp_path, fields_available, obje
     scraper._poll_thread_worker(data_queue, stop, 0)
 
     assert walked.count('heaps') == int(can_poll)
-    assert ('heaps' in data_queue.get_nowait()) == can_poll
+    assert ('heaps' in data_queue.get_nowait().groups) == can_poll
     assert data_queue.empty()

@@ -11,6 +11,7 @@ import pytest
 
 from zview.backend.base import HeapInfo, MemSlabInfo, MsgqInfo, ThreadInfo, ThreadRuntime, WorkqInfo
 from zview.backend.replay import ReplayScraper
+from zview.frames import Fatal
 from zview.snapshot import dump_single_frame, record_session, serialize_frame
 
 _TESTS_DIR = Path(__file__).parent
@@ -175,7 +176,7 @@ def test_dump_single_frame_propagates_fatal_error(monkeypatch):
     """``fatal_error`` from the polling thread surfaces as ``RuntimeError``."""
 
     def fake_start(self, data_queue, stop_event, period):
-        data_queue.put({"fatal_error": "synthetic backend loss"})
+        data_queue.put(Fatal("synthetic backend loss"))
 
     monkeypatch.setattr("zview.orchestrator.ZScraper.start_polling_thread", fake_start)
 
