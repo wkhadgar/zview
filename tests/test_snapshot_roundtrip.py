@@ -118,6 +118,18 @@ def test_dump_single_frame_via_replay():
     json.dumps(payload)  # must not raise
 
 
+def test_a_replayed_dump_shows_only_the_selected_groups():
+    """The replay reads all its recording holds, so the selection filters the frame after."""
+    from zview.selection import Selection
+
+    replay = ReplayScraper(_FIXTURE, honor_timing=False)
+    frame = dump_single_frame(
+        replay, str(_ELF), period=0.001, selection=Selection(groups=frozenset({"heaps"}))
+    )
+
+    assert set(frame) == {"heaps"}
+
+
 def test_record_session_roundtrip(tmp_path):
     """ReplayScraper -> RecordingScraper produces a replayable recording."""
     source = ReplayScraper(_FIXTURE, honor_timing=False)

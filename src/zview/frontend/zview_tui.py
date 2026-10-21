@@ -361,9 +361,11 @@ class ZView:
         return rows
 
     def has_kernel_objects(self) -> bool:
-        """True while a group the objects view reads is available, so it has rows to draw."""
+        """True while a group the objects view and the selection read is available."""
         return any(
-            available and KernelObjectListView.OBJECTS.reads_group(key)
+            available
+            and KernelObjectListView.OBJECTS.reads_group(key)
+            and self.scraper.selection.reads_group(key)
             for key, available in self.scraper.available.items()
         )
 

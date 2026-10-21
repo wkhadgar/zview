@@ -25,6 +25,24 @@ def test_include_patterns_narrow_and_exclude_patterns_win():
     assert not selection.reads("threads", "idle")
 
 
+def test_a_frame_keeps_only_the_selected_groups_and_rows():
+    from types import SimpleNamespace as Row
+
+    frame = {
+        "threads": [Row(name="main"), Row(name="logging")],
+        "semaphores": [Row(name="gate")],
+        "mutexes": [Row(name="lock")],
+    }
+    selection = Selection(groups=frozenset({"threads", "mutexes"}), exclude=("logging",))
+
+    kept = selection.keep(frame)
+
+    assert {group: [r.name for r in rows] for group, rows in kept.items()} == {
+        "threads": ["main"],
+        "mutexes": ["lock"],
+    }
+
+
 def test_a_muted_row_is_matched_by_its_exact_name():
     """The brackets of an array element would read as a glob character class."""
     selection = Selection(muted=frozenset({("threads", "z_idle_threads[0]")}))

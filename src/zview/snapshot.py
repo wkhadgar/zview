@@ -15,6 +15,7 @@ from zview.backend.recording import RecordingScraper
 from zview.frames import Fatal, Frame, ReplayEnd
 from zview.kernel.groups import GROUPS
 from zview.orchestrator import ZScraper
+from zview.selection import Selection
 
 
 def serialize_frame(frame: dict) -> dict:
@@ -32,15 +33,19 @@ def dump_single_frame(
     period: float = 0.1,
     frame: int = 1,
     timeout: float | None = None,
+    selection: Selection | None = None,
 ) -> dict:
     """
-    Return the Nth valid polling frame (1-indexed; default 1).
+    Return the Nth valid polling frame (1-indexed; default 1), with only the
+    rows ``selection`` reads. A live target reads only those, and a recording,
+    which holds the reads it was made with, is filtered after.
     Raises ``ValueError`` for ``frame < 1``, ``RuntimeError`` on fatal scraper
     error or recording exhaustion, ``TimeoutError`` past ``timeout`` seconds.
     ``timeout`` defaults to ``max(5.0, frame * max(period, 0.1) * 5.0)``.
     """
     if frame < 1:
         raise ValueError("frame must be >= 1")
+    selection = selection or Selection()
     if timeout is None:
         timeout = max(5.0, frame * max(period, 0.1) * 5.0)
 
@@ -48,6 +53,9 @@ def dump_single_frame(
         if backend.is_live:
             verify_target_image(backend, elf_path)
         scraper = ZScraper(backend, elf_path)
+        scraper.check_selection(selection)
+        if backend.is_live:
+            scraper.selection = selection
         scraper.discover()
         data_queue: queue.Queue = queue.Queue()
         stop = threading.Event()
@@ -70,7 +78,7 @@ def dump_single_frame(
                     case Frame(groups):
                         seen += 1
                         if seen >= frame:
-                            return groups
+                            return selection.keep(groups)
             raise TimeoutError(f"No frame {frame} within {timeout} seconds")
         finally:
             stop.set()

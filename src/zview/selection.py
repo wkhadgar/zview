@@ -35,3 +35,11 @@ class Selection:
         if self.include and not any(fnmatchcase(name, pattern) for pattern in self.include):
             return False
         return not any(fnmatchcase(name, pattern) for pattern in self.exclude)
+
+    def keep(self, frame: dict) -> dict:
+        """``frame`` with only the groups and rows this selection reads."""
+        return {
+            group: [row for row in rows if self.reads(group, row.name)]
+            for group, rows in frame.items()
+            if self.reads_group(group)
+        }

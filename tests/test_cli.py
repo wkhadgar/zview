@@ -53,6 +53,19 @@ def test_normalize_argv_passes_help_through():
     assert cli._normalize_argv(["-h"]) == ["-h"]
 
 
+def test_only_names_the_groups_the_session_does_not_have(monkeypatch, capsys):
+    """The session's own groups decide, so a group added to the poll needs no list here."""
+    rc, _, err = _invoke(
+        monkeypatch,
+        capsys,
+        ["dump", "-e", str(_ELF), "-i", str(_FIXTURE), "--only", "threads,timer"],
+    )
+
+    assert rc != 0
+    assert "Unknown group timer; choose from threads, heaps, semaphores" in err
+    assert cli._groups("threads, heaps") == {"threads", "heaps"}
+
+
 def test_dump_replay_json_stdout_is_valid_json(monkeypatch, capsys):
     rc, out, _ = _invoke(
         monkeypatch,
