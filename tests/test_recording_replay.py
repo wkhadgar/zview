@@ -145,6 +145,58 @@ def test_a_failure_from_outside_the_probe_errors_replays_as_a_read_error(
         replay.read_bytes(0x3000, 2112)
 
 
+_BATCH = (("read32", 0x1000, 1), ("read64", 0x2000, 1), ("read_bytes", 0x3000, 16))
+
+
+def _entries(path: Path) -> list[tuple]:
+    """``(op, args, result)`` of every read a recording holds."""
+    with gzip.open(path, "rt", encoding="utf-8") as fp:
+        fp.readline()
+        entries = [json.loads(line) for line in fp if line.strip()]
+    return [(e["op"], e["args"], e.get("result")) for e in entries if e["op"].startswith("read")]
+
+
+def test_a_batch_is_recorded_as_the_reads_it_holds(tmp_path, sample_backend):
+    """Its entries are the ones the same reads make one at a time, so replay needs no marker."""
+    batched, single = tmp_path / "batched.ndjson.gz", tmp_path / "single.ndjson.gz"
+    with RecordingScraper(sample_backend, batched) as rec:
+        results = list(rec.read_many(_BATCH))
+    with RecordingScraper(sample_backend, single) as rec:
+        for method, at, amount in _BATCH:
+            getattr(rec, method)(at, amount)
+
+    assert results == [(0xDEADBEEF,), (0x0123456789ABCDEF,), bytes(range(16))]
+    assert _entries(batched) == _entries(single)
+
+
+def test_a_recorded_batch_replays_as_a_batch_or_one_read_at_a_time(sample_path, sample_backend):
+    with RecordingScraper(sample_backend, sample_path) as rec:
+        list(rec.read_many(_BATCH))
+
+    replay = ReplayScraper(sample_path, honor_timing=False)
+    replay.connect()
+    assert replay.read32(0x1000, 1) == (0xDEADBEEF,)
+    assert list(replay.read_many(_BATCH[1:])) == [(0x0123456789ABCDEF,), bytes(range(16))]
+
+
+def test_a_read_failing_inside_a_batch_is_recorded_in_its_place(sample_path, sample_backend):
+    """The reads before it keep their results, and the ones after it were never made."""
+    live = _FailingRead(sample_backend._memory, ProbeReadError("GDB error at 0x3000: E22"))
+    batch = (*_BATCH, ("read32", 0x1004, 4))
+    with RecordingScraper(live, sample_path) as rec:
+        results = rec.read_many(batch)
+        assert next(results) == (0xDEADBEEF,)
+        assert next(results) == (0x0123456789ABCDEF,)
+        with pytest.raises(ProbeReadError):
+            next(results)
+
+    assert [op for op, _, _ in _entries(sample_path)] == ["read32", "read64", "read_bytes"]
+    replay = ReplayScraper(sample_path, honor_timing=False)
+    replay.connect()
+    with pytest.raises(ProbeReadError, match="E22"):
+        list(replay.read_many(batch))
+
+
 def test_a_recording_from_before_failed_reads_still_replays(tmp_path):
     """Schema /3 has no failure entries, and nothing in it needs one."""
     path = tmp_path / "v3.ndjson.gz"

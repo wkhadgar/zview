@@ -22,15 +22,19 @@ def read_usage_snapshot(
     Every thread's usage counter, ``{thread address: cycles}``.
 
     The counters are read back to back between two reads of each CPU's switch
-    stamp, at ``stamps``. The kernel rewrites a stamp whenever it adds to a
-    counter, so stamps that did not move mean the counters hold as of one
-    instant. A pass a stamp moved across is tried once more, and the second
-    pass is kept either way.
+    stamp, at ``stamps``, all in one ``read_many``. The kernel rewrites a stamp
+    whenever it adds to a counter, so stamps that did not move mean the
+    counters hold as of one instant. A pass a stamp moved across is tried once
+    more, and the second pass is kept either way.
     """
+    stamp_reads = [("read32", stamp, 1) for stamp in stamps]
+    counter_reads = [("read64", thread + usage_offset, 1) for thread in threads]
+    after_counters = len(stamps) + len(threads)
+
     for _ in range(_ATTEMPTS):
-        before = [scraper.read32(stamp)[0] for stamp in stamps]
-        counters = {thread: scraper.read64(thread + usage_offset)[0] for thread in threads}
-        if [scraper.read32(stamp)[0] for stamp in stamps] == before:
+        values = [r[0] for r in scraper.read_many(stamp_reads + counter_reads + stamp_reads)]
+        counters = dict(zip(threads, values[len(stamps) : after_counters], strict=True))
+        if values[after_counters:] == values[: len(stamps)]:
             break
 
     return counters

@@ -11,9 +11,12 @@ here as well.
 
 import enum
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import ClassVar, Literal
+
+# One read of a ``read_many`` call: the read method's name, then its ``at`` and ``amount``.
+Read = tuple[Literal["read_bytes", "read8", "read32", "read64"], int, int]
 
 
 class ProbeError(Exception):
@@ -320,6 +323,17 @@ class AbstractScraper(ABC):
 
     @abstractmethod
     def read64(self, at: int, amount: int = 1) -> Sequence[int]: ...
+
+    def read_many(self, reads: Sequence[Read]) -> Iterator[bytes | Sequence[int]]:
+        """
+        The result of each of ``reads``, in order.
+
+        One read at a time here. A backend that can queue reads sends them
+        together. Either way a read that fails raises in its place, after the
+        results before it.
+        """
+        for method, at, amount in reads:
+            yield getattr(self, method)(at, amount)
 
     def calculate_dynamic_watermark(
         self,

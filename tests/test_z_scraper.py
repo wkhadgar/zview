@@ -9,7 +9,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from zview.backend.base import ProbeReadError, ProbeReadMalformed, ProbeReadTimeout, ThreadInfo
+from zview.backend.base import (
+    AbstractScraper,
+    ProbeReadError,
+    ProbeReadMalformed,
+    ProbeReadTimeout,
+    ThreadInfo,
+)
 from zview.backend.gdb import GDBScraper
 from zview.backend.pyocd import PyOCDScraper
 from zview.orchestrator import ZScraper
@@ -100,6 +106,7 @@ def _usage_scraper(elf_path, threads, before: dict[int, int], now: dict[int, int
     scraper.thread_pool = list(threads)
     scraper.last_thread_cycles = dict(before)
     mock.read64.side_effect = lambda address, amount=1: [now.get(address - _USAGE, 0)]
+    mock.read_many.side_effect = lambda reads: AbstractScraper.read_many(mock, reads)
     mock.calculate_dynamic_watermark.return_value = 250
     return scraper, mock
 
