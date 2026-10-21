@@ -5,7 +5,7 @@
 import pytest
 
 from zview.kernel.layout import KernelLayout
-from zview.kernel.msgqs import walk_msgqs
+from zview.kernel.msgqs import Msgqs
 from zview.kernel.session import Session
 
 
@@ -76,7 +76,7 @@ def test_reads_the_counters_of_every_queue():
     words = _msgq_words(0x1000, used=3, capacity=8, msg_size=16)
     words |= _msgq_words(0x2000, used=0, capacity=4, msg_size=32)
 
-    queues = walk_msgqs(
+    queues = Msgqs().walk(
         _session(FakeScraper(words), FakeElf(), LAYOUT),
         {"sensor_q": [0x1000], "log_q": [0x2000]},
     )
@@ -90,7 +90,7 @@ def test_reads_the_counters_of_every_queue():
 def test_an_empty_wait_queue_reads_as_empty_not_unknown():
     words = _msgq_words(0x1000, used=1, capacity=2, msg_size=4)
 
-    queues = walk_msgqs(_session(FakeScraper(words), FakeElf(), LAYOUT), {"q": [0x1000]})
+    queues = Msgqs().walk(_session(FakeScraper(words), FakeElf(), LAYOUT), {"q": [0x1000]})
 
     assert queues["q"].waiters == ()
 
@@ -100,7 +100,7 @@ def test_a_queued_thread_is_named():
     words = _msgq_words(address, used=0, capacity=4, msg_size=8, head=thread)
     words[thread] = address
 
-    queues = walk_msgqs(
+    queues = Msgqs().walk(
         _session(FakeScraper(words), FakeElf(), LAYOUT, {thread: "reader"}), {"q": [address]}
     )
 
@@ -111,7 +111,7 @@ def test_an_unwalkable_layout_leaves_the_waiters_unknown():
     """``None`` is not ``()``: a scalable wait queue carries no information here."""
     words = _msgq_words(0x1000, used=1, capacity=4, msg_size=8)
 
-    queues = walk_msgqs(
+    queues = Msgqs().walk(
         _session(FakeScraper(words), FakeElf(), LAYOUT, walk_waiters=False), {"q": [0x1000]}
     )
 
@@ -122,7 +122,9 @@ def test_instances_of_one_symbol_are_labelled_apart():
     words = _msgq_words(0x1000, used=1, capacity=4, msg_size=8)
     words |= _msgq_words(0x2000, used=2, capacity=4, msg_size=8)
 
-    queues = walk_msgqs(_session(FakeScraper(words), FakeElf(), LAYOUT), {"pool": [0x1000, 0x2000]})
+    queues = Msgqs().walk(
+        _session(FakeScraper(words), FakeElf(), LAYOUT), {"pool": [0x1000, 0x2000]}
+    )
 
     assert len(queues) == 2
     assert all("pool" in label for label in queues)
@@ -131,14 +133,14 @@ def test_instances_of_one_symbol_are_labelled_apart():
 def test_a_read_failure_is_not_swallowed():
     """A failing read is the caller's to report, not something to skip past."""
     with pytest.raises(AssertionError):
-        walk_msgqs(_session(FakeScraper({}), FakeElf(), LAYOUT), {"q": [0x9999]})
+        Msgqs().walk(_session(FakeScraper({}), FakeElf(), LAYOUT), {"q": [0x9999]})
 
 
 def test_fill_and_full_come_from_the_counters():
     words = _msgq_words(0x1000, used=2, capacity=8, msg_size=4)
     words |= _msgq_words(0x2000, used=4, capacity=4, msg_size=4)
 
-    queues = walk_msgqs(
+    queues = Msgqs().walk(
         _session(FakeScraper(words), FakeElf(), LAYOUT), {"a": [0x1000], "b": [0x2000]}
     )
 
@@ -150,7 +152,7 @@ def test_fill_and_full_come_from_the_counters():
 def test_a_zero_capacity_queue_does_not_divide_by_zero():
     words = _msgq_words(0x1000, used=0, capacity=0, msg_size=4)
 
-    queues = walk_msgqs(_session(FakeScraper(words), FakeElf(), LAYOUT), {"q": [0x1000]})
+    queues = Msgqs().walk(_session(FakeScraper(words), FakeElf(), LAYOUT), {"q": [0x1000]})
 
     assert queues["q"].fill_percent == 0.0
     assert not queues["q"].is_full

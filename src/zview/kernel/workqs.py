@@ -2,16 +2,38 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Zephyr ``k_work_q`` walker."""
+"""Zephyr ``k_work_q`` group."""
 
 from zview.backend.base import AbstractScraper, WorkqInfo
 from zview.backend.elf_inspector import ElfInspector
+from zview.kernel.compat import FieldTable
+from zview.kernel.group import Group
 from zview.kernel.layout import KernelLayout
 from zview.kernel.object_names import label_instances
 from zview.kernel.session import Session
 from zview.kernel.wait_queues import resolve_waiter_names, walk_wait_queue
 
 _MAX_PENDING = 16
+
+# k_work has no wait queue; pending work sits on its queue's list.
+WORK_FIELDS: FieldTable = {
+    "work_node": ((("k_work", "node"),),),
+    "work_handler": ((("k_work", "handler"),),),
+    "work_queue": ((("k_work", "queue"),),),
+    "work_flags": ((("k_work", "flags"),),),
+}
+
+# thread_id, not the embedded thread: k_work_q.thread is deprecated.
+WORKQ_FIELDS: FieldTable = {
+    "workq_thread_id": ((("k_work_q", "thread_id"),),),
+    "workq_pending": ((("k_work_q", "pending"),),),
+    "workq_flags": ((("k_work_q", "flags"),),),
+}
+
+# Threads blocked in k_work_queue_drain. notifyq holds the queue's own thread.
+WORKQ_OPTIONAL_FIELDS: FieldTable = {
+    "workq_drainq": ((("k_work_q", "drainq"),),),
+}
 
 
 def walk_pending(
@@ -52,65 +74,73 @@ def _item_name(elf: ElfInspector, item: int, handler: int) -> str:
     return f"{item_name} ({handler_name})" if item_name else handler_name
 
 
-def walk_workqs(
-    session: Session,
-    addresses: dict[str, list[int]],
-    *,
-    max_pending: int = _MAX_PENDING,
-) -> dict[str, WorkqInfo]:
-    """
-    Read every statically declared ``k_work_q`` and return ``{label: WorkqInfo}``.
+class Workqs(Group):
+    key = "workqs"
+    struct = "k_work_q"
+    # A queue's pending items are k_work nodes, so both must resolve.
+    required = (WORKQ_FIELDS, WORK_FIELDS)
+    optional = (WORKQ_OPTIONAL_FIELDS,)
 
-    ``addresses`` maps a symbol name to its instance addresses. Each queue
-    costs one read of the span its fields sit in, plus one per pending item and
-    per draining thread; the struct itself is mostly a deprecated embedded
-    ``k_thread``. On a wait queue layout that cannot be walked (scalable),
-    ``waiters`` is ``None``.
-    """
-    scraper, elf, layout = session.scraper, session.elf, session.layout
-    walk_waiters, thread_names = session.walks_waiters, session.thread_names
-    offsets = [layout.workq_thread_id, layout.workq_pending, layout.workq_flags]
-    if layout.workq_drainq is not None:
-        offsets.append(layout.workq_drainq)
+    def walk(
+        self,
+        session: Session,
+        addresses: dict[str, list[int]],
+        *,
+        max_pending: int = _MAX_PENDING,
+    ) -> dict[str, WorkqInfo]:
+        """
+        Read every statically declared ``k_work_q`` and return ``{label: WorkqInfo}``.
 
-    base = min(offsets)
-    span = (max(offsets) + 4 - base) // 4
+        ``addresses`` maps a symbol name to its instance addresses. Each queue
+        costs one read of the span its fields sit in, plus one per pending item and
+        per draining thread; the struct itself is mostly a deprecated embedded
+        ``k_thread``. On a wait queue layout that cannot be walked (scalable),
+        ``waiters`` is ``None``.
+        """
+        scraper, elf, layout = session.scraper, session.elf, session.layout
+        walk_waiters, thread_names = session.walks_waiters, session.thread_names
+        offsets = [layout.workq_thread_id, layout.workq_pending, layout.workq_flags]
+        if layout.workq_drainq is not None:
+            offsets.append(layout.workq_drainq)
 
-    def word(words: tuple[int, ...], offset: int) -> int:
-        return words[(offset - base) // 4]
+        base = min(offsets)
+        span = (max(offsets) + 4 - base) // 4
 
-    workqs: dict[str, WorkqInfo] = {}
-    for label, address in label_instances(addresses):
-        words = tuple(scraper.read32(address + base, span))
+        def word(words: tuple[int, ...], offset: int) -> int:
+            return words[(offset - base) // 4]
 
-        pending, truncated = walk_pending(
-            scraper,
-            elf,
-            word(words, layout.workq_pending),
-            layout,
-            max_items=max_pending,
-        )
+        workqs: dict[str, WorkqInfo] = {}
+        for label, address in label_instances(addresses):
+            words = tuple(scraper.read32(address + base, span))
 
-        waiters: tuple[str, ...] | None = None
-        if walk_waiters and layout.workq_drainq is not None and layout.thread_qnode is not None:
-            waiters = resolve_waiter_names(
-                walk_wait_queue(
-                    scraper,
-                    address + layout.workq_drainq,
-                    layout.thread_qnode,
-                    head=word(words, layout.workq_drainq),
-                ),
-                thread_names,
+            pending, truncated = walk_pending(
+                scraper,
+                elf,
+                word(words, layout.workq_pending),
+                layout,
+                max_items=max_pending,
             )
 
-        workqs[label] = WorkqInfo(
-            name=label,
-            address=address,
-            flags=word(words, layout.workq_flags),
-            pending=pending,
-            pending_truncated=truncated,
-            thread_name=(thread_names or {}).get(word(words, layout.workq_thread_id)),
-            waiters=waiters,
-        )
+            waiters: tuple[str, ...] | None = None
+            if walk_waiters and layout.workq_drainq is not None and layout.thread_qnode is not None:
+                waiters = resolve_waiter_names(
+                    walk_wait_queue(
+                        scraper,
+                        address + layout.workq_drainq,
+                        layout.thread_qnode,
+                        head=word(words, layout.workq_drainq),
+                    ),
+                    thread_names,
+                )
 
-    return workqs
+            workqs[label] = WorkqInfo(
+                name=label,
+                address=address,
+                flags=word(words, layout.workq_flags),
+                pending=pending,
+                pending_truncated=truncated,
+                thread_name=(thread_names or {}).get(word(words, layout.workq_thread_id)),
+                waiters=waiters,
+            )
+
+        return workqs

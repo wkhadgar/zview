@@ -16,8 +16,8 @@ from zview.backend.base import AbstractScraper, ThreadInfo, ThreadRuntime
 from zview.backend.elf_inspector import ElfInspector
 from zview.backend.replay import ReplayComplete, ReplayMismatch
 from zview.kernel import compat
+from zview.kernel.group import Group
 from zview.kernel.groups import GROUPS
-from zview.kernel.heaps import walk_heap_fragmentation
 from zview.kernel.layout import KernelLayout
 from zview.kernel.object_names import label_instances
 from zview.kernel.session import Session
@@ -73,13 +73,13 @@ class ZScraper:
         self.has_names: bool = True
         self.has_thread_list: bool = True
         self.has_stack_info: bool = True
-        # Per group key: whether it is read, the rows its discover found, and
-        # the values its walk keeps across frames.
+        # One of each group per ELF, in the order a frame reads them, and per
+        # group key whether it is read and the rows its discover found.
+        self.groups: dict[str, Group] = {cls.key: cls() for cls in GROUPS}
         self.available: dict[str, bool] = {}
         self.rows: dict[str, dict] = {}
-        self.group_state: dict[str, dict] = {}
         # Every group's parts start on, and a replay keeps those its recording names.
-        self.parts: set[str] = {part for group in GROUPS for part in group.parts}
+        self.parts: set[str] = {part for group in self.groups.values() for part in group.parts}
         # The thread metadata bytes in one read, and the entry pointer read
         # once per thread. A recording taken before that holds one read per
         # field per frame, so replaying it keeps asking that way.
@@ -105,10 +105,8 @@ class ZScraper:
         self._discover_groups()
         self._restrict_features_to_recording()
 
-        # A recording covers every heap's chunk map or none of it; the poll
-        # finds out on its first read and backs off if there is none.
-        if not self._m_scraper.is_live and self.available["heaps"]:
-            self.capture_all_heap_chunks = True
+        if not self._m_scraper.is_live:
+            self.capture_all()
 
         self.reset_runtime_state()
 
@@ -129,7 +127,7 @@ class ZScraper:
             else:
                 setattr(self, flag, False)
 
-        for group in GROUPS:
+        for group in self.groups.values():
             required = [compat.resolve_fields(elf, table) for table in group.required]
             self.available[group.key] = None not in required
             for found in (t for t in required if t is not None):
@@ -171,8 +169,8 @@ class ZScraper:
     def _discover_groups(self) -> None:
         """Find each available group's rows; a group with none is not read."""
         session = self._session()
-        for group in GROUPS:
-            found = group.discover(session, group) if self.available[group.key] else {}
+        for group in self.groups.values():
+            found = group.discover(session) if self.available[group.key] else {}
             self.rows[group.key] = found
             self.available[group.key] = bool(found)
 
@@ -185,26 +183,12 @@ class ZScraper:
             waitq_flavor=self.waitq_flavor,
             thread_names=self._thread_names(),
             parts=frozenset(self.parts),
-            state=self.group_state,
         )
 
-    @property
-    def capture_all_heap_chunks(self) -> bool:
-        """Every heap's chunk map is read each frame, as a recording keeps them all."""
-        return self.group_state.setdefault("heaps", {}).get("all_chunks", False)
-
-    @capture_all_heap_chunks.setter
-    def capture_all_heap_chunks(self, value: bool) -> None:
-        self.group_state.setdefault("heaps", {})["all_chunks"] = value
-
-    @property
-    def extra_info_heap_address(self) -> int | None:
-        """The heap whose chunk map is read for its detail view."""
-        return self.group_state.setdefault("heaps", {}).get("detailed")
-
-    @extra_info_heap_address.setter
-    def extra_info_heap_address(self, value: int | None) -> None:
-        self.group_state.setdefault("heaps", {})["detailed"] = value
+    def capture_all(self) -> None:
+        """Read every detail a view may ask for, as a recording holds them all."""
+        for group in self.groups.values():
+            group.capture_all()
 
     def _restrict_features_to_recording(self) -> None:
         """
@@ -220,7 +204,7 @@ class ZScraper:
         if features is None:
             return
 
-        for group in GROUPS:
+        for group in self.groups.values():
             self.available[group.key] = self.available[group.key] and group.key in features
         self.parts &= set(features)
         self.merged_thread_meta = "merged_thread_meta" in features
@@ -234,7 +218,7 @@ class ZScraper:
         if self.merged_thread_meta:
             features.append("merged_thread_meta")
         # A group read, then each of its parts that is on.
-        for group in GROUPS:
+        for group in self.groups.values():
             if self.available[group.key]:
                 features += [group.key, *(part for part in group.parts if part in self.parts)]
         for enabled, name in (
@@ -298,7 +282,7 @@ class ZScraper:
         """
         frame: dict = {}
         session = self._session()
-        for group in GROUPS:
+        for group in self.groups.values():
             if not self.available[group.key] or not self._reads_group(group.key):
                 continue
 
@@ -366,13 +350,6 @@ class ZScraper:
             )
         self._all_threads_info.clear()
         self._all_threads_info.update(threads)
-
-    def get_heap_fragmentation(self, z_heap_addr: int) -> list[dict]:
-        return walk_heap_fragmentation(
-            self._m_scraper,
-            z_heap_addr,
-            self._layout.heap_end_chunk,
-        )
 
     def reset_thread_pool(self):
         self.thread_pool = list(self.all_threads.values())

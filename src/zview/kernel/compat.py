@@ -6,8 +6,8 @@
 Zephyr kernel offset and Kconfig compatibility tables.
 
 Field offsets are read from DWARF at runtime. This module holds the candidate
-member paths for each logical field, the Kconfig probes and the Zephyr version
-lookup.
+member paths of the thread fields, the resolvers, the Kconfig probes and the
+Zephyr version lookup. Each group's module holds its own fields.
 
 ``resolve_offset`` tries candidate paths in order, summing the steps of a path,
 so a field reached through a sub-struct such as ``k_mem_slab.info.num_used`` is
@@ -15,14 +15,13 @@ one entry. ``has_kconfig`` reads the ``CONFIG_*`` absolute symbols from the ELF
 symbol table. ``detect_zephyr_version`` reads ``KERNEL_VERSION_STRING`` from the
 build tree.
 
-The tables match the struct definitions in Zephyr v3.0.0, v3.3.0, v3.7.0,
-v4.0.0 and v4.4.0. Where a field has more than one candidate, the comment names
-the release that differs.
+The tables, here and in each group's module, match the struct definitions in
+Zephyr v3.0.0, v3.3.0, v3.7.0, v4.0.0 and v4.4.0. Where a field has more than
+one candidate, the comment names the release that differs.
 """
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -92,112 +91,6 @@ THREAD_META_FIELDS: FieldTable = {
 # node address minus this offset.
 THREAD_QNODE_FIELDS: FieldTable = {
     "thread_qnode": ((("k_thread", "base"), ("_thread_base", "qnode_dlist")),),
-}
-
-# CONFIG_SYS_HEAP_RUNTIME_STATS. max_allocated_bytes exists from v3.1.0; on
-# v3.0 this group does not resolve.
-HEAP_FIELDS: FieldTable = {
-    "heap_free_bytes": ((("z_heap", "free_bytes"),),),
-    "heap_allocated_bytes": ((("z_heap", "allocated_bytes"),),),
-    "heap_max_allocated_bytes": ((("z_heap", "max_allocated_bytes"),),),
-    "heap_end_chunk": ((("z_heap", "end_chunk"),),),
-}
-
-# A k_heap wraps its sys_heap with a wait queue. Resolved on its own: a heap
-# found as a sys_heap has no queue.
-HEAP_OPTIONAL_FIELDS: FieldTable = {
-    "heap_wait_q": ((("k_heap", "wait_q"),),),
-}
-
-SEMAPHORE_FIELDS: FieldTable = {
-    "sem_wait_q": ((("k_sem", "wait_q"),),),
-    "sem_count": ((("k_sem", "count"),),),
-    "sem_limit": ((("k_sem", "limit"),),),
-}
-
-MUTEX_FIELDS: FieldTable = {
-    "mutex_wait_q": ((("k_mutex", "wait_q"),),),
-    "mutex_owner": ((("k_mutex", "owner"),),),
-    "mutex_lock_count": ((("k_mutex", "lock_count"),),),
-}
-
-MSGQ_FIELDS: FieldTable = {
-    "msgq_wait_q": ((("k_msgq", "wait_q"),),),
-    "msgq_msg_size": ((("k_msgq", "msg_size"),),),
-    "msgq_max_msgs": ((("k_msgq", "max_msgs"),),),
-    "msgq_used_msgs": ((("k_msgq", "used_msgs"),),),
-}
-
-EVENT_FIELDS: FieldTable = {
-    "event_wait_q": ((("k_event", "wait_q"),),),
-    "event_events": ((("k_event", "events"),),),
-}
-
-# The counters moved into a ``k_mem_slab_info`` sub-struct in v3.5.0; v3.0 and
-# v3.3 carry them directly on k_mem_slab.
-MEM_SLAB_FIELDS: FieldTable = {
-    "mem_slab_wait_q": ((("k_mem_slab", "wait_q"),),),
-    "mem_slab_num_blocks": (
-        (("k_mem_slab", "info"), ("k_mem_slab_info", "num_blocks")),
-        (("k_mem_slab", "num_blocks"),),
-    ),
-    "mem_slab_block_size": (
-        (("k_mem_slab", "info"), ("k_mem_slab_info", "block_size")),
-        (("k_mem_slab", "block_size"),),
-    ),
-    "mem_slab_num_used": (
-        (("k_mem_slab", "info"), ("k_mem_slab_info", "num_used")),
-        (("k_mem_slab", "num_used"),),
-    ),
-}
-
-# CONFIG_MEM_SLAB_TRACE_MAX_UTILIZATION, and only inside the sub-struct layout.
-MEM_SLAB_OPTIONAL_FIELDS: FieldTable = {
-    "mem_slab_max_used": ((("k_mem_slab", "info"), ("k_mem_slab_info", "max_used")),),
-}
-
-# k_work has no wait queue; pending work sits on its queue's list.
-WORK_FIELDS: FieldTable = {
-    "work_node": ((("k_work", "node"),),),
-    "work_handler": ((("k_work", "handler"),),),
-    "work_queue": ((("k_work", "queue"),),),
-    "work_flags": ((("k_work", "flags"),),),
-}
-
-# thread_id, not the embedded thread: k_work_q.thread is deprecated.
-WORKQ_FIELDS: FieldTable = {
-    "workq_thread_id": ((("k_work_q", "thread_id"),),),
-    "workq_pending": ((("k_work_q", "pending"),),),
-    "workq_flags": ((("k_work_q", "flags"),),),
-}
-
-# Threads blocked in k_work_queue_drain. notifyq holds the queue's own thread.
-WORKQ_OPTIONAL_FIELDS: FieldTable = {
-    "workq_drainq": ((("k_work_q", "drainq"),),),
-}
-
-
-@dataclass(frozen=True)
-class ObjectSpec:
-    """A kernel object type, its C struct, and the fields needed to read it."""
-
-    label: str
-    struct: str
-    fields: FieldTable
-    optional_fields: FieldTable | None = None
-
-
-# Kernel object types and the fields needed to read them. Instances are found
-# by searching DWARF for globals of ``struct``, so only statically declared
-# objects appear.
-KERNEL_OBJECTS: dict[str, ObjectSpec] = {
-    "semaphores": ObjectSpec("SEM", "k_sem", SEMAPHORE_FIELDS),
-    "mutexes": ObjectSpec("MTX", "k_mutex", MUTEX_FIELDS),
-    "msgqs": ObjectSpec("MSG", "k_msgq", MSGQ_FIELDS),
-    "events": ObjectSpec("EVT", "k_event", EVENT_FIELDS),
-    "mem_slabs": ObjectSpec("SLB", "k_mem_slab", MEM_SLAB_FIELDS, MEM_SLAB_OPTIONAL_FIELDS),
-    "workqs": ObjectSpec("WKQ", "k_work_q", WORKQ_FIELDS, WORKQ_OPTIONAL_FIELDS),
-    "work": ObjectSpec("WRK", "k_work", WORK_FIELDS),
 }
 
 

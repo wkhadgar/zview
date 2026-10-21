@@ -432,13 +432,13 @@ class ZView:
                 | ZViewState.WORKQ_DETAIL_VIEW
             ):
                 if live:
-                    self.scraper.extra_info_heap_address = None
+                    self.scraper.groups["heaps"].detailed = None
                     self.scraper.view = _OBJECTS_VIEW
                 self.purge_queue()
 
             case ZViewState.HEAPS_DETAIL_VIEW:
                 if live:
-                    self.scraper.extra_info_heap_address = self.detailing_heap_address
+                    self.scraper.groups["heaps"].detailed = self.detailing_heap_address
                 self.purge_queue()
 
         self.state = new_state

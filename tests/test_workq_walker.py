@@ -5,7 +5,7 @@
 from zview.backend.base import WorkqInfo
 from zview.kernel.layout import KernelLayout
 from zview.kernel.session import Session
-from zview.kernel.workqs import walk_workqs
+from zview.kernel.workqs import Workqs
 
 
 class FakeScraper:
@@ -87,7 +87,7 @@ def _session(scraper, elf, layout, thread_names=None, *, walk_waiters=True) -> S
 def test_an_idle_queue_has_no_items():
     scraper = FakeScraper(_queue_words(head=0, flags=STARTED))
 
-    queue = walk_workqs(_session(scraper, FakeElf(), LAYOUT), {"sys_workq": [QUEUE]})["sys_workq"]
+    queue = Workqs().walk(_session(scraper, FakeElf(), LAYOUT), {"sys_workq": [QUEUE]})["sys_workq"]
 
     assert queue.pending == ()
     assert queue.depth == 0
@@ -103,7 +103,7 @@ def test_queued_items_are_named_by_their_handler():
         **_item(second, handler=HANDLER_B, nxt=0),
     }
 
-    queue = walk_workqs(
+    queue = Workqs().walk(
         _session(FakeScraper(words), FakeElf(SYMBOLS), LAYOUT), {"bench_workq": [QUEUE]}
     )["bench_workq"]
 
@@ -121,7 +121,7 @@ def test_items_sharing_a_handler_are_told_apart_by_their_own_symbol():
     }
     elf = FakeElf({**SYMBOLS, first: "tick_work", second: "trail_work"})
 
-    queue = walk_workqs(_session(FakeScraper(words), elf, LAYOUT), {"bench_workq": [QUEUE]})[
+    queue = Workqs().walk(_session(FakeScraper(words), elf, LAYOUT), {"bench_workq": [QUEUE]})[
         "bench_workq"
     ]
 
@@ -132,7 +132,7 @@ def test_a_handler_without_a_symbol_falls_back_to_its_address():
     item = 0x6000
     words = {**_queue_words(head=item, flags=STARTED), **_item(item, handler=0x1234, nxt=0)}
 
-    queue = walk_workqs(_session(FakeScraper(words), FakeElf(), LAYOUT), {"q": [QUEUE]})["q"]
+    queue = Workqs().walk(_session(FakeScraper(words), FakeElf(), LAYOUT), {"q": [QUEUE]})["q"]
 
     assert queue.pending == ("0x1234",)
 
@@ -141,7 +141,7 @@ def test_a_queue_running_its_only_item_reads_busy_and_empty():
     """BUSY is the only sign of work in flight."""
     scraper = FakeScraper(_queue_words(head=0, flags=STARTED | BUSY))
 
-    queue = walk_workqs(_session(scraper, FakeElf(), LAYOUT), {"q": [QUEUE]})["q"]
+    queue = Workqs().walk(_session(scraper, FakeElf(), LAYOUT), {"q": [QUEUE]})["q"]
 
     assert queue.depth == 0
     assert queue.is_busy
@@ -153,7 +153,7 @@ def test_a_list_longer_than_the_cap_reports_a_floor():
     for address, nxt in zip(items, items[1:] + [0], strict=True):
         words |= _item(address, handler=HANDLER_A, nxt=nxt)
 
-    queue = walk_workqs(
+    queue = Workqs().walk(
         _session(FakeScraper(words), FakeElf(SYMBOLS), LAYOUT), {"q": [QUEUE]}, max_pending=4
     )["q"]
 
@@ -170,7 +170,9 @@ def test_a_list_that_loops_mid_walk_terminates():
         **_item(second, handler=HANDLER_B, nxt=first),
     }
 
-    queue = walk_workqs(_session(FakeScraper(words), FakeElf(SYMBOLS), LAYOUT), {"q": [QUEUE]})["q"]
+    queue = Workqs().walk(_session(FakeScraper(words), FakeElf(SYMBOLS), LAYOUT), {"q": [QUEUE]})[
+        "q"
+    ]
 
     assert queue.pending == ("flush_handler", "retry_handler")
     assert queue.pending_truncated
@@ -179,7 +181,7 @@ def test_a_list_that_loops_mid_walk_terminates():
 def test_a_declared_queue_that_never_started_says_so():
     scraper = FakeScraper(_queue_words(head=0, flags=0, thread_id=0))
 
-    queue = walk_workqs(_session(scraper, FakeElf(), LAYOUT), {"q": [QUEUE]})["q"]
+    queue = Workqs().walk(_session(scraper, FakeElf(), LAYOUT), {"q": [QUEUE]})["q"]
 
     assert not queue.is_started
     assert queue.thread_name is None
@@ -188,7 +190,7 @@ def test_a_declared_queue_that_never_started_says_so():
 def test_the_animating_thread_is_named():
     scraper = FakeScraper(_queue_words(head=0, flags=STARTED))
 
-    queue = walk_workqs(
+    queue = Workqs().walk(
         _session(scraper, FakeElf(), LAYOUT, {0x9000: "bench_workq_thread"}), {"q": [QUEUE]}
     )["q"]
 
@@ -201,7 +203,7 @@ def test_draining_threads_are_reported_as_waiters():
     words[QUEUE + 228] = waiter
     words[waiter] = QUEUE + 228
 
-    queue = walk_workqs(
+    queue = Workqs().walk(
         _session(FakeScraper(words), FakeElf(), LAYOUT, {waiter: "drain_waiter"}), {"q": [QUEUE]}
     )["q"]
 
@@ -213,7 +215,7 @@ def test_an_unwalkable_layout_leaves_the_waiters_unknown():
     """``None`` is not an empty drain queue: nothing was walked."""
     scraper = FakeScraper(_queue_words(head=0, flags=STARTED))
 
-    queue = walk_workqs(_session(scraper, FakeElf(), LAYOUT, walk_waiters=False), {"q": [QUEUE]})[
+    queue = Workqs().walk(_session(scraper, FakeElf(), LAYOUT, walk_waiters=False), {"q": [QUEUE]})[
         "q"
     ]
 
@@ -224,7 +226,7 @@ def test_the_deprecated_thread_is_never_read():
     """208 of a k_work_q's 240 bytes are the deprecated embedded thread."""
     scraper = FakeScraper(_queue_words(head=0, flags=STARTED))
 
-    walk_workqs(_session(scraper, FakeElf(), LAYOUT), {"q": [QUEUE]})
+    Workqs().walk(_session(scraper, FakeElf(), LAYOUT), {"q": [QUEUE]})
 
     span_read = next(r for r in scraper.reads if r[1] > 1)
     assert span_read == (QUEUE + 208, 8)

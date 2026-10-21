@@ -7,9 +7,8 @@ import struct
 import pytest
 
 from zview.backend.base import ProbeReadError
-from zview.kernel.heaps import walk_heap_waiters, walk_heaps
+from zview.kernel.heaps import Heaps, walk_heap_fragmentation, walk_heap_waiters
 from zview.kernel.session import Session
-from zview.orchestrator import ZScraper
 
 
 class FakeScraper:
@@ -25,22 +24,6 @@ class FakeScraper:
 
     def read_bytes(self, at: int, amount: int) -> bytes:
         return self.heap_bytes[:amount]
-
-
-def _make_walker(scraper: FakeScraper) -> ZScraper:
-    """Bypass ``ZScraper.__init__`` and seed only what the walker reads."""
-    from zview.kernel.layout import KernelLayout
-
-    walker = object.__new__(ZScraper)
-    walker._m_scraper = scraper
-    walker._layout = KernelLayout(
-        threads_head=0,
-        thread_next=0,
-        stack_start=0,
-        stack_size=0,
-        heap_end_chunk=0,
-    )
-    return walker
 
 
 def _chunk0_header_16(first_chunk_id: int, endian: str = "<") -> bytes:
@@ -68,13 +51,13 @@ def _chunk_body_32(size_units: int, used: bool, endian: str = "<") -> bytes:
 
 
 def test_null_address_returns_empty():
-    walker = _make_walker(FakeScraper(end_chunk=0, heap_bytes=b""))
-    assert walker.get_heap_fragmentation(0) == []
+    scraper = FakeScraper(end_chunk=0, heap_bytes=b"")
+    assert walk_heap_fragmentation(scraper, 0, 0) == []
 
 
 def test_end_chunk_zero_returns_empty():
-    walker = _make_walker(FakeScraper(end_chunk=0, heap_bytes=b""))
-    assert walker.get_heap_fragmentation(0x1000) == []
+    scraper = FakeScraper(end_chunk=0, heap_bytes=b"")
+    assert walk_heap_fragmentation(scraper, 0x1000, 0) == []
 
 
 def test_16bit_walk():
@@ -85,9 +68,9 @@ def test_16bit_walk():
         + _chunk_body_16(size_units=2, used=False)  # c=3
         + b"\x00" * 8  # c=4 (inside chunk 3)
     )
-    walker = _make_walker(FakeScraper(end_chunk=5, heap_bytes=image))
+    scraper = FakeScraper(end_chunk=5, heap_bytes=image)
 
-    assert walker.get_heap_fragmentation(0x1000) == [
+    assert walk_heap_fragmentation(scraper, 0x1000, 0) == [
         {"used": True, "size": 16},
         {"used": False, "size": 16},
     ]
@@ -101,9 +84,9 @@ def test_32bit_walk():
         + _chunk_body_32(size_units=2, used=False)
         + b"\x00" * 8
     )
-    walker = _make_walker(FakeScraper(end_chunk=5, heap_bytes=image))
+    scraper = FakeScraper(end_chunk=5, heap_bytes=image)
 
-    assert walker.get_heap_fragmentation(0x1000) == [
+    assert walk_heap_fragmentation(scraper, 0x1000, 0) == [
         {"used": True, "size": 16},
         {"used": False, "size": 16},
     ]
@@ -111,16 +94,16 @@ def test_32bit_walk():
 
 def test_oversize_heap_raises():
     # end_chunk * 8 = 40 MB, over the 32 MB sanity ceiling.
-    walker = _make_walker(FakeScraper(end_chunk=5_000_000, heap_bytes=b""))
+    scraper = FakeScraper(end_chunk=5_000_000, heap_bytes=b"")
     with pytest.raises(ValueError, match="sanity"):
-        walker.get_heap_fragmentation(0x1000)
+        walk_heap_fragmentation(scraper, 0x1000, 0)
 
 
 def test_corrupted_chunk0_raises():
     # All zeros: both 16-bit and 32-bit interpretations fail bounds+used check.
-    walker = _make_walker(FakeScraper(end_chunk=3, heap_bytes=bytes(24)))
+    scraper = FakeScraper(end_chunk=3, heap_bytes=bytes(24))
     with pytest.raises(ValueError, match="Corrupted chunk0"):
-        walker.get_heap_fragmentation(0x1000)
+        walk_heap_fragmentation(scraper, 0x1000, 0)
 
 
 def test_zero_size_mid_walk_raises():
@@ -129,9 +112,9 @@ def test_zero_size_mid_walk_raises():
         + _chunk_body_16(size_units=0, used=True)  # triggers infinite-loop guard
         + b"\x00" * 8
     )
-    walker = _make_walker(FakeScraper(end_chunk=3, heap_bytes=image))
+    scraper = FakeScraper(end_chunk=3, heap_bytes=image)
     with pytest.raises(RuntimeError, match="Infinite loop"):
-        walker.get_heap_fragmentation(0x1000)
+        walk_heap_fragmentation(scraper, 0x1000, 0)
 
 
 def test_big_endian_16bit_walk():
@@ -140,9 +123,9 @@ def test_big_endian_16bit_walk():
         + _chunk_body_16(size_units=2, used=True, endian=">")
         + b"\x00" * 8
     )
-    walker = _make_walker(FakeScraper(end_chunk=3, heap_bytes=image, endianess=">"))
+    scraper = FakeScraper(end_chunk=3, heap_bytes=image, endianess=">")
 
-    assert walker.get_heap_fragmentation(0x1000) == [
+    assert walk_heap_fragmentation(scraper, 0x1000, 0) == [
         {"used": True, "size": 16},
     ]
 
@@ -229,9 +212,9 @@ def _heap_session(words: dict[int, int], *, wait_q: int | None, flavor: str = "s
     )
 
 
-def _poll(session: Session) -> list:
+def _poll(session: Session, heaps: Heaps | None = None) -> list:
     """One frame of the single ``bench_heap``."""
-    return list(walk_heaps(session, {"bench_heap": [_HEAP]}).values())
+    return list((heaps or Heaps()).walk(session, {"bench_heap": [_HEAP]}).values())
 
 
 _SYS_HEAP = 0x9000
@@ -269,14 +252,15 @@ def test_a_recording_without_a_chunk_map_stops_asking_for_one(monkeypatch):
 
     quiet_queue = {_HEAP + _WAIT_Q: _HEAP + _WAIT_Q}
     session = _heap_session({**_STATS, **quiet_queue}, wait_q=_WAIT_Q)
-    session.state["heaps"] = {"all_chunks": True}
+    heaps = Heaps()
+    heaps.all_chunks = True
     monkeypatch.setattr("zview.kernel.heaps.walk_heap_fragmentation", drift)
 
-    heap = _poll(session)[0]
+    heap = _poll(session, heaps)[0]
 
     assert heap.chunks is None
     assert heap.free_bytes == 1536
-    assert not session.state["heaps"]["all_chunks"]
+    assert not heaps.all_chunks
 
 
 class LiveHeapRefusingChunkMap(FakeHeapMemory):
@@ -310,24 +294,24 @@ def test_a_chunk_map_the_live_stub_refused_replays_frame_after_frame(tmp_path):
     path = tmp_path / "refused.ndjson.gz"
     refused = "Error reading sparsity for bench_heap: GDB error at 0x9000: E22"
 
-    live = _heap_session(words, wait_q=_WAIT_Q)
-    live.state["heaps"] = {"all_chunks": True}
+    live, live_heaps = _heap_session(words, wait_q=_WAIT_Q), Heaps()
+    live_heaps.all_chunks = True
     with RecordingScraper(LiveHeapRefusingChunkMap(words), path) as recorder:
         live.scraper = recorder
         for _ in range(3):
             recorder.begin_batch()
             with pytest.raises(RuntimeError, match=refused):
-                _poll(live)
+                _poll(live, live_heaps)
             recorder.end_batch()
 
-    replayed = _heap_session(words, wait_q=_WAIT_Q)
-    replayed.state["heaps"] = {"all_chunks": True}
+    replayed, replayed_heaps = _heap_session(words, wait_q=_WAIT_Q), Heaps()
+    replayed_heaps.all_chunks = True
     with ReplayScraper(path, honor_timing=False) as replay:
         replayed.scraper = replay
         for _ in range(3):
             replay.begin_batch()
             with pytest.raises(RuntimeError, match=refused):
-                _poll(replayed)
+                _poll(replayed, replayed_heaps)
             replay.end_batch()
 
 

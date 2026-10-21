@@ -2,7 +2,6 @@
 
 import queue
 import threading
-from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -10,7 +9,7 @@ import pytest
 
 from zview.backend.elf_inspector import ElfInspector
 from zview.kernel import compat
-from zview.kernel.groups import GROUPS
+from zview.kernel.heaps import HEAP_FIELDS
 from zview.orchestrator import ZScraper
 
 
@@ -22,7 +21,7 @@ def test_heap_warnings_and_polling(monkeypatch, tmp_path, fields_available, obje
     find_instances = ElfInspector.find_struct_instances
 
     def resolve(elf, fields):
-        if fields is compat.HEAP_FIELDS and not fields_available:
+        if fields is HEAP_FIELDS and not fields_available:
             return None
         return resolve_fields(elf, fields)
 
@@ -52,13 +51,8 @@ def test_heap_warnings_and_polling(monkeypatch, tmp_path, fields_available, obje
     monkeypatch.setattr(scraper, '_poll_threads', lambda deltas: [])
     monkeypatch.setattr(scraper, '_finalize_threads', lambda threads, deltas: [])
     walked = []
-    monkeypatch.setattr(
-        'zview.orchestrator.GROUPS',
-        tuple(
-            replace(group, walk=lambda session, rows, key=group.key: walked.append(key) or {})
-            for group in GROUPS
-        ),
-    )
+    for group in scraper.groups.values():
+        group.walk = lambda session, rows, key=group.key: walked.append(key) or {}
     stop = threading.Event()
     monkeypatch.setattr('zview.orchestrator.time.sleep', lambda _: stop.set())
     data_queue = queue.Queue()

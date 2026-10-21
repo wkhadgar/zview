@@ -1,0 +1,42 @@
+# Copyright (c) 2026 Paulo Santos (@wkhadgar)
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""The base each group a frame reads is declared from."""
+
+from abc import ABC, abstractmethod
+from typing import ClassVar
+
+from zview.kernel.compat import FieldTable
+from zview.kernel.session import Session
+
+
+class Group(ABC):
+    """
+    A kind of kernel object a frame reads, declared in its own module.
+
+    ``key`` names it in a frame, a recording's features and a selection. The
+    group is read only when every ``required`` table resolves, and each
+    ``optional`` table resolves field by field. Each of its ``parts`` turns on
+    some of its reads: on live, on in a replay only when the recording names
+    it, as it does every part that was on. ``discover`` finds its rows once per
+    ELF, and ``walk`` reads them every frame as ``{label: row}``. One instance
+    lives per ELF load, so what a group keeps across frames is its own.
+    """
+
+    key: ClassVar[str]
+    struct: ClassVar[str]
+    required: ClassVar[tuple[FieldTable, ...]]
+    optional: ClassVar[tuple[FieldTable, ...]] = ()
+    parts: ClassVar[tuple[str, ...]] = ()
+
+    def capture_all(self) -> None:  # noqa: B027
+        """Read every detail a view may ask for, as a recording holds them all."""
+
+    def discover(self, session: Session) -> dict[str, list[int]]:
+        """``{symbol: addresses}`` of the struct's statically declared instances."""
+        return session.elf.find_struct_instances(self.struct)
+
+    @abstractmethod
+    def walk(self, session: Session, addresses: dict[str, list[int]]) -> dict:
+        """Read the rows at ``addresses`` and return ``{label: info}``."""

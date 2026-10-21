@@ -7,7 +7,7 @@ from dataclasses import replace
 import pytest
 
 from zview.kernel.layout import KernelLayout
-from zview.kernel.mem_slabs import walk_mem_slabs
+from zview.kernel.mem_slabs import MemSlabs
 from zview.kernel.session import Session
 
 
@@ -94,7 +94,7 @@ def test_reads_the_counters_of_every_slab():
     words = _slab_words(0x1000, blocks=16, size=256, used=6)
     words |= _slab_words(0x2000, blocks=4, size=64, used=0)
 
-    slabs = walk_mem_slabs(
+    slabs = MemSlabs().walk(
         _session(FakeScraper(words), FakeElf(), LAYOUT),
         {"frame_slab": [0x1000], "tiny": [0x2000]},
     )
@@ -109,7 +109,7 @@ def test_peak_is_unknown_unless_the_build_tracks_it():
     """The member only exists under CONFIG_MEM_SLAB_TRACE_MAX_UTILIZATION."""
     words = _slab_words(0x1000, blocks=8, size=32, used=3)
 
-    slabs = walk_mem_slabs(_session(FakeScraper(words), FakeElf(), LAYOUT), {"s": [0x1000]})
+    slabs = MemSlabs().walk(_session(FakeScraper(words), FakeElf(), LAYOUT), {"s": [0x1000]})
 
     assert slabs["s"].max_used is None
 
@@ -117,7 +117,7 @@ def test_peak_is_unknown_unless_the_build_tracks_it():
 def test_peak_is_read_where_the_layout_resolved_it():
     words = _slab_words(0x1000, blocks=8, size=32, used=3, peak=7)
 
-    slabs = walk_mem_slabs(
+    slabs = MemSlabs().walk(
         _session(FakeScraper(words), FakeElf(32), TRACED_LAYOUT), {"s": [0x1000]}
     )
 
@@ -128,7 +128,7 @@ def test_fill_and_exhaustion_come_from_the_counters():
     words = _slab_words(0x1000, blocks=8, size=32, used=2)
     words |= _slab_words(0x2000, blocks=8, size=32, used=8)
 
-    slabs = walk_mem_slabs(
+    slabs = MemSlabs().walk(
         _session(FakeScraper(words), FakeElf(), LAYOUT), {"a": [0x1000], "b": [0x2000]}
     )
 
@@ -140,7 +140,7 @@ def test_fill_and_exhaustion_come_from_the_counters():
 def test_a_zero_block_slab_does_not_divide_by_zero():
     words = _slab_words(0x1000, blocks=0, size=32, used=0)
 
-    slabs = walk_mem_slabs(_session(FakeScraper(words), FakeElf(), LAYOUT), {"s": [0x1000]})
+    slabs = MemSlabs().walk(_session(FakeScraper(words), FakeElf(), LAYOUT), {"s": [0x1000]})
 
     assert slabs["s"].fill_percent == 0.0
     assert not slabs["s"].is_exhausted
@@ -151,7 +151,7 @@ def test_a_thread_waiting_for_a_block_is_named():
     words = _slab_words(address, blocks=2, size=16, used=2, head=thread)
     words[thread] = address
 
-    slabs = walk_mem_slabs(
+    slabs = MemSlabs().walk(
         _session(FakeScraper(words), FakeElf(), LAYOUT, {thread: "frame_worker"}),
         {"s": [address]},
     )
@@ -162,7 +162,7 @@ def test_a_thread_waiting_for_a_block_is_named():
 def test_an_unwalkable_layout_leaves_the_waiters_unknown():
     words = _slab_words(0x1000, blocks=2, size=16, used=1)
 
-    slabs = walk_mem_slabs(
+    slabs = MemSlabs().walk(
         _session(FakeScraper(words), FakeElf(), LAYOUT, walk_waiters=False), {"s": [0x1000]}
     )
 
@@ -173,7 +173,7 @@ def test_instances_of_one_symbol_are_labelled_apart():
     words = _slab_words(0x1000, blocks=2, size=16, used=1)
     words |= _slab_words(0x2000, blocks=2, size=16, used=2)
 
-    slabs = walk_mem_slabs(
+    slabs = MemSlabs().walk(
         _session(FakeScraper(words), FakeElf(), LAYOUT), {"pool": [0x1000, 0x2000]}
     )
 
@@ -183,4 +183,4 @@ def test_instances_of_one_symbol_are_labelled_apart():
 
 def test_a_read_failure_is_not_swallowed():
     with pytest.raises(AssertionError):
-        walk_mem_slabs(_session(FakeScraper({}), FakeElf(), LAYOUT), {"s": [0x9999]})
+        MemSlabs().walk(_session(FakeScraper({}), FakeElf(), LAYOUT), {"s": [0x9999]})

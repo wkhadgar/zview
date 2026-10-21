@@ -4,7 +4,7 @@
 
 """Coverage for the kernel-object feature list a recording carries."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from zview.kernel.groups import GROUPS
 from zview.kernel.layout import KernelLayout
@@ -14,9 +14,9 @@ from zview.orchestrator import ZScraper
 def _scraper(**enabled: bool) -> ZScraper:
     """``ZScraper`` with only the feature flags set, without touching an ELF."""
     s = ZScraper.__new__(ZScraper)
-    s.available = {group.key: enabled.get(group.key, False) for group in GROUPS}
-    s.rows = {group.key: {} for group in GROUPS}
-    s.group_state = {}
+    s.groups = {cls.key: cls() for cls in GROUPS}
+    s.available = {key: enabled.get(key, False) for key in s.groups}
+    s.rows = {key: {} for key in s.groups}
     s.parts = {"heap_waiters"} if enabled.get("heap_waiters", s.available["heaps"]) else set()
     s.has_stack_fill = enabled.get("stack_fill", True)
     s.has_thread_list = enabled.get("thread_list", True)
@@ -38,13 +38,6 @@ def _polling_scraper(**rows: dict[str, list[int]]) -> ZScraper:
     s.waitq_flavor = "simple"
     s._thread_names = lambda: {}
     return s
-
-
-def _with_walks(**walks):
-    """``GROUPS`` with these groups' ``walk`` replaced."""
-    from dataclasses import replace
-
-    return tuple(replace(group, walk=walks.get(group.key, group.walk)) for group in GROUPS)
 
 
 def test_active_features_lists_only_what_is_polled():
@@ -249,12 +242,9 @@ def test_a_group_walker_gets_only_the_selected_labels():
     s = _polling_scraper(semaphores={"sem_a": [0x100], "sem_b": [0x200, 0x300]})
     s.selection = Selection(exclude=("sem_a",), muted=frozenset({("semaphores", "sem_b@0x300")}))
     given: list[dict] = []
+    s.groups["semaphores"].walk = lambda session, rows: given.append(rows) or {}
 
-    with patch(
-        "zview.orchestrator.GROUPS",
-        _with_walks(semaphores=lambda session, rows: given.append(rows) or {}),
-    ):
-        s._poll_kernel_objects()
+    s._poll_kernel_objects()
 
     assert given == [{"sem_b@0x200": [0x200]}]
 
@@ -267,11 +257,10 @@ def test_the_poll_reads_the_work_queues_last():
     def walker(key):
         return lambda session, rows: order.append(key) or {key: key}
 
-    with patch(
-        "zview.orchestrator.GROUPS",
-        _with_walks(semaphores=walker("semaphores"), workqs=walker("workqs")),
-    ):
-        frame = s._poll_kernel_objects()
+    s.groups["semaphores"].walk = walker("semaphores")
+    s.groups["workqs"].walk = walker("workqs")
+
+    frame = s._poll_kernel_objects()
 
     assert order == ["semaphores", "workqs"]
     assert frame == {"semaphores": ["semaphores"], "workqs": ["workqs"]}
