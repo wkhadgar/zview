@@ -5,6 +5,7 @@ import logging
 import sys
 from collections.abc import Callable
 
+from pyocd.utility.cmdline import convert_frequency
 from yaml import YAMLError
 
 from zview.backend.gdb import GDBScraper
@@ -25,6 +26,8 @@ AVAILABLE_RUNNERS = ("gdb", "jlink", "nrfutil", "pyocd")
 KNOWN_COMMANDS = ("live", "record", "replay", "dump")
 PROBE_COMMANDS = ("live", "record")
 RUNNERS_NEEDING_TARGET = ("gdb", "jlink")
+# Runners whose probe clock --frequency sets.
+CLOCKED_RUNNERS = ("pyocd", "jlink")
 
 
 def _normalize_argv(argv: list[str]) -> list[str]:
@@ -71,6 +74,16 @@ def _add_live_target(parser: argparse.ArgumentParser) -> None:
         "--runner-target",
         default=None,
         help="MCU descriptor for the chosen runner.",
+    )
+    parser.add_argument(
+        "--frequency",
+        type=convert_frequency,
+        default=None,
+        metavar="HZ",
+        help=(
+            "SWD clock for the pyocd and jlink runners, such as 4000000 or 10M "
+            "(default: 4M on pyocd, the J-Link's own on jlink)."
+        ),
     )
 
 
@@ -219,8 +232,16 @@ def fill_from_build_dir(args: argparse.Namespace, warn: Callable[[str], None]) -
         args.runner = runner
     if args.runner_target is None and target_mcu is not None:
         args.runner_target = str(target_mcu)
+    if args.frequency is None and args.runner in CLOCKED_RUNNERS:
+        args.frequency = cfg.frequency(args.runner)
 
-    logger.debug("Runner '%s', target '%s' from '%s'.", args.runner, args.runner_target, yaml_path)
+    logger.debug(
+        "Runner '%s', target '%s', frequency %s from '%s'.",
+        args.runner,
+        args.runner_target,
+        args.frequency,
+        yaml_path,
+    )
 
 
 def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
@@ -235,6 +256,9 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     target_needed = args.cmd in PROBE_COMMANDS and args.runner in RUNNERS_NEEDING_TARGET
     if target_needed and args.runner_target is None:
         parser.error(f"{args.cmd}: runner '{args.runner}' requires --runner-target.")
+
+    if getattr(args, "frequency", None) is not None and args.runner not in (None, *CLOCKED_RUNNERS):
+        parser.error(f"{args.cmd}: --frequency sets the pyocd and jlink runners' clock only.")
 
     if args.cmd == "dump":
         if args.input and (args.runner or args.runner_target):
@@ -291,6 +315,8 @@ def _build_live_backend(args):
         "pyocd": PyOCDScraper,
     }
     cls = scraper_map.get(args.runner, PyOCDScraper)
+    if cls in (PyOCDScraper, JLinkScraper):
+        return cls(args.runner_target, args.frequency)
     return cls(args.runner_target)
 
 

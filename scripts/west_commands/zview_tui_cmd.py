@@ -63,6 +63,7 @@ class ZViewCommand(WestCommand):
             domain=None,
             runner=None,
             runner_target=None,
+            frequency=None,
             period=0.10,
         )
         return parser

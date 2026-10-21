@@ -100,10 +100,11 @@ ZView is invoked through one of four commands. Bare `zview` with no command runs
 | Argument | Used by | Description |
 | --- | --- | --- |
 | `-e, --elf-file` | all | Path to the firmware `.elf` file (e.g. `build/zephyr/zephyr.elf`). |
-| `-d, --build-dir` | all | Application build directory to read unset `-e`, `-r` and `-t` from. |
+| `-d, --build-dir` | all | Application build directory to read unset `-e`, `-r`, `-t` and `--frequency` from. |
 | `--domain` | all | Sysbuild domain to view (default: the build's default domain). |
 | `-r, --runner` | `live`, `record`, `dump` | Debug runner: `jlink`, `pyocd`, or `gdb`. |
 | `-t, --runner-target` | `live`, `record`, `dump` | MCU descriptor for the chosen runner (see below). |
+| `--frequency` | `live`, `record`, `dump` | SWD clock of `-r pyocd` and `-r jlink`, in Hz or with a `k` or `M` suffix (default: `4M` on pyocd, the J-Link's own on jlink). Lower it if long wires give read errors. |
 | `--period` | `live`, `record`, `dump` | Polling period in seconds (default: `0.10`). |
 
 ### Command-specific arguments
