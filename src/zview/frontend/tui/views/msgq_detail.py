@@ -28,7 +28,9 @@ class MsgqDetailView(KernelObjectDetailView):
         if address is None:
             return None
 
-        return next((q for q in self.controller.msgqs_data if q.address == address), None)
+        return next(
+            (q for q in self.controller.frames.latest("msgqs") if q.address == address), None
+        )
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()
@@ -74,7 +76,7 @@ class MsgqDetailView(KernelObjectDetailView):
         )
         # One column per sample: extra points are averaged into moving buckets.
         columns = max(1, width - 2)
-        history = list(self.controller.msgq_history.get(msgq.address, ()))[-columns:]
+        history = [q.used_msgs for q in self.controller.frames.of("msgqs", msgq.address)][-columns:]
 
         graph.draw(
             stdscr,

@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from zview.frames import Frame, Notice
+from zview.frames import Frame, FrameHistory, Notice
 from zview.frontend.tui.views.base import Keybind, SpecialCode, ZViewState, ZViewTUIAttributes
 from zview.frontend.tui.widgets import PopupRow, TUIPopup
 from zview.frontend.zview_tui import _MESSAGE_LOG_SIZE, LogEntry, ZView
@@ -69,8 +69,7 @@ def app() -> ZView:
     """``ZView`` instance without going through curses init."""
     a = ZView.__new__(ZView)
     a.min_dimensions = (14, 85)
-    a.threads_data = []
-    a.heaps_data = []
+    a.frames = FrameHistory()
     a.status_message = ""
     a.messages = deque(maxlen=_MESSAGE_LOG_SIZE)
     a.update_count = 0

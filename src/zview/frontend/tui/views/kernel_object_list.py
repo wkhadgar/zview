@@ -108,16 +108,16 @@ class KernelObjectListView(BaseStateView):
     def _rows(self) -> list[tuple[str, Any]]:
         """Typed, filtered and sorted rows backing the table."""
         rows: list[tuple[str, Any]] = []
-        for kind, objects in (
-            (SEMAPHORE, self.controller.semaphores_data),
-            (MUTEX, self.controller.mutexes_data),
-            (MSGQ, self.controller.msgqs_data),
-            (MEM_SLAB, self.controller.mem_slabs_data),
-            (HEAP, self.controller.heaps_data),
-            (WORKQ, self.controller.workqs_data),
+        for kind, key in (
+            (SEMAPHORE, "semaphores"),
+            (MUTEX, "mutexes"),
+            (MSGQ, "msgqs"),
+            (MEM_SLAB, "mem_slabs"),
+            (HEAP, "heaps"),
+            (WORKQ, "workqs"),
         ):
             if self._shows(kind):
-                rows += [(kind, obj) for obj in objects]
+                rows += [(kind, obj) for obj in self.controller.frames.latest(key)]
 
         return sorted(
             rows, key=self._sort_keys[self._current_sort_idx], reverse=self._invert_sorting

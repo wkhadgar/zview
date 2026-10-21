@@ -31,7 +31,9 @@ class HeapDetailView(KernelObjectDetailView):
         if address is None:
             return None
 
-        return next((h for h in self.controller.heaps_data if h.address == address), None)
+        return next(
+            (h for h in self.controller.frames.latest("heaps") if h.address == address), None
+        )
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()

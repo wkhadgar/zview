@@ -163,7 +163,14 @@ def test_compute_flex_widths_empty_items_is_safe():
 import curses  # noqa: E402
 
 from zview.backend.base import ThreadInfo  # noqa: E402
+from zview.frames import Frame, FrameHistory  # noqa: E402
 from zview.frontend.tui.views.base import SpecialCode, ZViewState  # noqa: E402
+
+
+def _frames(**groups) -> FrameHistory:
+    frames = FrameHistory()
+    frames.add(Frame(groups))
+    return frames
 
 
 def _make_thread(name: str, addr: int = 0x1000) -> ThreadInfo:
@@ -195,13 +202,13 @@ def test_thread_list_handle_input_invert_flips_order(controller, theme):
 
 def test_thread_list_handle_input_enter_with_no_threads_stays_put(controller, theme):
     """ENTER on an empty list must not crash or transition."""
-    controller.threads_data = []
+    controller.frames = _frames(threads=[])
     view = ThreadListView(controller, theme)
     assert view.handle_input(SpecialCode.NEWLINE) is None
 
 
 def test_thread_list_handle_input_enter_selects_and_transitions(controller, theme):
-    controller.threads_data = [_make_thread("main"), _make_thread("idle")]
+    controller.frames = _frames(threads=[_make_thread("main"), _make_thread("idle")])
     view = ThreadListView(controller, theme)
     view.cursor = 1
     state = view.handle_input(SpecialCode.NEWLINE)
@@ -301,7 +308,7 @@ def test_thread_detail_history_never_exceeds_the_graph_columns(controller, theme
     thread = ThreadInfo(
         address=0x1000, stack_start=0x2000, stack_size=512, name="worker", runtime=runtime
     )
-    controller.threads_data = [thread]
+    controller.frames = _frames(threads=[thread])
     controller.detailing_thread = "worker"
     controller.min_dimensions = (14, 85)
 
@@ -347,7 +354,7 @@ def _unmeasured_thread() -> ThreadInfo:
 
 def test_an_unmeasured_thread_row_draws_dashes(controller, theme):
     """The row and the all-threads sum show no number the build did not measure."""
-    controller.threads_data = [_unmeasured_thread(), _make_thread("idle")]
+    controller.frames = _frames(threads=[_unmeasured_thread(), _make_thread("idle")])
     controller.min_dimensions = (14, 85)
     win = _TextWin()
 
@@ -361,7 +368,7 @@ def test_a_build_without_stack_info_draws_no_stack_size(controller, theme):
     from dataclasses import replace
 
     unsized = replace(_unmeasured_thread(), stack_start=None, stack_size=None)
-    controller.threads_data = [unsized]
+    controller.frames = _frames(threads=[unsized])
     controller.min_dimensions = (14, 85)
     win = _TextWin()
 
@@ -380,7 +387,7 @@ def test_unmeasured_values_sort_with_the_unpolled_threads(controller, theme):
 
 def test_the_detail_view_keeps_no_history_without_runtime_stats(controller, theme):
     """Plotting a 0 would draw the thread idle."""
-    controller.threads_data = [_unmeasured_thread()]
+    controller.frames = _frames(threads=[_unmeasured_thread()])
     controller.detailing_thread = "worker"
     controller.min_dimensions = (14, 85)
     view = ThreadDetailView(controller, theme)
