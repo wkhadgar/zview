@@ -9,6 +9,7 @@ import pytest
 
 from zview.backend.elf_inspector import ElfInspector
 from zview.kernel import compat
+from zview.kernel.heaps import HEAP_FIELDS
 from zview.orchestrator import ZScraper
 
 
@@ -20,7 +21,7 @@ def test_heap_warnings_and_polling(monkeypatch, tmp_path, fields_available, obje
     find_instances = ElfInspector.find_struct_instances
 
     def resolve(elf, fields):
-        if fields is compat.HEAP_FIELDS and not fields_available:
+        if fields is HEAP_FIELDS and not fields_available:
             return None
         return resolve_fields(elf, fields)
 
@@ -33,10 +34,13 @@ def test_heap_warnings_and_polling(monkeypatch, tmp_path, fields_available, obje
     monkeypatch.setattr(ElfInspector, 'find_struct_instances', discover)
     elf = Path(__file__).parent / 'fixtures' / 'zephyr.elf'
     scraper = ZScraper(MagicMock(is_live=True, is_connected=True, watermark_cache={}), elf)
+    # The mock target holds no thread list to walk.
+    monkeypatch.setattr(scraper.groups['threads'], 'discover', lambda session: {})
+    scraper.discover()
 
     can_poll = bool(objects) and fields_available
-    assert scraper.has_heaps == can_poll
-    assert scraper._k_heap_addresses == objects
+    assert scraper.available['heaps'] == can_poll
+    assert scraper.rows['heaps'] == (objects if can_poll else {})
     notices = tuple(n for n in scraper.absent_features() if 'heap' in n)
     if objects and not fields_available:
         assert notices == ('Warning: no heap stats (CONFIG_SYS_HEAP_RUNTIME_STATS=n)',)
@@ -46,20 +50,15 @@ def test_heap_warnings_and_polling(monkeypatch, tmp_path, fields_available, obje
     assert ('heaps' in scraper.active_features()) == can_poll
     assert ('heap_waiters' in scraper.active_features()) == can_poll
 
-    monkeypatch.setattr(scraper, '_read_usage_deltas', lambda: {})
-    monkeypatch.setattr(scraper, '_poll_threads', lambda deltas: [])
-    monkeypatch.setattr(scraper, '_finalize_threads', lambda threads, deltas: [])
-    monkeypatch.setattr(scraper, '_poll_kernel_objects', lambda data_queue: {})
-    poll_heaps = MagicMock(return_value=[])
-    monkeypatch.setattr(scraper, '_poll_heaps', poll_heaps)
+    walked = []
+    for group in scraper.groups.values():
+        group.walk = lambda session, rows, key=group.key: walked.append(key) or {}
     stop = threading.Event()
     monkeypatch.setattr('zview.orchestrator.time.sleep', lambda _: stop.set())
     data_queue = queue.Queue()
 
     scraper._poll_thread_worker(data_queue, stop, 0)
 
-    assert poll_heaps.call_count == int(can_poll)
-    assert data_queue.get_nowait() == (
-        {'threads': [], 'heaps': []} if can_poll else {'threads': []}
-    )
+    assert walked.count('heaps') == int(can_poll)
+    assert ('heaps' in data_queue.get_nowait()) == can_poll
     assert data_queue.empty()

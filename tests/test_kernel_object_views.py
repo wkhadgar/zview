@@ -391,10 +391,10 @@ def test_empty_message_distinguishes_absent_from_filtered(controller, theme):
     controller.msgqs_data = []
     controller.mem_slabs_data = []
 
-    controller.scraper.has_kernel_objects.return_value = True
+    controller.has_kernel_objects.return_value = True
     assert "No ALL objects." in view._empty_message()
 
-    controller.scraper.has_kernel_objects.return_value = False
+    controller.has_kernel_objects.return_value = False
     assert "No statically declared" in view._empty_message()
 
 

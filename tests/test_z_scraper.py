@@ -18,7 +18,9 @@ from zview.backend.base import (
 )
 from zview.backend.gdb import GDBScraper
 from zview.backend.pyocd import PyOCDScraper
+from zview.kernel.threads import Threads
 from zview.orchestrator import ZScraper
+from zview.selection import Selection
 
 
 def test_gdb_scraper_endianness():
@@ -89,6 +91,15 @@ def _thread(address: int, name: str) -> ThreadInfo:
     return ThreadInfo(address=address, stack_start=0x0, stack_size=1000, name=name, runtime=None)
 
 
+def _seed(scraper: ZScraper, threads, idle=(_IDLE,)) -> Threads:
+    """The scraper's threads group, as a discovery of ``threads`` leaves it."""
+    group = scraper.groups["threads"]
+    group.infos = {t.address: t for t in threads}
+    group.idle_addresses = idle
+    scraper.rows["threads"] = {t.name: [t.address] for t in threads}
+    return group
+
+
 def _usage_scraper(elf_path, threads, before: dict[int, int], now: dict[int, int]):
     """``ZScraper`` over a target whose usage counters moved from ``before`` to ``now``."""
     from dataclasses import replace as dc_replace
@@ -96,17 +107,13 @@ def _usage_scraper(elf_path, threads, before: dict[int, int], now: dict[int, int
     mock = MagicMock()
     mock.is_connected = True
     mock.watermark_cache = {}
-    scraper = ZScraper(mock, elf_path=elf_path, max_threads=len(threads))
-    scraper.has_heaps = False
-    scraper.has_usage = True
-    scraper.idle_thread_addresses = (_IDLE,)
-    scraper._usage_stamps = ()
+    scraper = ZScraper(mock, elf_path=elf_path)
+    scraper.available["heaps"] = False
     scraper._layout = dc_replace(scraper._layout, thread_usage=_USAGE)
-    scraper._all_threads_info = {t.name: t for t in threads}
-    scraper.thread_pool = list(threads)
-    scraper.last_thread_cycles = dict(before)
+    _seed(scraper, threads).last_cycles = dict(before)
     mock.read64.side_effect = lambda address, amount=1: [now.get(address - _USAGE, 0)]
     mock.read_many.side_effect = lambda reads: AbstractScraper.read_many(mock, reads)
+    mock.read8.side_effect = lambda address, amount=1: [0] * amount
     mock.calculate_dynamic_watermark.return_value = 250
     return scraper, mock
 
@@ -151,7 +158,7 @@ def test_every_idle_thread_counts_as_idle(elf_path):
         before={_MAIN: 0, _IDLE: 0, second_idle: 0},
         now={_MAIN: 20, _IDLE: 90, second_idle: 90},
     )
-    scraper.idle_thread_addresses = (_IDLE, second_idle)
+    scraper.groups["threads"].idle_addresses = (_IDLE, second_idle)
 
     runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
 
@@ -161,7 +168,7 @@ def test_every_idle_thread_counts_as_idle(elf_path):
 
 
 def test_a_detail_view_shares_count_the_threads_it_does_not_scan(elf_path):
-    """Only the pool's stacks are scanned, but every thread's cycles are read."""
+    """Only the view's stacks are scanned, but every thread's cycles are read."""
     main, worker, idle = _thread(_MAIN, "main"), _thread(_WORKER, "worker"), _thread(_IDLE, "idle")
     scraper, mock = _usage_scraper(
         elf_path,
@@ -169,10 +176,31 @@ def test_a_detail_view_shares_count_the_threads_it_does_not_scan(elf_path):
         before={_MAIN: 0, _WORKER: 0, _IDLE: 0},
         now={_MAIN: 10, _WORKER: 30, _IDLE: 60},
     )
-    scraper.thread_pool = [main, idle]
+    scraper.view = Selection(include=("main", "idle"))
 
     runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
 
+    assert set(runtimes) == {"main", "idle"}
+    assert runtimes["main"].cpu == pytest.approx(25.0)
+    assert mock.calculate_dynamic_watermark.call_count == 2
+
+
+def test_a_muted_thread_is_not_scanned_but_its_cycles_still_count(elf_path):
+    """Dropping its counter would hand its cycles to the threads still listed."""
+    from zview.selection import Selection
+
+    main, worker, idle = _thread(_MAIN, "main"), _thread(_WORKER, "worker"), _thread(_IDLE, "idle")
+    scraper, mock = _usage_scraper(
+        elf_path,
+        [main, worker, idle],
+        before={_MAIN: 0, _WORKER: 0, _IDLE: 0},
+        now={_MAIN: 10, _WORKER: 30, _IDLE: 60},
+    )
+    scraper.selection = Selection(muted=frozenset({("threads", "worker")}))
+
+    runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
+
+    # 10 of the 40 busy cycles, the muted worker's 30 included.
     assert set(runtimes) == {"main", "idle"}
     assert runtimes["main"].cpu == pytest.approx(25.0)
     assert mock.calculate_dynamic_watermark.call_count == 2
@@ -186,18 +214,23 @@ def test_a_recording_from_before_the_snapshot_reads_counters_beside_the_stacks(e
         before={_MAIN: 0, _IDLE: 0},
         now={_MAIN: 10, _IDLE: 30},
     )
-    scraper.usage_snapshot = False
-    scraper._cpu_usage_address = 0x9000
+    scraper.parts.discard("usage_snapshot")
+    scraper.groups["threads"]._cpu_usage_address = 0x9000
 
     runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
 
     reads = [
-        c for c in mock.mock_calls if c[0] in ("read32", "read64", "calculate_dynamic_watermark")
+        c
+        for c in mock.mock_calls
+        if c[0] in ("read8", "read32", "read64", "calculate_dynamic_watermark")
     ]
-    assert [c[0] for c in reads[:4]] == [
+    # The metadata and entry reads sit between a stack and the next counter.
+    assert [c[0] for c in reads[:6]] == [
         "read32",
         "read64",
         "calculate_dynamic_watermark",
+        "read8",
+        "read32",
         "read64",
     ]
     assert reads[0].args == (0x9000,)
@@ -205,16 +238,20 @@ def test_a_recording_from_before_the_snapshot_reads_counters_beside_the_stacks(e
 
 
 def _make_strike_scraper(elf_path):
-    """``ZScraper`` shim with ``has_usage``/``has_heaps`` disabled."""
+    """``ZScraper`` shim with its usage counters and heaps left unread."""
+    from dataclasses import replace as dc_replace
+
     mock = MagicMock()
     mock.is_connected = True
-    scraper = ZScraper(mock, elf_path=elf_path, max_threads=2)
-    scraper.has_heaps = False
-    scraper.has_usage = False
-    scraper.idle_thread_addresses = (0x9999,)
-    scraper.thread_pool = [
-        ThreadInfo(address=0x1000, stack_start=0x0, stack_size=1000, name="t1", runtime=None),
-    ]
+    mock.read8.side_effect = lambda address, amount=1: [0] * amount
+    scraper = ZScraper(mock, elf_path=elf_path)
+    scraper.available["heaps"] = False
+    scraper._layout = dc_replace(scraper._layout, thread_usage=None)
+    _seed(
+        scraper,
+        [ThreadInfo(address=0x1000, stack_start=0x0, stack_size=1000, name="t1", runtime=None)],
+        idle=(0x9999,),
+    )
     return scraper, mock
 
 
@@ -328,13 +365,13 @@ def test_reset_runtime_state_clears_caches_and_invalidates_baseline(elf_path):
     mock = MagicMock()
     mock.watermark_cache = {0x1000: 100, 0x2000: 200}
     scraper._m_scraper = mock
-    scraper.has_usage = True
-    scraper.last_thread_cycles = {0x1000: 50, 0x2000: 75}
+    scraper.groups = {"threads": Threads()}
+    scraper.groups["threads"].last_cycles = {0x1000: 50, 0x2000: 75}
 
     scraper.reset_runtime_state()
 
     assert mock.watermark_cache == {}
-    assert scraper.last_thread_cycles == {}
+    assert scraper.groups["threads"].last_cycles == {}
     mock.read64.assert_not_called()
 
 
@@ -361,7 +398,7 @@ def test_broken_frame_resyncs_and_skips_emission(elf_path):
     # Nothing was emitted (no frame, no error, no fatal_error).
     assert q.empty()
     # State was wiped: next poll will re-baseline cleanly.
-    assert scraper.last_thread_cycles == {}
+    assert scraper.groups["threads"].last_cycles == {}
     assert mock_meta_scraper.watermark_cache == {}
 
 
@@ -428,15 +465,15 @@ def test_reload_elf_rebuilds_features_and_keeps_tui_settings(elf_path):
     meta = MagicMock()
     meta.is_live = True
     scraper = ZScraper(meta, elf_path=elf_path)
-    has_heaps = scraper.has_heaps
-    scraper.has_heaps = not has_heaps
-    scraper.poll_kernel_objects = False
+    has_heaps = scraper.available["heaps"]
+    scraper.available["heaps"] = not has_heaps
+    scraper.view = Selection(groups=frozenset({"threads"}))
     scraper.inspection_period = 1.5
 
     scraper.reload_elf()
 
-    assert scraper.has_heaps is has_heaps
-    assert scraper.poll_kernel_objects is False
+    assert scraper.available["heaps"] is has_heaps
+    assert scraper.view == Selection(groups=frozenset({"threads"}))
     assert scraper.inspection_period == 1.5
 
 
@@ -524,21 +561,24 @@ def test_bursts_read_after_the_frame_began_still_share_out_to_100(elf_path):
 
 def _one_thread(scraper: ZScraper, stack_start=0x1000, stack_size=512) -> ThreadInfo:
     """Poll and finalize one frame of a single thread."""
-    scraper.thread_pool = [
-        ThreadInfo(
-            address=0x2000, stack_start=stack_start, stack_size=stack_size, name="t", runtime=None
-        )
-    ]
-    deltas = scraper._read_usage_deltas()
-    polled = scraper._poll_threads(deltas)
-    return scraper._finalize_threads(polled, deltas)[0]
+    thread = ThreadInfo(
+        address=0x2000, stack_start=stack_start, stack_size=stack_size, name="t", runtime=None
+    )
+    return _seed(scraper, [thread]).walk(scraper._session(), {"t": [0x2000]})["t"]
+
+
+def _without_usage(scraper: ZScraper) -> None:
+    """The layout of a build that counts no usage."""
+    from dataclasses import replace as dc_replace
+
+    scraper._layout = dc_replace(scraper._layout, thread_usage=None)
 
 
 def test_an_unfilled_build_skips_the_scan_and_reports_no_stack_usage(elf_path):
     """Without the fill pattern the scan would find every stack full."""
     scraper, _ = _meta_scraper(elf_path)
-    scraper.has_usage = False
-    scraper.has_stack_fill = False
+    _without_usage(scraper)
+    scraper.parts.add("unfilled_stacks")
 
     runtime = _one_thread(scraper).runtime
 
@@ -549,7 +589,7 @@ def test_an_unfilled_build_skips_the_scan_and_reports_no_stack_usage(elf_path):
 def test_a_build_without_runtime_stats_reports_no_cpu_share(elf_path):
     """A 0% share would claim the thread idle, not unmeasured."""
     scraper, _ = _meta_scraper(elf_path)
-    scraper.has_usage = False
+    _without_usage(scraper)
     scraper._m_scraper.calculate_dynamic_watermark.return_value = 128
 
     runtime = _one_thread(scraper).runtime
@@ -561,7 +601,7 @@ def test_a_build_without_runtime_stats_reports_no_cpu_share(elf_path):
 def test_a_thread_with_no_stack_geometry_is_not_scanned(elf_path):
     """A filled stack still needs a start and a size to be read."""
     scraper, _ = _meta_scraper(elf_path)
-    scraper.has_usage = False
+    _without_usage(scraper)
 
     runtime = _one_thread(scraper, stack_start=None, stack_size=None).runtime
 
@@ -584,7 +624,7 @@ def _meta_scraper(elf_path) -> tuple[ZScraper, list[tuple[str, int, int]]]:
             reads.append(("read32", at, amount))
             return [0xDEAD] * amount
 
-    scraper = ZScraper(_Logging(is_connected=True), elf_path=elf_path, max_threads=2)
+    scraper = ZScraper(_Logging(is_connected=True), elf_path=elf_path)
     scraper._layout = dc_replace(
         scraper._layout,
         thread_priority=14,
@@ -600,7 +640,7 @@ def test_thread_metadata_bytes_come_in_one_read(elf_path):
     scraper, reads = _meta_scraper(elf_path)
     thread = ThreadInfo(address=0x2000, stack_start=0, stack_size=0, name="t", runtime=None)
 
-    meta = scraper._read_thread_meta(thread)
+    meta = scraper.groups["threads"]._read_meta(scraper._session(), thread)
 
     assert [r for r in reads if r[0] == "read8"] == [("read8", 0x2000 + 12, 5)]
     assert (meta["user_options"], meta["priority"], meta["state"]) == (0x7F, 0x7F, 0x7F)
@@ -611,30 +651,32 @@ def test_the_entry_pointer_is_read_once_per_thread(elf_path):
     thread = ThreadInfo(address=0x2000, stack_start=0, stack_size=0, name="t", runtime=None)
 
     for _ in range(4):
-        scraper._read_thread_meta(thread)
+        scraper.groups["threads"]._read_meta(scraper._session(), thread)
 
     assert [r for r in reads if r[0] == "read32"] == [("read32", 0x2000 + 112, 1)]
 
 
-def test_a_rebuilt_thread_pool_reads_the_entry_again(elf_path):
+def test_a_rediscovered_thread_list_reads_the_entry_again(elf_path):
     """The address can belong to another thread after the list is walked again."""
     scraper, reads = _meta_scraper(elf_path)
     thread = ThreadInfo(address=0x2000, stack_start=0, stack_size=0, name="t", runtime=None)
+    group = scraper.groups["threads"]
 
-    scraper._read_thread_meta(thread)
-    scraper.reset_thread_pool()
-    scraper._read_thread_meta(thread)
+    group._read_meta(scraper._session(), thread)
+    with patch("zview.kernel.threads.walk_thread_list", return_value={"t": thread}):
+        scraper.discover()
+    group._read_meta(scraper._session(), thread)
 
     assert len([r for r in reads if r[0] == "read32"]) == 2
 
 
 def test_a_legacy_recording_reads_each_metadata_field_apiece(elf_path):
     scraper, reads = _meta_scraper(elf_path)
-    scraper.merged_thread_meta = False
+    scraper.parts.discard("merged_thread_meta")
     thread = ThreadInfo(address=0x2000, stack_start=0, stack_size=0, name="t", runtime=None)
 
     for _ in range(2):
-        scraper._read_thread_meta(thread)
+        scraper.groups["threads"]._read_meta(scraper._session(), thread)
 
     assert [r for r in reads if r[0] == "read8"] == [
         ("read8", 0x2000 + 14, 1),

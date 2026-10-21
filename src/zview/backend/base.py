@@ -43,6 +43,10 @@ class ProbeReadMalformed(ProbeReadFailure):
     """Probe returned an undecodable response to a memory read."""
 
 
+class ReplayError(Exception):
+    """Base for replay errors."""
+
+
 @dataclass(frozen=True)
 class ThreadRuntime:
     """Per-frame runtime state for a Zephyr thread."""

@@ -5,6 +5,19 @@
 from pathlib import Path
 
 from zview.kernel import compat
+from zview.kernel.groups import GROUPS
+from zview.kernel.heaps import HEAP_FIELDS
+from zview.kernel.mem_slabs import MEM_SLAB_FIELDS
+from zview.kernel.semaphores import SEMAPHORE_FIELDS
+from zview.kernel.threads import (
+    THREAD_ENTRY_FIELDS,
+    THREAD_FIELDS,
+    THREAD_PRIORITY_FIELDS,
+    THREAD_STACK_FIELDS,
+    THREAD_STATE_FIELDS,
+    USAGE_FIELDS,
+    USAGE_STAMP_FIELDS,
+)
 
 
 class FakeElf:
@@ -73,13 +86,13 @@ def test_resolve_fields_is_all_or_nothing():
     """A group with a missing member resolves to None."""
     elf = FakeElf({("k_sem", "wait_q"): 0, ("k_sem", "count"): 8})
 
-    assert compat.resolve_fields(elf, compat.SEMAPHORE_FIELDS) is None
+    assert compat.resolve_fields(elf, SEMAPHORE_FIELDS) is None
 
 
 def test_resolve_fields_returns_the_whole_group():
     elf = FakeElf({("k_sem", "wait_q"): 0, ("k_sem", "count"): 8, ("k_sem", "limit"): 12})
 
-    assert compat.resolve_fields(elf, compat.SEMAPHORE_FIELDS) == {
+    assert compat.resolve_fields(elf, SEMAPHORE_FIELDS) == {
         "sem_wait_q": 0,
         "sem_count": 8,
         "sem_limit": 12,
@@ -164,7 +177,7 @@ def test_mem_slab_resolves_the_sub_struct_layout():
         }
     )
 
-    assert compat.resolve_fields(elf, compat.MEM_SLAB_FIELDS) == {
+    assert compat.resolve_fields(elf, MEM_SLAB_FIELDS) == {
         "mem_slab_wait_q": 0,
         "mem_slab_num_blocks": 16,
         "mem_slab_block_size": 20,
@@ -183,7 +196,7 @@ def test_mem_slab_falls_back_to_the_flat_layout():
         }
     )
 
-    assert compat.resolve_fields(elf, compat.MEM_SLAB_FIELDS) == {
+    assert compat.resolve_fields(elf, MEM_SLAB_FIELDS) == {
         "mem_slab_wait_q": 0,
         "mem_slab_num_blocks": 16,
         "mem_slab_block_size": 20,
@@ -201,13 +214,13 @@ def test_usage_group_needs_the_kernel_wide_counter():
         }
     )
 
-    assert compat.resolve_fields(elf, compat.USAGE_FIELDS) is None
+    assert compat.resolve_fields(elf, USAGE_FIELDS) is None
 
 
 def test_the_switch_stamp_is_found_inside_each_cpu():
     elf = FakeElf({("z_kernel", "cpus"): 0, ("_cpu", "usage0"): 20})
 
-    assert compat.resolve_fields(elf, compat.USAGE_STAMP_FIELDS) == {
+    assert compat.resolve_fields(elf, USAGE_STAMP_FIELDS) == {
         "kernel_cpus": 0,
         "cpu_usage0": 20,
     }
@@ -217,11 +230,11 @@ def test_the_thread_list_resolves_without_the_stack_geometry():
     """CONFIG_THREAD_STACK_INFO adds k_thread.stack_info, the monitor adds the list."""
     elf = FakeElf({("z_kernel", "threads"): 8, ("k_thread", "next_thread"): 96})
 
-    assert compat.resolve_fields(elf, compat.THREAD_FIELDS) == {
+    assert compat.resolve_fields(elf, THREAD_FIELDS) == {
         "threads_head": 8,
         "thread_next": 96,
     }
-    assert compat.resolve_fields(elf, compat.THREAD_STACK_FIELDS) is None
+    assert compat.resolve_fields(elf, THREAD_STACK_FIELDS) is None
 
 
 def test_heap_group_needs_max_allocated_bytes():
@@ -234,7 +247,7 @@ def test_heap_group_needs_max_allocated_bytes():
         }
     )
 
-    assert compat.resolve_fields(elf, compat.HEAP_FIELDS) is None
+    assert compat.resolve_fields(elf, HEAP_FIELDS) is None
 
 
 def test_thread_entry_accepts_either_struct_spelling():
@@ -243,41 +256,25 @@ def test_thread_entry_accepts_either_struct_spelling():
     single = FakeElf({("k_thread", "entry"): 112, ("_thread_entry", "pEntry"): 0})
 
     for elf in (double, single):
-        assert compat.resolve_optional_fields(elf, compat.THREAD_META_FIELDS) == {
-            "thread_entry": 112
-        }
+        assert compat.resolve_fields(elf, THREAD_ENTRY_FIELDS) == {"thread_entry": 112}
 
 
-def test_resolve_optional_fields_keeps_what_it_finds():
+def test_each_metadata_member_resolves_on_its_own():
     """Metadata members resolve independently of each other."""
     elf = FakeElf({("k_thread", "base"): 0, ("_thread_base", "prio"): 14})
 
-    assert compat.resolve_optional_fields(elf, compat.THREAD_META_FIELDS) == {"thread_priority": 14}
+    assert compat.resolve_fields(elf, THREAD_PRIORITY_FIELDS) == {"thread_priority": 14}
+    assert compat.resolve_fields(elf, THREAD_STATE_FIELDS) is None
 
 
-def test_resolve_optional_fields_of_nothing():
-    assert compat.resolve_optional_fields(FakeElf({}), compat.THREAD_META_FIELDS) == {}
-
-
-def test_kernel_object_registry_is_coherent():
-    """Every registered object names a struct and the fields needed to read it."""
-    assert set(compat.KERNEL_OBJECTS) == {
-        "semaphores",
-        "mutexes",
-        "msgqs",
-        "events",
-        "mem_slabs",
-        "workqs",
-        "work",
-    }
-
-    labels = [spec.label for spec in compat.KERNEL_OBJECTS.values()]
-    structs = [spec.struct for spec in compat.KERNEL_OBJECTS.values()]
-    assert len(set(labels)) == len(labels)
+def test_the_group_registry_is_coherent():
+    """Every group names its own key and struct, and every field a candidate path."""
+    keys = [group.key for group in GROUPS]
+    structs = [group.struct for group in GROUPS]
+    assert len(set(keys)) == len(keys)
     assert len(set(structs)) == len(structs)
 
-    for name, spec in compat.KERNEL_OBJECTS.items():
-        assert spec.fields, name
-        # Every field must offer at least one candidate path to resolve.
-        for field, candidates in spec.fields.items():
-            assert candidates, f"{name}.{field}"
+    for group in GROUPS:
+        for table in (*group.required, *group.optional):
+            for field, candidates in table.items():
+                assert candidates, f"{group.key}.{field}"

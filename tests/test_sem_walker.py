@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from zview.kernel.layout import KernelLayout
-from zview.kernel.semaphores import walk_semaphores
+from zview.kernel.semaphores import Semaphores
+from zview.kernel.session import Session
 
 
 class FakeScraper:
@@ -54,11 +55,22 @@ def _sem_words(
     }
 
 
+def _session(scraper, elf, layout, thread_names=None, *, walk_waiters=True) -> Session:
+    """The session a walker reads with, from the arguments it used to take."""
+    return Session(
+        scraper,
+        elf,
+        layout,
+        waitq_flavor="simple" if walk_waiters else "scalable",
+        rows={"threads": {name: [address] for address, name in (thread_names or {}).items()}},
+    )
+
+
 def test_single_semaphore_without_waiters():
     sem = 0x2000
     scraper = FakeScraper(_sem_words(sem, count=0, limit=4))
 
-    semaphores = walk_semaphores(scraper, FakeElf(), {"data_ready": [sem]}, LAYOUT)
+    semaphores = Semaphores().walk(_session(scraper, FakeElf(), LAYOUT), {"data_ready": [sem]})
 
     assert list(semaphores) == ["data_ready"]
     info = semaphores["data_ready"]
@@ -71,7 +83,9 @@ def test_semaphore_at_limit():
     sem = 0x2000
     scraper = FakeScraper(_sem_words(sem, count=4, limit=4))
 
-    info = walk_semaphores(scraper, FakeElf(), {"conn_pool": [sem]}, LAYOUT)["conn_pool"]
+    info = Semaphores().walk(_session(scraper, FakeElf(), LAYOUT), {"conn_pool": [sem]})[
+        "conn_pool"
+    ]
 
     assert (info.count, info.limit) == (4, 4)
 
@@ -81,12 +95,14 @@ def test_semaphore_with_waiters_resolves_thread_names():
     words = _sem_words(sem, count=0, limit=1, wait_head=first)
     words |= {first: second, second: sem}
 
-    info = walk_semaphores(
-        FakeScraper(words),
-        FakeElf(),
+    info = Semaphores().walk(
+        _session(
+            FakeScraper(words),
+            FakeElf(),
+            LAYOUT,
+            {first: "sensor_task", second: "logger_task"},
+        ),
         {"data_ready": [sem]},
-        LAYOUT,
-        {first: "sensor_task", second: "logger_task"},
     )["data_ready"]
 
     assert info.waiters == ("sensor_task", "logger_task")
@@ -97,7 +113,7 @@ def test_unknown_waiter_is_labelled_by_address():
     words = _sem_words(sem, count=0, limit=1, wait_head=waiter)
     words |= {waiter: sem}
 
-    info = walk_semaphores(FakeScraper(words), FakeElf(), {"s": [sem]}, LAYOUT, {})["s"]
+    info = Semaphores().walk(_session(FakeScraper(words), FakeElf(), LAYOUT, {}), {"s": [sem]})["s"]
 
     assert info.waiters == ("thread @ 0x3000",)
 
@@ -107,7 +123,9 @@ def test_walk_waiters_disabled_reports_unknown():
     sem = 0x2000
     scraper = FakeScraper(_sem_words(sem, count=1, limit=1))
 
-    info = walk_semaphores(scraper, FakeElf(), {"s": [sem]}, LAYOUT, {}, walk_waiters=False)["s"]
+    info = Semaphores().walk(
+        _session(scraper, FakeElf(), LAYOUT, {}, walk_waiters=False), {"s": [sem]}
+    )["s"]
 
     assert info.waiters is None
     assert info.count == 1
@@ -126,7 +144,9 @@ def test_missing_qnode_offset_reports_unknown():
         sem_limit=12,
     )
 
-    info = walk_semaphores(FakeScraper(_sem_words(sem, 1, 1)), FakeElf(), {"s": [sem]}, layout)["s"]
+    info = Semaphores().walk(
+        _session(FakeScraper(_sem_words(sem, 1, 1)), FakeElf(), layout), {"s": [sem]}
+    )["s"]
 
     assert info.waiters is None
 
@@ -135,8 +155,8 @@ def test_multiple_semaphores():
     first, second = 0x2000, 0x2100
     words = _sem_words(first, count=1, limit=2) | _sem_words(second, count=0, limit=8)
 
-    semaphores = walk_semaphores(
-        FakeScraper(words), FakeElf(), {"a": [first], "b": [second]}, LAYOUT
+    semaphores = Semaphores().walk(
+        _session(FakeScraper(words), FakeElf(), LAYOUT), {"a": [first], "b": [second]}
     )
 
     assert [(s.name, s.count, s.limit) for s in semaphores.values()] == [("a", 1, 2), ("b", 0, 8)]
@@ -147,10 +167,12 @@ def test_same_symbol_at_several_addresses_gets_unique_labels():
     first, second = 0x2000, 0x2100
     words = _sem_words(first, count=1, limit=1) | _sem_words(second, count=0, limit=1)
 
-    semaphores = walk_semaphores(FakeScraper(words), FakeElf(), {"pool": [first, second]}, LAYOUT)
+    semaphores = Semaphores().walk(
+        _session(FakeScraper(words), FakeElf(), LAYOUT), {"pool": [first, second]}
+    )
 
     assert list(semaphores) == ["pool@0x2000", "pool@0x2100"]
 
 
 def test_no_instances_returns_empty():
-    assert walk_semaphores(FakeScraper({}), FakeElf(), {}, LAYOUT) == {}
+    assert Semaphores().walk(_session(FakeScraper({}), FakeElf(), LAYOUT), {}) == {}

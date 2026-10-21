@@ -2,14 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import queue
 import struct
 
 import pytest
 
 from zview.backend.base import ProbeReadError
-from zview.kernel.heaps import walk_heap_waiters
-from zview.orchestrator import ZScraper
+from zview.kernel.heaps import Heaps, walk_heap_fragmentation, walk_heap_waiters
+from zview.kernel.session import Session
 
 
 class FakeScraper:
@@ -25,22 +24,6 @@ class FakeScraper:
 
     def read_bytes(self, at: int, amount: int) -> bytes:
         return self.heap_bytes[:amount]
-
-
-def _make_walker(scraper: FakeScraper) -> ZScraper:
-    """Bypass ``ZScraper.__init__`` and seed only what the walker reads."""
-    from zview.kernel.layout import KernelLayout
-
-    walker = object.__new__(ZScraper)
-    walker._m_scraper = scraper
-    walker._layout = KernelLayout(
-        threads_head=0,
-        thread_next=0,
-        stack_start=0,
-        stack_size=0,
-        heap_end_chunk=0,
-    )
-    return walker
 
 
 def _chunk0_header_16(first_chunk_id: int, endian: str = "<") -> bytes:
@@ -68,13 +51,13 @@ def _chunk_body_32(size_units: int, used: bool, endian: str = "<") -> bytes:
 
 
 def test_null_address_returns_empty():
-    walker = _make_walker(FakeScraper(end_chunk=0, heap_bytes=b""))
-    assert walker.get_heap_fragmentation(0) == []
+    scraper = FakeScraper(end_chunk=0, heap_bytes=b"")
+    assert walk_heap_fragmentation(scraper, 0, 0) == []
 
 
 def test_end_chunk_zero_returns_empty():
-    walker = _make_walker(FakeScraper(end_chunk=0, heap_bytes=b""))
-    assert walker.get_heap_fragmentation(0x1000) == []
+    scraper = FakeScraper(end_chunk=0, heap_bytes=b"")
+    assert walk_heap_fragmentation(scraper, 0x1000, 0) == []
 
 
 def test_16bit_walk():
@@ -85,9 +68,9 @@ def test_16bit_walk():
         + _chunk_body_16(size_units=2, used=False)  # c=3
         + b"\x00" * 8  # c=4 (inside chunk 3)
     )
-    walker = _make_walker(FakeScraper(end_chunk=5, heap_bytes=image))
+    scraper = FakeScraper(end_chunk=5, heap_bytes=image)
 
-    assert walker.get_heap_fragmentation(0x1000) == [
+    assert walk_heap_fragmentation(scraper, 0x1000, 0) == [
         {"used": True, "size": 16},
         {"used": False, "size": 16},
     ]
@@ -101,9 +84,9 @@ def test_32bit_walk():
         + _chunk_body_32(size_units=2, used=False)
         + b"\x00" * 8
     )
-    walker = _make_walker(FakeScraper(end_chunk=5, heap_bytes=image))
+    scraper = FakeScraper(end_chunk=5, heap_bytes=image)
 
-    assert walker.get_heap_fragmentation(0x1000) == [
+    assert walk_heap_fragmentation(scraper, 0x1000, 0) == [
         {"used": True, "size": 16},
         {"used": False, "size": 16},
     ]
@@ -111,16 +94,16 @@ def test_32bit_walk():
 
 def test_oversize_heap_raises():
     # end_chunk * 8 = 40 MB, over the 32 MB sanity ceiling.
-    walker = _make_walker(FakeScraper(end_chunk=5_000_000, heap_bytes=b""))
+    scraper = FakeScraper(end_chunk=5_000_000, heap_bytes=b"")
     with pytest.raises(ValueError, match="sanity"):
-        walker.get_heap_fragmentation(0x1000)
+        walk_heap_fragmentation(scraper, 0x1000, 0)
 
 
 def test_corrupted_chunk0_raises():
     # All zeros: both 16-bit and 32-bit interpretations fail bounds+used check.
-    walker = _make_walker(FakeScraper(end_chunk=3, heap_bytes=bytes(24)))
+    scraper = FakeScraper(end_chunk=3, heap_bytes=bytes(24))
     with pytest.raises(ValueError, match="Corrupted chunk0"):
-        walker.get_heap_fragmentation(0x1000)
+        walk_heap_fragmentation(scraper, 0x1000, 0)
 
 
 def test_zero_size_mid_walk_raises():
@@ -129,9 +112,9 @@ def test_zero_size_mid_walk_raises():
         + _chunk_body_16(size_units=0, used=True)  # triggers infinite-loop guard
         + b"\x00" * 8
     )
-    walker = _make_walker(FakeScraper(end_chunk=3, heap_bytes=image))
+    scraper = FakeScraper(end_chunk=3, heap_bytes=image)
     with pytest.raises(RuntimeError, match="Infinite loop"):
-        walker.get_heap_fragmentation(0x1000)
+        walk_heap_fragmentation(scraper, 0x1000, 0)
 
 
 def test_big_endian_16bit_walk():
@@ -140,9 +123,9 @@ def test_big_endian_16bit_walk():
         + _chunk_body_16(size_units=2, used=True, endian=">")
         + b"\x00" * 8
     )
-    walker = _make_walker(FakeScraper(end_chunk=3, heap_bytes=image, endianess=">"))
+    scraper = FakeScraper(end_chunk=3, heap_bytes=image, endianess=">")
 
-    assert walker.get_heap_fragmentation(0x1000) == [
+    assert walk_heap_fragmentation(scraper, 0x1000, 0) == [
         {"used": True, "size": 16},
     ]
 
@@ -212,17 +195,11 @@ class FakeHeapMemory:
             raise AssertionError(f"unexpected read32 @ 0x{at:X}") from e
 
 
-def _heap_poller(words: dict[int, int], *, wait_q: int | None, flavor: str = "simple") -> ZScraper:
-    """``ZScraper`` seeded with one heap and nothing else."""
+def _heap_session(words: dict[int, int], *, wait_q: int | None, flavor: str = "simple") -> Session:
+    """A session over one heap and nothing else."""
     from zview.kernel.layout import KernelLayout
 
-    poller = object.__new__(ZScraper)
-    poller._m_scraper = FakeHeapMemory(words)
-    poller._layout = KernelLayout(
-        threads_head=0,
-        thread_next=0,
-        stack_start=0,
-        stack_size=0,
+    layout = KernelLayout(
         heap_free_bytes=4,
         heap_allocated_bytes=8,
         heap_max_allocated_bytes=12,
@@ -230,13 +207,14 @@ def _heap_poller(words: dict[int, int], *, wait_q: int | None, flavor: str = "si
         heap_wait_q=wait_q,
         thread_qnode=0,
     )
-    poller._k_heap_addresses = {"bench_heap": [_HEAP]}
-    poller.capture_all_heap_chunks = False
-    poller.extra_info_heap_address = None
-    poller.waitq_flavor = flavor
-    poller.has_heap_waiters = True
-    poller._all_threads_info = {}
-    return poller
+    return Session(
+        FakeHeapMemory(words), None, layout, waitq_flavor=flavor, parts=frozenset({"heap_waiters"})
+    )
+
+
+def _poll(session: Session, heaps: Heaps | None = None) -> list:
+    """One frame of the single ``bench_heap``."""
+    return list((heaps or Heaps()).walk(session, {"bench_heap": [_HEAP]}).values())
 
 
 _SYS_HEAP = 0x9000
@@ -246,13 +224,13 @@ _STATS = {_HEAP: _SYS_HEAP, _SYS_HEAP + 4: 1536, _SYS_HEAP + 8: 2560, _SYS_HEAP 
 
 def test_a_polled_heap_reports_the_threads_waiting_for_memory():
     thread = 0x3000
-    poller = _heap_poller(
+    session = _heap_session(
         {**_STATS, _HEAP + _WAIT_Q: thread, thread: _HEAP + _WAIT_Q},
         wait_q=_WAIT_Q,
     )
-    poller._all_threads_info = {1: type("T", (), {"address": thread, "name": "worker"})()}
+    session.rows = {"threads": {"worker": [thread]}}
 
-    heaps = poller._poll_heaps(queue.Queue())
+    heaps = _poll(session)
 
     assert heaps[0].waiters == ("worker",)
     assert heaps[0].free_bytes == 1536
@@ -260,30 +238,29 @@ def test_a_polled_heap_reports_the_threads_waiting_for_memory():
 
 def test_a_heap_without_a_resolved_queue_reports_no_waiter_list():
     """``waiters`` is None, not empty: nothing was walked."""
-    poller = _heap_poller(_STATS, wait_q=None)
+    session = _heap_session(_STATS, wait_q=None)
 
-    assert poller._poll_heaps(queue.Queue())[0].waiters is None
+    assert _poll(session)[0].waiters is None
 
 
-def test_a_recording_without_a_chunk_map_stops_asking_for_one():
+def test_a_recording_without_a_chunk_map_stops_asking_for_one(monkeypatch):
     """A drift leaves the replay cursor untouched, so the heap is still reported."""
     from zview.backend.replay import ReplayMismatch
 
-    def drift(_address):
+    def drift(*_args):
         raise ReplayMismatch("Replay drift at index 19: expected end_batch, got read_bytes.")
 
     quiet_queue = {_HEAP + _WAIT_Q: _HEAP + _WAIT_Q}
-    poller = _heap_poller({**_STATS, **quiet_queue}, wait_q=_WAIT_Q)
-    poller.capture_all_heap_chunks = True
-    poller.get_heap_fragmentation = drift
-    reported: queue.Queue = queue.Queue()
+    session = _heap_session({**_STATS, **quiet_queue}, wait_q=_WAIT_Q)
+    heaps = Heaps()
+    heaps.all_chunks = True
+    monkeypatch.setattr("zview.kernel.heaps.walk_heap_fragmentation", drift)
 
-    heap = poller._poll_heaps(reported)[0]
+    heap = _poll(session, heaps)[0]
 
     assert heap.chunks is None
     assert heap.free_bytes == 1536
-    assert not poller.capture_all_heap_chunks
-    assert reported.empty()
+    assert not heaps.all_chunks
 
 
 class LiveHeapRefusingChunkMap(FakeHeapMemory):
@@ -315,40 +292,38 @@ def test_a_chunk_map_the_live_stub_refused_replays_frame_after_frame(tmp_path):
     # 264 chunks of 8 bytes: the 2112 byte read of the talk's recording.
     words = {**_STATS, _HEAP + _WAIT_Q: _HEAP + _WAIT_Q, _SYS_HEAP: 264}
     path = tmp_path / "refused.ndjson.gz"
+    refused = "Error reading sparsity for bench_heap: GDB error at 0x9000: E22"
 
-    live = _heap_poller(words, wait_q=_WAIT_Q)
-    live.capture_all_heap_chunks = True
+    live, live_heaps = _heap_session(words, wait_q=_WAIT_Q), Heaps()
+    live_heaps.all_chunks = True
     with RecordingScraper(LiveHeapRefusingChunkMap(words), path) as recorder:
-        live._m_scraper = recorder
+        live.scraper = recorder
         for _ in range(3):
             recorder.begin_batch()
-            live._poll_heaps(queue.Queue())
+            with pytest.raises(RuntimeError, match=refused):
+                _poll(live, live_heaps)
             recorder.end_batch()
 
-    replayed = _heap_poller(words, wait_q=_WAIT_Q)
-    replayed.capture_all_heap_chunks = True
-    reported: queue.Queue = queue.Queue()
+    replayed, replayed_heaps = _heap_session(words, wait_q=_WAIT_Q), Heaps()
+    replayed_heaps.all_chunks = True
     with ReplayScraper(path, honor_timing=False) as replay:
-        replayed._m_scraper = replay
+        replayed.scraper = replay
         for _ in range(3):
             replay.begin_batch()
-            assert replayed._poll_heaps(reported)[0].free_bytes == 1536
+            with pytest.raises(RuntimeError, match=refused):
+                _poll(replayed, replayed_heaps)
             replay.end_batch()
-
-    assert [reported.get()["error"] for _ in range(reported.qsize())] == [
-        "Error reading sparsity for bench_heap: GDB error at 0x9000: E22"
-    ] * 3
 
 
 def test_a_recording_that_never_walked_the_queue_reports_no_waiter_list():
     """Replay matches a read sequence, so a feature the recording lacks must not be read."""
-    poller = _heap_poller(_STATS, wait_q=_WAIT_Q)
-    poller.has_heap_waiters = False
+    session = _heap_session(_STATS, wait_q=_WAIT_Q)
+    session.parts = frozenset()
 
-    assert poller._poll_heaps(queue.Queue())[0].waiters is None
+    assert _poll(session)[0].waiters is None
 
 
 def test_a_scalable_wait_queue_is_left_unwalked():
-    poller = _heap_poller(_STATS, wait_q=_WAIT_Q, flavor="scalable")
+    session = _heap_session(_STATS, wait_q=_WAIT_Q, flavor="scalable")
 
-    assert poller._poll_heaps(queue.Queue())[0].waiters is None
+    assert _poll(session)[0].waiters is None

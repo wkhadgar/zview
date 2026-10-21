@@ -38,8 +38,7 @@ def _drive_replay(recording: Path) -> list[dict]:
     replay = ReplayScraper(recording, honor_timing=False)
     with replay:
         scraper = ZScraper(replay, str(_ELF_PATH))
-        scraper.update_available_threads()
-        scraper.reset_thread_pool()
+        scraper.discover()
 
         data_queue: queue.Queue = queue.Queue()
         stop_event = threading.Event()

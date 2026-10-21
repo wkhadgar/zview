@@ -16,6 +16,7 @@ from zview.backend.base import (
     ProbeReadFailure,
     ProbeReadMalformed,
     ProbeReadTimeout,
+    ReplayError,
 )
 from zview.backend.recording import SCHEMA_VERSION
 
@@ -30,10 +31,6 @@ _READ_FAILURES = {
     cls.__name__: cls
     for cls in (ProbeReadFailure, ProbeReadTimeout, ProbeReadError, ProbeReadMalformed)
 }
-
-
-class ReplayError(Exception):
-    """Base for replay errors."""
 
 
 class ReplayMismatch(ReplayError):

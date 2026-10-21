@@ -12,16 +12,14 @@ import time
 from zview.backend.base import AbstractScraper
 from zview.backend.image import verify_target_image
 from zview.backend.recording import RecordingScraper
+from zview.kernel.groups import GROUPS
 from zview.orchestrator import ZScraper
-
-# Every group a polling frame can carry, in the order they are emitted.
-_FRAME_GROUPS = ("threads", "heaps", "semaphores", "mutexes", "msgqs", "mem_slabs", "workqs")
 
 
 def serialize_frame(frame: dict) -> dict:
     """Convert a polling frame's dataclasses into a JSON-serializable dict."""
     out: dict = {}
-    for key in _FRAME_GROUPS:
+    for key in (group.key for group in GROUPS):
         if key in frame:
             out[key] = [dataclasses.asdict(entry) for entry in frame[key]]
     return out
@@ -49,8 +47,7 @@ def dump_single_frame(
         if backend.is_live:
             verify_target_image(backend, elf_path)
         scraper = ZScraper(backend, elf_path)
-        scraper.update_available_threads()
-        scraper.reset_thread_pool()
+        scraper.discover()
         data_queue: queue.Queue = queue.Queue()
         stop = threading.Event()
         scraper.start_polling_thread(data_queue, stop, period)
@@ -107,9 +104,8 @@ def record_session(
     recorder.declare_features(scraper.active_features())
 
     with recorder:
-        scraper.update_available_threads()
-        scraper.reset_thread_pool()
-        scraper.capture_all_heap_chunks = scraper.has_heaps
+        scraper.discover()
+        scraper.capture_all()
 
         data_queue: queue.Queue = queue.Queue()
         stop = threading.Event()
