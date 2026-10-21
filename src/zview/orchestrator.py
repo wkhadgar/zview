@@ -161,6 +161,12 @@ class ZScraper:
         """``(path, line)`` where the function at ``address`` is defined, if known."""
         return self._elf_inspector.function_site(address)
 
+    def check_selection(self, selection: Selection) -> None:
+        """Raises ``ValueError`` when ``selection`` names a group no frame holds."""
+        if unknown := set(selection.groups or ()) - set(self.groups):
+            named, known = ", ".join(sorted(unknown)), ", ".join(self.groups)
+            raise ValueError(f"Unknown group {named}; choose from {known}.")
+
     def _reads_group(self, group: str) -> bool:
         """Both the session's selection and the view's read ``group``."""
         return self.selection.reads_group(group) and self.view.reads_group(group)

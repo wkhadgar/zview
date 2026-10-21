@@ -173,6 +173,15 @@ def test_threads_alone_leave_the_objects_view_empty():
     assert not _objects_shown(_scraper())
 
 
+def test_a_selection_of_threads_only_leaves_the_objects_view_empty():
+    from zview.selection import Selection
+
+    s = _scraper(heaps=True, mutexes=True)
+    s.selection = Selection(groups=frozenset({"threads"}))
+
+    assert not _objects_shown(s)
+
+
 def test_a_build_with_only_heaps_still_has_objects_to_show():
     """The objects view lists heaps, so the gate cannot rest on the other groups."""
     assert _objects_shown(_scraper(heaps=True))
