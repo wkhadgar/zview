@@ -14,6 +14,7 @@ import pytest
 
 from zview.backend.base import HeapInfo, ThreadInfo
 from zview.backend.replay import ReplayScraper
+from zview.frames import Frame, Notice
 from zview.orchestrator import ZScraper
 
 _FIXTURES_DIR = Path(__file__).parent / "fixtures" / "recordings"
@@ -33,7 +34,7 @@ def _discover_fixtures() -> list[tuple[Path, Path]]:
     return pairs
 
 
-def _drive_replay(recording: Path) -> list[dict]:
+def _drive_replay(recording: Path) -> list:
     """Replay a fixture through a full ZScraper polling loop; return captured frames."""
     replay = ReplayScraper(recording, honor_timing=False)
     with replay:
@@ -55,15 +56,15 @@ def _drive_replay(recording: Path) -> list[dict]:
 
 
 @pytest.fixture(scope="module", params=_discover_fixtures(), ids=lambda p: p[0].name)
-def replay_run(request) -> tuple[list[dict], dict]:
+def replay_run(request) -> tuple[list, dict]:
     recording, golden_path = request.param
     frames = _drive_replay(recording)
     golden = json.loads(golden_path.read_text())
     return frames, golden
 
 
-def _last_valid_frame(frames: list[dict]) -> dict:
-    valid = [f for f in frames if "threads" in f]
+def _last_valid_frame(frames: list) -> dict:
+    valid = [f.groups for f in frames if isinstance(f, Frame)]
     assert valid, "Replay produced no valid frames"
     return valid[-1]
 
@@ -71,7 +72,7 @@ def _last_valid_frame(frames: list[dict]) -> dict:
 def test_replay_produces_frames(replay_run):
     """Replay drains the recording into one or more valid data frames."""
     frames, _ = replay_run
-    valid = [f for f in frames if "threads" in f]
+    valid = [f for f in frames if isinstance(f, Frame)]
     assert valid, "Replay produced no valid frames"
 
 
@@ -82,7 +83,7 @@ def test_replay_reads_only_what_the_recording_holds(replay_run):
     """
     frames, _ = replay_run
 
-    assert [f["error"] for f in frames if "error" in f] == []
+    assert [f.text for f in frames if isinstance(f, Notice)] == []
 
 
 def test_thread_shape(replay_run):

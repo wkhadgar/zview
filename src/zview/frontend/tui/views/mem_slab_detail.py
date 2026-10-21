@@ -28,7 +28,9 @@ class MemSlabDetailView(KernelObjectDetailView):
         if address is None:
             return None
 
-        return next((s for s in self.controller.mem_slabs_data if s.address == address), None)
+        return next(
+            (s for s in self.controller.frames.latest("mem_slabs") if s.address == address), None
+        )
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()
@@ -84,6 +86,8 @@ class MemSlabDetailView(KernelObjectDetailView):
         graph = TUIGraph("Blocks in use", caption, (0, slab.num_blocks or 1), attr)
         # One column per sample: extra points are averaged into moving buckets.
         columns = max(1, width - 2)
-        history = list(self.controller.mem_slab_history.get(slab.address, ()))[-columns:]
+        history = [s.num_used for s in self.controller.frames.of("mem_slabs", slab.address)][
+            -columns:
+        ]
 
         graph.draw(stdscr, self._GRAPH_ROW, 0, graph_height, width, points=history)

@@ -58,7 +58,9 @@ class MutexDetailView(KernelObjectDetailView):
         if address is None:
             return None
 
-        return next((m for m in self.controller.mutexes_data if m.address == address), None)
+        return next(
+            (m for m in self.controller.frames.latest("mutexes") if m.address == address), None
+        )
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()
@@ -103,7 +105,7 @@ class MutexDetailView(KernelObjectDetailView):
             if width - 2 > mark_x:
                 stdscr.addstr(legend_row, mark_x, self.MARKS[state], self._mark_attrs[state])
 
-        history = self.controller.mutex_history.get(address, ())
+        history = [m.state for m in self.controller.frames.of("mutexes", address)]
         inner_w = width - 4
         if not history or inner_w <= 0:
             return

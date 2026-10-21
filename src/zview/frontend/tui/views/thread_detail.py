@@ -14,7 +14,7 @@ from zview.frontend.tui.views.base import (
     ZViewTUIAttributes,
     compute_flex_widths,
 )
-from zview.frontend.tui.views.thread_list import ThreadListView
+from zview.frontend.tui.views.thread_list import ThreadListView, listed_threads
 from zview.frontend.tui.widgets import SiteValue, TUIBox, TUIGraph, TUIThreadInfo
 
 
@@ -98,9 +98,8 @@ class ThreadDetailView(BaseStateView):
 
         self._render_frame(stdscr, self._footer_hint(), height, width)
 
-        widths = compute_flex_widths(
-            list(self._scheme.values()), width, self.controller.threads_data
-        )
+        threads = listed_threads(self.controller)
+        widths = compute_flex_widths(list(self._scheme.values()), width, threads)
         self._tui_thread_info.set_field_widths(*widths)
 
         curr_x = 0
@@ -113,7 +112,7 @@ class ThreadDetailView(BaseStateView):
             curr_x += h_width + 1
 
         thread = next(
-            (t for t in self.controller.threads_data if t.name == self.controller.detailing_thread),
+            (t for t in threads if t.name == self.controller.detailing_thread),
             None,
         )
         if not thread or thread.runtime is None:

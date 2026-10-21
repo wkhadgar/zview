@@ -12,6 +12,7 @@ import time
 from zview.backend.base import AbstractScraper
 from zview.backend.image import verify_target_image
 from zview.backend.recording import RecordingScraper
+from zview.frames import Fatal, Frame, ReplayEnd
 from zview.kernel.groups import GROUPS
 from zview.orchestrator import ZScraper
 
@@ -59,16 +60,17 @@ def dump_single_frame(
                     frame_data = data_queue.get(timeout=0.1)
                 except queue.Empty:
                     continue
-                if "fatal_error" in frame_data:
-                    raise RuntimeError(frame_data["fatal_error"])
-                if "replay_complete" in frame_data:
-                    raise RuntimeError(
-                        f"Recording has only {seen} frames; --frame {frame} out of range."
-                    )
-                if "threads" in frame_data:
-                    seen += 1
-                    if seen >= frame:
-                        return frame_data
+                match frame_data:
+                    case Fatal(text):
+                        raise RuntimeError(text)
+                    case ReplayEnd():
+                        raise RuntimeError(
+                            f"Recording has only {seen} frames; --frame {frame} out of range."
+                        )
+                    case Frame(groups):
+                        seen += 1
+                        if seen >= frame:
+                            return groups
             raise TimeoutError(f"No frame {frame} within {timeout} seconds")
         finally:
             stop.set()
@@ -120,7 +122,7 @@ def record_session(
                 except queue.Empty:
                     pass
                 else:
-                    if "threads" in frame:
+                    if isinstance(frame, Frame):
                         captured += 1
                         if frames is not None and captured >= frames:
                             break

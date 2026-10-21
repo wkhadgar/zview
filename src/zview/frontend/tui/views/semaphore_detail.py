@@ -27,7 +27,9 @@ class SemaphoreDetailView(KernelObjectDetailView):
         if address is None:
             return None
 
-        return next((s for s in self.controller.semaphores_data if s.address == address), None)
+        return next(
+            (s for s in self.controller.frames.latest("semaphores") if s.address == address), None
+        )
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()
@@ -76,7 +78,7 @@ class SemaphoreDetailView(KernelObjectDetailView):
 
         # One column per sample: extra points are averaged into moving buckets.
         columns = max(1, width - 2)
-        history = list(self.controller.sem_history.get(sem.address, ()))[-columns:]
+        history = [s.count for s in self.controller.frames.of("semaphores", sem.address)][-columns:]
 
         # Built per frame: the y scale is the semaphore's own limit, or the
         # highest count drawn when it has none.

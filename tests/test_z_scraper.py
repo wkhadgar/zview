@@ -18,6 +18,7 @@ from zview.backend.base import (
 )
 from zview.backend.gdb import GDBScraper
 from zview.backend.pyocd import PyOCDScraper
+from zview.frames import Fatal, Frame, Notice
 from zview.kernel.threads import Threads
 from zview.orchestrator import ZScraper
 from zview.selection import Selection
@@ -124,7 +125,7 @@ def _one_frame(scraper: ZScraper) -> dict:
     stop_event = threading.Event()
     with patch("time.sleep", side_effect=lambda _: stop_event.set()):
         scraper._poll_thread_worker(data_queue, stop_event, 0)
-    return data_queue.get(timeout=1.0)
+    return data_queue.get(timeout=1.0).groups
 
 
 def test_shares_are_of_the_threads_own_cycles(elf_path):
@@ -267,9 +268,9 @@ def test_single_strike_emits_transient_error(elf_path):
         scraper._poll_thread_worker(q, stop_event, 0)
 
     msg = q.get(timeout=1)
-    assert "error" in msg
-    assert "Transient" in msg["error"]
-    assert "read fail" in msg["error"]
+    assert isinstance(msg, Notice)
+    assert "Transient" in msg.text
+    assert "read fail" in msg.text
 
 
 def test_three_strikes_emit_fatal_and_break(elf_path):
@@ -290,10 +291,10 @@ def test_three_strikes_emit_fatal_and_break(elf_path):
 
     assert len(messages) == 3
     # The same fault worded the same way twice, so the message log collapses it.
-    assert messages[0]["error"] == messages[1]["error"]
-    assert "persistent fail" in messages[0]["error"]
-    assert "fatal_error" in messages[2]
-    assert "Target lost" in messages[2]["fatal_error"]
+    assert messages[0].text == messages[1].text
+    assert "persistent fail" in messages[0].text
+    assert isinstance(messages[2], Fatal)
+    assert "Target lost" in messages[2].text
 
 
 def test_strike_counter_resets_on_success(elf_path):
@@ -323,10 +324,10 @@ def test_strike_counter_resets_on_success(elf_path):
         messages.append(q.get_nowait())
 
     assert len(messages) == 3
-    assert "fail-1" in messages[0]["error"]
-    assert "fail-2" in messages[1]["error"]
-    assert "threads" in messages[2]
-    assert "fatal_error" not in messages[2]
+    assert "fail-1" in messages[0].text
+    assert "fail-2" in messages[1].text
+    assert isinstance(messages[2], Frame)
+    assert "threads" in messages[2].groups
 
 
 def test_queue_full_is_not_counted_as_strike(elf_path):

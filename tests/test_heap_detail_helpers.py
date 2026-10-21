@@ -4,6 +4,7 @@
 
 """Coverage for ``HeapDetailView`` pure-function helpers (no curses)."""
 
+from zview.frames import Frame, FrameHistory
 from zview.frontend.tui.views.heap_detail import HeapDetailView
 
 
@@ -176,7 +177,8 @@ def _heap_controller(waiters=("worker",), used_chunks=8, free=256):
     )
     controller = MagicMock()
     controller.scraper.decl_site.return_value = None
-    controller.heaps_data = [heap]
+    controller.frames = FrameHistory()
+    controller.frames.add(Frame({"heaps": [heap]}))
     controller.detailing_heap_address = 0x5000
     controller.status_message = "Running"
     return controller

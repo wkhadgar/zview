@@ -27,6 +27,12 @@ def _total(values: list) -> float | None:
     return None if None in values else sum(values)
 
 
+def listed_threads(controller: Any) -> list[ThreadInfo]:
+    """The threads read, but for the idle thread of each CPU."""
+    idle = controller.scraper.groups["threads"].idle_addresses
+    return [t for t in controller.frames.latest("threads") if t.address not in idle]
+
+
 class ThreadListView(BaseStateView):
     SCHEMA: dict[str, int] = {
         "Thread": 25,
@@ -65,10 +71,8 @@ class ThreadListView(BaseStateView):
             self.COLLUM_WIDTHS[4],
         )
 
-    def _compute_widths(self, terminal_width: int) -> list[int]:
-        return compute_flex_widths(
-            list(self.SCHEMA.values()), terminal_width, self.controller.threads_data
-        )
+    def _compute_widths(self, terminal_width: int, threads: list[ThreadInfo]) -> list[int]:
+        return compute_flex_widths(list(self.SCHEMA.values()), terminal_width, threads)
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         """
@@ -79,11 +83,12 @@ class ThreadListView(BaseStateView):
 
         self._render_frame(stdscr, self._footer_hint(), height, width)
 
-        widths = self._compute_widths(width)
+        threads = listed_threads(self.controller)
+        widths = self._compute_widths(width, threads)
         self._tui_thread_info.set_field_widths(*widths)
 
         max_table_rows = height - 6
-        total_threads = len(self.controller.threads_data)
+        total_threads = len(threads)
         start_num = self.top_line + 1 if total_threads > 0 else 0
         end_num = min(self.top_line + max_table_rows, total_threads)
         thread_column_width = widths[0]
@@ -114,8 +119,8 @@ class ThreadListView(BaseStateView):
 
         table_start = 4
 
-        runtimes = [t.runtime for t in self.controller.threads_data if t.runtime]
-        stack_size_sum = _total([t.stack_size for t in self.controller.threads_data])
+        runtimes = [t.runtime for t in threads if t.runtime]
+        stack_size_sum = _total([t.stack_size for t in threads])
         stack_watermark_sum = _total([r.stack_watermark for r in runtimes])
         is_any_thread_active = any(r.active for r in runtimes)
         aggregate_stack_usage_pct = None
@@ -145,9 +150,7 @@ class ThreadListView(BaseStateView):
 
         key_func = self._sort_keys[self._current_sort_idx]
 
-        sorted_threads = sorted(
-            self.controller.threads_data, key=key_func, reverse=self._invert_sorting
-        )
+        sorted_threads = sorted(threads, key=key_func, reverse=self._invert_sorting)
 
         for idx, thread in enumerate(
             sorted_threads[self.top_line : self.top_line + max_table_rows]
@@ -199,13 +202,12 @@ class ThreadListView(BaseStateView):
             case curses.KEY_UP:
                 self.cursor -= 1
             case curses.KEY_ENTER | SpecialCode.NEWLINE | SpecialCode.RETURN:
-                if not self.controller.threads_data:
+                threads = listed_threads(self.controller)
+                if not threads:
                     return None
 
                 key_func = self._sort_keys[self._current_sort_idx]
-                sorted_threads = sorted(
-                    self.controller.threads_data, key=key_func, reverse=self._invert_sorting
-                )
+                sorted_threads = sorted(threads, key=key_func, reverse=self._invert_sorting)
 
                 self.controller.detailing_thread = sorted_threads[self.cursor].name
 

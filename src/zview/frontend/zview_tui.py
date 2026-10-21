@@ -13,17 +13,8 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 
-from zview.backend.base import (
-    HeapInfo,
-    MemSlabInfo,
-    MsgqInfo,
-    MutexInfo,
-    MutexState,
-    SemaphoreInfo,
-    ThreadInfo,
-    WorkqInfo,
-)
 from zview.backend.image import verify_target_image
+from zview.frames import Fatal, Frame, FrameHistory, Notice, ReplayEnd
 from zview.frontend.tui.views.base import (
     Any,
     BaseStateView,
@@ -118,19 +109,7 @@ class ZView:
         self.stdscr: curses.window = stdscr
         self.scraper: ZScraper = scraper
         self.running = True
-        self.threads_data: list[ThreadInfo] = []
-        self.heaps_data: list[HeapInfo] = []
-        self.semaphores_data: list[SemaphoreInfo] = []
-        self.msgqs_data: list[MsgqInfo] = []
-        self.mem_slabs_data: list[MemSlabInfo] = []
-        self.mutexes_data: list[MutexInfo] = []
-        self.workqs_data: list[WorkqInfo] = []
-        # One sample per frame per object, for the detail views.
-        self.mutex_history: dict[int, deque[MutexState]] = {}
-        self.sem_history: dict[int, deque[int]] = {}
-        self.msgq_history: dict[int, deque[int]] = {}
-        self.mem_slab_history: dict[int, deque[int]] = {}
-        self.workq_history: dict[int, deque[int]] = {}
+        self.frames = FrameHistory()
         self.status_message: str = ""
         # One entry per reported message, newest last.
         self.messages: deque[LogEntry] = deque(maxlen=_MESSAGE_LOG_SIZE)
@@ -283,7 +262,8 @@ class ZView:
         self.scraper.finish_polling_thread()
         self.scraper._m_scraper.disconnect()
         self.purge_queue()
-        self._clear_histories()
+        # A rebuilt ELF can reassign the addresses the rows are kept by.
+        self.frames = FrameHistory()
 
         self.stop_event.clear()
 
@@ -297,7 +277,7 @@ class ZView:
             self.transition_to(ZViewState.THREAD_LIST_VIEW)
             self.stdscr.clear()
         except Exception as e:
-            self.process_data({"fatal_error": f"Reconnection failed: {e}"})
+            self.process_data(Fatal(f"Reconnection failed: {e}"))
 
     def _reload_and_verify(self) -> None:
         """Re-parse the ELF, reconnect, and check the target runs it; its stderr goes to the log."""
@@ -318,14 +298,6 @@ class ZView:
 
         for notice in self.scraper.absent_features():
             self.report(notice)
-
-    def _clear_histories(self) -> None:
-        """Drop the per-object samples, whose addresses a rebuilt ELF can reassign."""
-        self.mutex_history.clear()
-        self.sem_history.clear()
-        self.msgq_history.clear()
-        self.mem_slab_history.clear()
-        self.workq_history.clear()
 
     def draw_frame(self) -> None:
         """Draw one frame, dropping it if the screen shrank under its writes."""
@@ -479,80 +451,19 @@ class ZView:
         if new_state and new_state != self.state:
             self.transition_to(new_state)
 
-    def process_data(self, data):
-        if data.get("fatal_error"):
-            self.state = ZViewState.FATAL_ERROR
-            self.report(f"TARGET LOST\n\n{data['fatal_error']}")
-            return
-
-        if data.get("replay_complete"):
-            self.report("Recording ended; replay complete.")
-            return
-
-        if data.get("error"):
-            self.report(f"Error: {data['error']}")
-        else:
-            self.status_message = f"Running{'.' * (self.update_count % 4)}"
-            self.update_count += 1
-            threads_data: list[ThreadInfo] = data.get("threads", [])
-            heaps_data: list[HeapInfo] = data.get("heaps", [])
-
-            if len(threads_data):
-                # One idle thread per CPU, none of them listed.
-                idle = self.scraper.groups["threads"].idle_addresses
-                self.threads_data = [t for t in threads_data if t.address not in idle]
-            if len(heaps_data):
-                self.heaps_data = heaps_data
-
-            if "semaphores" in data:
-                self.semaphores_data = data["semaphores"]
-                self._record_counts(self.semaphores_data)
-            if "mutexes" in data:
-                self.mutexes_data = data["mutexes"]
-                self._record_contention(self.mutexes_data)
-            if "msgqs" in data:
-                self.msgqs_data = data["msgqs"]
-                self._record_depths(self.msgqs_data)
-            if "mem_slabs" in data:
-                self.mem_slabs_data = data["mem_slabs"]
-                self._record_usage(self.mem_slabs_data)
-            if "workqs" in data:
-                self.workqs_data = data["workqs"]
-                self._record_backlog(self.workqs_data)
-
-    def _record_counts(self, semaphores: list[SemaphoreInfo]) -> None:
-        """Append one count sample per semaphore, per frame."""
-        for sem in semaphores:
-            history = self.sem_history.setdefault(sem.address, deque(maxlen=256))
-            history.append(sem.count)
-
-    def _record_depths(self, msgqs: list[MsgqInfo]) -> None:
-        """Append one depth sample per queue, per frame."""
-        for msgq in msgqs:
-            history = self.msgq_history.setdefault(msgq.address, deque(maxlen=256))
-            history.append(msgq.used_msgs)
-
-    def _record_usage(self, slabs: list[MemSlabInfo]) -> None:
-        """Append one blocks-in-use sample per slab, per frame."""
-        for slab in slabs:
-            history = self.mem_slab_history.setdefault(slab.address, deque(maxlen=256))
-            history.append(slab.num_used)
-
-    def _record_backlog(self, workqs: list[WorkqInfo]) -> None:
-        """Append one pending-depth sample per work queue, per frame."""
-        for workq in workqs:
-            history = self.workq_history.setdefault(workq.address, deque(maxlen=256))
-            history.append(workq.depth)
-
-    def _record_contention(self, mutexes: list[MutexInfo]) -> None:
-        """
-        Append one lock state sample per mutex, per frame.
-
-        Samples are per frame, not per lock operation.
-        """
-        for mutex in mutexes:
-            history = self.mutex_history.setdefault(mutex.address, deque(maxlen=256))
-            history.append(mutex.state)
+    def process_data(self, data: Frame | Notice | Fatal | ReplayEnd):
+        match data:
+            case Fatal(text):
+                self.state = ZViewState.FATAL_ERROR
+                self.report(f"TARGET LOST\n\n{text}")
+            case ReplayEnd():
+                self.report("Recording ended; replay complete.")
+            case Notice(text):
+                self.report(f"Error: {text}")
+            case Frame():
+                self.status_message = f"Running{'.' * (self.update_count % 4)}"
+                self.update_count += 1
+                self.frames.add(data)
 
     def run(self, inspection_period):
         """

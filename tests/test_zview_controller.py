@@ -12,10 +12,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from zview.backend.base import HeapInfo, ThreadInfo, WorkqInfo
+from zview.backend.base import HeapInfo, SemaphoreInfo, ThreadInfo, WorkqInfo
 from zview.backend.image import ImageMismatch
+from zview.frames import Fatal, Frame, FrameHistory, Notice, ReplayEnd
 from zview.frontend import zview_tui
 from zview.frontend.tui.views.base import ZViewState
+from zview.frontend.tui.views.thread_list import listed_threads
 from zview.frontend.zview_tui import ZView
 
 
@@ -23,14 +25,7 @@ from zview.frontend.zview_tui import ZView
 def app() -> ZView:
     """``ZView`` instance without going through curses init."""
     a = ZView.__new__(ZView)
-    a.threads_data = []
-    a.heaps_data = []
-    a.semaphores_data = []
-    a.mutexes_data = []
-    a.mutex_history = {}
-    a.sem_history = {}
-    a.workqs_data = []
-    a.workq_history = {}
+    a.frames = FrameHistory()
     a.status_message = ""
     a.messages = deque(maxlen=64)
     a.update_count = 0
@@ -52,21 +47,21 @@ def test_purge_queue_clears_pending_items(app):
 
 
 def test_process_data_fatal_transitions_to_error_state(app):
-    app.process_data({"fatal_error": "synthetic loss"})
+    app.process_data(Fatal("synthetic loss"))
     assert app.state is ZViewState.FATAL_ERROR
     assert "TARGET LOST" in app.status_message
     assert "synthetic loss" in app.status_message
 
 
 def test_process_data_replay_complete_sets_status_only(app):
-    app.process_data({"replay_complete": "drained"})
+    app.process_data(ReplayEnd("drained"))
     assert "Recording ended" in app.status_message
     # State is unchanged on a clean replay end.
     assert app.state is ZViewState.THREAD_LIST_VIEW
 
 
 def test_process_data_error_sets_error_status_without_state_change(app):
-    app.process_data({"error": "transient"})
+    app.process_data(Notice("transient"))
     assert app.status_message.startswith("Error")
     assert "transient" in app.status_message
     assert app.state is ZViewState.THREAD_LIST_VIEW
@@ -77,9 +72,9 @@ def test_process_data_running_status_increments_with_threads_payload(app):
     threads = [
         ThreadInfo(address=0x1000, stack_start=0, stack_size=512, name="main", runtime=None),
     ]
-    app.process_data({"threads": threads})
+    app.process_data(Frame({"threads": threads}))
     assert app.status_message.startswith("Running")
-    assert app.threads_data == threads
+    assert listed_threads(app) == threads
     assert app.update_count == 1
 
 
@@ -87,11 +82,11 @@ def test_a_frame_with_work_queues_records_their_backlog(app):
     """A frame without the group keeps the last list and adds no sample."""
     workq = WorkqInfo(name="bench_workq", address=0x6000, flags=0b11, pending=("trail_work",))
 
-    app.process_data({"threads": [], "workqs": [workq]})
-    app.process_data({"threads": []})
+    app.process_data(Frame({"threads": [], "workqs": [workq]}))
+    app.process_data(Frame({"threads": []}))
 
-    assert app.workqs_data == [workq]
-    assert list(app.workq_history[0x6000]) == [1]
+    assert app.frames.latest("workqs") == [workq]
+    assert [q.depth for q in app.frames.of("workqs", 0x6000)] == [1]
 
 
 def test_process_data_strips_every_idle_thread(app):
@@ -105,9 +100,9 @@ def test_process_data_strips_every_idle_thread(app):
         address=0xBEEF, stack_start=0, stack_size=128, name="idle 01", runtime=None
     )
 
-    app.process_data({"threads": [main, idle_00, idle_01]})
+    app.process_data(Frame({"threads": [main, idle_00, idle_01]}))
 
-    assert app.threads_data == [main]
+    assert listed_threads(app) == [main]
 
 
 def test_a_thread_detail_scans_only_the_detailed_threads_stack(app):
@@ -134,16 +129,16 @@ def test_process_data_heaps_payload_captured(app):
         usage_percent=33.0,
         chunks=None,
     )
-    app.process_data({"heaps": [heap]})
-    assert app.heaps_data == [heap]
+    app.process_data(Frame({"heaps": [heap]}))
+    assert app.frames.latest("heaps") == [heap]
 
 
 def test_process_data_empty_payload_does_not_clear_existing(app):
     """A no-op frame must not erase last-known data."""
     main = ThreadInfo(address=0x1000, stack_start=0, stack_size=512, name="main", runtime=None)
-    app.threads_data = [main]
-    app.process_data({})
-    assert app.threads_data == [main]
+    app.frames.add(Frame({"threads": [main]}))
+    app.process_data(Frame({}))
+    assert listed_threads(app) == [main]
 
 
 def test_a_resize_dismisses_nothing(app):
@@ -178,10 +173,10 @@ def test_process_data_stores_kernel_objects(app):
     sem = SemaphoreInfo(name="data_ready", address=0x2000, count=1, limit=4, waiters=())
     mutex = MutexInfo(name="spi_bus", address=0x3000, lock_count=0, owner_address=0)
 
-    app.process_data({"threads": [], "semaphores": [sem], "mutexes": [mutex]})
+    app.process_data(Frame({"threads": [], "semaphores": [sem], "mutexes": [mutex]}))
 
-    assert app.semaphores_data == [sem]
-    assert app.mutexes_data == [mutex]
+    assert app.frames.latest("semaphores") == [sem]
+    assert app.frames.latest("mutexes") == [mutex]
 
 
 def test_process_data_without_kernel_objects_keeps_the_last_frame(app):
@@ -189,11 +184,11 @@ def test_process_data_without_kernel_objects_keeps_the_last_frame(app):
     from zview.backend.base import SemaphoreInfo
 
     sem = SemaphoreInfo(name="s", address=0x2000, count=1, limit=1, waiters=())
-    app.process_data({"threads": [], "semaphores": [sem]})
+    app.process_data(Frame({"threads": [], "semaphores": [sem]}))
 
-    app.process_data({"threads": []})
+    app.process_data(Frame({"threads": []}))
 
-    assert app.semaphores_data == [sem]
+    assert app.frames.latest("semaphores") == [sem]
 
 
 def test_contention_history_samples_once_per_frame(app):
@@ -214,9 +209,9 @@ def test_contention_history_samples_once_per_frame(app):
     )
 
     for frame_mutex in (free, contended, held_uncontended):
-        app.process_data({"threads": [], "mutexes": [frame_mutex]})
+        app.process_data(Frame({"threads": [], "mutexes": [frame_mutex]}))
 
-    assert list(app.mutex_history[0x3000]) == [
+    assert [m.state for m in app.frames.of("mutexes", 0x3000)] == [
         MutexState.FREE,
         MutexState.CONTENDED,
         MutexState.LOCKED,
@@ -229,18 +224,16 @@ def test_contention_history_is_bounded(app):
 
     mutex = MutexInfo(name="m", address=0x3000, lock_count=0, owner_address=0, waiters=())
     for _ in range(600):
-        app.process_data({"threads": [], "mutexes": [mutex]})
+        app.process_data(Frame({"threads": [], "mutexes": [mutex]}))
 
-    assert len(app.mutex_history[0x3000]) == 256
+    assert len(app.frames.of("mutexes", 0x3000)) == 256
 
 
 @pytest.fixture
 def reloading_app(app):
     """``app`` ready for ``R``: a live scraper, no drawing, every history present."""
     app.stop_event = MagicMock()
-    app.msgq_history = {}
-    app.mem_slab_history = {}
-    app.sem_history = {0x10: deque([1, 2])}
+    app.frames.add(Frame({"semaphores": [SemaphoreInfo("s", 0x10, 1, 4, ())]}))
     app.scraper._m_scraper.is_live = True
     app.scraper.absent_features.return_value = ()
     app.draw_frame = MagicMock()
@@ -259,7 +252,8 @@ def test_reload_reports_its_stderr_and_restarts_polling(reloading_app, monkeypat
 
     assert any(entry.text == "Loaded cached ELF @ cache.bin" for entry in reloading_app.messages)
     reloading_app.scraper.start_polling_thread.assert_called_once()
-    assert reloading_app.sem_history == {}
+    assert reloading_app.frames.latest("semaphores") == []
+    assert reloading_app.frames.of("semaphores", 0x10) == []
     assert reloading_app._overlay is None
 
 

@@ -5,6 +5,7 @@
 """Logic coverage for the kernel-object views (no curses rendering)."""
 
 import curses
+from dataclasses import replace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,6 +19,7 @@ from zview.backend.base import (
     SemaphoreInfo,
     WorkqInfo,
 )
+from zview.frames import Frame, FrameHistory
 from zview.frontend.tui.views.base import SpecialCode, ZViewState, ZViewTUIAttributes
 from zview.frontend.tui.views.kernel_object_list import (
     HEAP,
@@ -58,47 +60,53 @@ def controller() -> MagicMock:
     c.scraper.has_mem_slabs = True
     c.waiters_unknown = False
     c.status_message = "Running"
-    c.semaphores_data = [
-        SemaphoreInfo(name="data_ready", address=0x2000, count=0, limit=4, waiters=("sensor",)),
-        SemaphoreInfo(name="conn_pool", address=0x2100, count=3, limit=4, waiters=()),
-    ]
-    c.mutexes_data = [
-        MutexInfo(name="uart_mutex", address=0x3000, lock_count=0, owner_address=0),
-        MutexInfo(
-            name="spi_bus",
-            address=0x3100,
-            lock_count=1,
-            owner_address=0x4000,
-            owner_name="spi_task",
-            waiters=("sensor_task", "logger_task"),
-        ),
-    ]
-    c.msgqs_data = [
-        MsgqInfo(
-            name="sensor_q",
-            address=0x4000,
-            used_msgs=2,
-            max_msgs=8,
-            msg_size=16,
-            waiters=(),
-        ),
-    ]
-    c.mem_slabs_data = [
-        MemSlabInfo(
-            name="frame_slab",
-            address=0x5000,
-            num_blocks=16,
-            block_size=256,
-            num_used=6,
-            max_used=11,
-            waiters=(),
-        ),
-    ]
-    c.workqs_data = []
-    c.mutex_history = {}
-    c.msgq_history = {}
-    c.mem_slab_history = {}
+    c.frames = FrameHistory()
+    _put(
+        c,
+        semaphores=[
+            SemaphoreInfo(name="data_ready", address=0x2000, count=0, limit=4, waiters=("sensor",)),
+            SemaphoreInfo(name="conn_pool", address=0x2100, count=3, limit=4, waiters=()),
+        ],
+        mutexes=[
+            MutexInfo(name="uart_mutex", address=0x3000, lock_count=0, owner_address=0),
+            MutexInfo(
+                name="spi_bus",
+                address=0x3100,
+                lock_count=1,
+                owner_address=0x4000,
+                owner_name="spi_task",
+                waiters=("sensor_task", "logger_task"),
+            ),
+        ],
+        msgqs=[
+            MsgqInfo(
+                name="sensor_q",
+                address=0x4000,
+                used_msgs=2,
+                max_msgs=8,
+                msg_size=16,
+                waiters=(),
+            ),
+        ],
+        mem_slabs=[
+            MemSlabInfo(
+                name="frame_slab",
+                address=0x5000,
+                num_blocks=16,
+                block_size=256,
+                num_used=6,
+                max_used=11,
+                waiters=(),
+            ),
+        ],
+        workqs=[],
+    )
     return c
+
+
+def _put(controller, **groups) -> None:
+    """Feed the controller's frame history one frame; a group left out keeps its infos."""
+    controller.frames.add(Frame(groups))
 
 
 def _filter_to(view: KernelObjectListView, step: str) -> None:
@@ -112,7 +120,7 @@ def _filter_to(view: KernelObjectListView, step: str) -> None:
 
 
 def test_rows_include_every_type(controller, theme):
-    controller.heaps_data = [_heap()]
+    _put(controller, heaps=[_heap()])
     view = KernelObjectListView(controller, theme)
 
     kinds = {kind for kind, _ in view._rows()}
@@ -166,7 +174,7 @@ def test_filter_change_resets_the_cursor(controller, theme):
 
 def test_semaphore_row_renders_count_and_waiters(controller, theme):
     view = KernelObjectListView(controller, theme)
-    sem = controller.semaphores_data[0]
+    sem = controller.frames.latest("semaphores")[0]
 
     fill, label, waiters, _ = view._info.row_values(SEMAPHORE, sem)
 
@@ -215,7 +223,9 @@ def test_unknown_waiters_render_as_a_question_mark(controller, theme):
 def test_free_mutex_row(controller, theme):
     view = KernelObjectListView(controller, theme)
 
-    fill, label, waiters, attr = view._info.row_values(MUTEX, controller.mutexes_data[0])
+    fill, label, waiters, attr = view._info.row_values(
+        MUTEX, controller.frames.latest("mutexes")[0]
+    )
 
     assert fill == 0.0
     assert label == "FREE"
@@ -234,7 +244,7 @@ def test_free_mutex_with_an_empty_queue(controller, theme):
 def test_contended_mutex_row_names_the_owner(controller, theme):
     view = KernelObjectListView(controller, theme)
 
-    fill, label, waiters, _ = view._info.row_values(MUTEX, controller.mutexes_data[1])
+    fill, label, waiters, _ = view._info.row_values(MUTEX, controller.frames.latest("mutexes")[1])
 
     assert fill == 100.0
     assert label.startswith("LOCKED")
@@ -293,11 +303,14 @@ def test_a_draining_work_queue_is_red_too(controller, distinct_theme):
 
 
 def test_work_queues_turning_work_away_are_counted_as_refusing(controller, theme):
-    controller.workqs_data = [
-        WorkqInfo(name="plugged", address=0x7000, flags=0b1001, waiters=()),
-        WorkqInfo(name="draining", address=0x7100, flags=0b0101, waiters=("drainer",)),
-        WorkqInfo(name="idle", address=0x7200, flags=0b0001, waiters=()),
-    ]
+    _put(
+        controller,
+        workqs=[
+            WorkqInfo(name="plugged", address=0x7000, flags=0b1001, waiters=()),
+            WorkqInfo(name="draining", address=0x7100, flags=0b0101, waiters=("drainer",)),
+            WorkqInfo(name="idle", address=0x7200, flags=0b0001, waiters=()),
+        ],
+    )
     view = KernelObjectListView(controller, theme)
     _filter_to(view, WORKQ)
 
@@ -306,12 +319,15 @@ def test_work_queues_turning_work_away_are_counted_as_refusing(controller, theme
 
 def test_a_busy_or_backlogged_work_queue_counts_as_pressure(controller, theme):
     """Like a held mutex, a running queue is in use, and so is one with work waiting."""
-    controller.workqs_data = [
-        WorkqInfo(name="busy", address=0x7000, flags=0b0011, waiters=()),
-        WorkqInfo(name="backlog", address=0x7100, flags=0b0001, pending=("a",), waiters=()),
-        WorkqInfo(name="idle", address=0x7200, flags=0b0001, waiters=()),
-        WorkqInfo(name="also_idle", address=0x7300, flags=0b0001, waiters=()),
-    ]
+    _put(
+        controller,
+        workqs=[
+            WorkqInfo(name="busy", address=0x7000, flags=0b0011, waiters=()),
+            WorkqInfo(name="backlog", address=0x7100, flags=0b0001, pending=("a",), waiters=()),
+            WorkqInfo(name="idle", address=0x7200, flags=0b0001, waiters=()),
+            WorkqInfo(name="also_idle", address=0x7300, flags=0b0001, waiters=()),
+        ],
+    )
     view = KernelObjectListView(controller, theme)
     _filter_to(view, WORKQ)
 
@@ -321,17 +337,22 @@ def test_a_busy_or_backlogged_work_queue_counts_as_pressure(controller, theme):
 
 
 def test_work_queues_are_listed_with_the_other_objects(controller, theme):
-    controller.workqs_data = [WorkqInfo(name="bench_workq", address=0x7000, flags=0b01)]
+    _put(controller, workqs=[WorkqInfo(name="bench_workq", address=0x7000, flags=0b01)])
     view = KernelObjectListView(controller, theme)
 
-    assert (WORKQ, controller.workqs_data[0]) in view._rows()
+    assert (WORKQ, controller.frames.latest("workqs")[0]) in view._rows()
 
 
 def test_enter_on_a_work_queue_opens_its_detail_view(controller, theme):
     """Semaphores are Enter's fallthrough, so a work queue must not reach it."""
-    controller.semaphores_data = controller.mutexes_data = []
-    controller.msgqs_data = controller.mem_slabs_data = []
-    controller.workqs_data = [WorkqInfo(name="bench_workq", address=0x7000, flags=0b01)]
+    _put(
+        controller,
+        semaphores=[],
+        mutexes=[],
+        msgqs=[],
+        mem_slabs=[],
+        workqs=[WorkqInfo(name="bench_workq", address=0x7000, flags=0b01)],
+    )
     controller.detailing_semaphore_address = None
     view = KernelObjectListView(controller, theme)
 
@@ -352,26 +373,34 @@ def test_summary_counts_contention(controller, theme):
 
 
 def test_a_full_queue_counts_as_contended(controller, theme):
-    controller.msgqs_data = [
-        MsgqInfo(name="sensor_q", address=0x4000, used_msgs=8, max_msgs=8, msg_size=16, waiters=())
-    ]
+    _put(
+        controller,
+        msgqs=[
+            MsgqInfo(
+                name="sensor_q", address=0x4000, used_msgs=8, max_msgs=8, msg_size=16, waiters=()
+            )
+        ],
+    )
     view = KernelObjectListView(controller, theme)
 
     assert "2 contended" in view._summary(view._rows())
 
 
 def test_an_exhausted_slab_counts_as_contended(controller, theme):
-    controller.mem_slabs_data = [
-        MemSlabInfo(
-            name="frame_slab",
-            address=0x5000,
-            num_blocks=16,
-            block_size=256,
-            num_used=16,
-            max_used=16,
-            waiters=(),
-        )
-    ]
+    _put(
+        controller,
+        mem_slabs=[
+            MemSlabInfo(
+                name="frame_slab",
+                address=0x5000,
+                num_blocks=16,
+                block_size=256,
+                num_used=16,
+                max_used=16,
+                waiters=(),
+            )
+        ],
+    )
     view = KernelObjectListView(controller, theme)
 
     assert "2 contended" in view._summary(view._rows())
@@ -386,10 +415,7 @@ def test_summary_flags_unobservable_wait_queues(controller, theme):
 
 def test_empty_message_distinguishes_absent_from_filtered(controller, theme):
     view = KernelObjectListView(controller, theme)
-    controller.semaphores_data = []
-    controller.mutexes_data = []
-    controller.msgqs_data = []
-    controller.mem_slabs_data = []
+    _put(controller, semaphores=[], mutexes=[], msgqs=[], mem_slabs=[])
 
     controller.has_kernel_objects.return_value = True
     assert "No ALL objects." in view._empty_message()
@@ -424,10 +450,7 @@ def test_enter_on_a_semaphore_opens_its_detail_view(controller, theme):
 
 
 def test_enter_on_an_empty_list_is_a_no_op(controller, theme):
-    controller.semaphores_data = []
-    controller.mutexes_data = []
-    controller.msgqs_data = []
-    controller.mem_slabs_data = []
+    _put(controller, semaphores=[], mutexes=[], msgqs=[], mem_slabs=[])
     view = KernelObjectListView(controller, theme)
 
     assert view.handle_input(SpecialCode.NEWLINE) is None
@@ -487,9 +510,10 @@ def test_mutex_detail_returns_to_the_list(controller, theme, key):
 def test_columns_size_to_their_content(controller, theme):
     """Name and metric columns grow to fit the longest value they hold."""
     long_name = "log_process_thread_semaphore_x"
-    controller.mutexes_data = [
-        MutexInfo(name=long_name, address=0x3000, lock_count=0, owner_address=0)
-    ]
+    _put(
+        controller,
+        mutexes=[MutexInfo(name=long_name, address=0x3000, lock_count=0, owner_address=0)],
+    )
     view = KernelObjectListView(controller, theme)
     schema = list(KernelObjectListView.SCHEMA.values())
 
@@ -511,9 +535,10 @@ def test_short_names_keep_the_schema_width(controller, theme):
 
 
 def test_name_column_is_capped(controller, theme):
-    controller.mutexes_data = [
-        MutexInfo(name="m" * 80, address=0x3000, lock_count=0, owner_address=0)
-    ]
+    _put(
+        controller,
+        mutexes=[MutexInfo(name="m" * 80, address=0x3000, lock_count=0, owner_address=0)],
+    )
     view = KernelObjectListView(controller, theme)
 
     widths = view.compute_widths(300, [obj.name for _, obj in view._rows()])
@@ -523,16 +548,19 @@ def test_name_column_is_capped(controller, theme):
 
 def test_columns_shrink_to_fit_the_minimum_terminal(controller, theme):
     """At the TUI's 85-column minimum the row fits, and no column goes below schema."""
-    controller.mutexes_data = [
-        MutexInfo(
-            name="a_long_mutex_name_here",
-            address=0x3000,
-            lock_count=4,
-            owner_address=0x4000,
-            owner_name="a_long_owner_thread_name",
-            waiters=("waiter_one", "waiter_two"),
-        )
-    ]
+    _put(
+        controller,
+        mutexes=[
+            MutexInfo(
+                name="a_long_mutex_name_here",
+                address=0x3000,
+                lock_count=4,
+                owner_address=0x4000,
+                owner_name="a_long_owner_thread_name",
+                waiters=("waiter_one", "waiter_two"),
+            )
+        ],
+    )
     view = KernelObjectListView(controller, theme)
     schema = list(KernelObjectListView.SCHEMA.values())
 
@@ -562,7 +590,7 @@ def test_sort_indicator_tracks_the_sorted_column(controller, theme, presses, exp
 
 def test_the_last_sort_key_orders_every_type_by_its_bar(controller, theme):
     """One key for how full a thing is, whatever the thing counts."""
-    controller.heaps_data = [_heap(free=0, used=4096)]
+    _put(controller, heaps=[_heap(free=0, used=4096)])
     view = KernelObjectListView(controller, theme)
     for _ in range(3):
         view.handle_input(SpecialCode.SORT)
@@ -655,13 +683,13 @@ def test_columns_hold_position_when_a_row_changes_state(controller, theme):
         curses.ACS_S3 = ord("-")
 
     view = KernelObjectListView(controller, theme)
-    controller.semaphores_data = []
+    _put(controller, semaphores=[])
 
-    controller.mutexes_data = [_free_lock()]
+    _put(controller, mutexes=[_free_lock()])
     free_win = _StubWin()
     view.render(free_win, 24, 209)
 
-    controller.mutexes_data = [_held_lock()]
+    _put(controller, mutexes=[_held_lock()])
     held_win = _StubWin()
     view.render(held_win, 24, 209)
 
@@ -695,10 +723,7 @@ def test_row_color_reaches_the_bar(controller, distinct_theme):
         curses.ACS_S3 = ord("-")
 
     view = KernelObjectListView(controller, distinct_theme)
-    controller.semaphores_data = []
-    controller.msgqs_data = []
-    controller.mem_slabs_data = []
-    controller.mutexes_data = [_held_lock()]
+    _put(controller, semaphores=[], msgqs=[], mem_slabs=[], mutexes=[_held_lock()])
 
     drawn: list[int | None] = []
     view._info.state_bar.draw = lambda stdscr, y, x, pct, label=None, attr=None, mark=None: (
@@ -717,10 +742,7 @@ def test_cursor_does_not_recolor_the_bar(controller, distinct_theme):
         curses.ACS_S3 = ord("-")
 
     view = KernelObjectListView(controller, distinct_theme)
-    controller.semaphores_data = []
-    controller.msgqs_data = []
-    controller.mem_slabs_data = []
-    controller.mutexes_data = [_held_lock()]
+    _put(controller, semaphores=[], msgqs=[], mem_slabs=[], mutexes=[_held_lock()])
     view.cursor = 0
 
     drawn: list[int | None] = []
@@ -759,18 +781,36 @@ def _lock_with(waiters: tuple[str, ...]) -> MutexInfo:
     )
 
 
+def _mutex_in(state: MutexState) -> MutexInfo:
+    """A mutex whose derived state is ``state``."""
+    rows = {
+        MutexState.FREE: _free_lock(),
+        MutexState.LOCKED: _lock_with(()),
+        MutexState.CONTENDED: _lock_with(("lock_waiter_id",)),
+    }
+    return rows[state]
+
+
+def _feed(controller, group: str, row, field: str, values) -> None:
+    """One frame per value, the row's ``field`` set to it, oldest first."""
+    for value in values:
+        _put(controller, **{group: [replace(row, **{field: value})]})
+
+
 def test_detail_layout_holds_as_the_wait_queue_grows(controller, theme):
     """The strip and the state lines stay put however many threads are queued."""
     if not hasattr(curses, "ACS_S3"):
         curses.ACS_S3 = ord("-")
 
     controller.detailing_mutex_address = 0x3000
-    controller.mutex_history = {0x3000: [MutexState.CONTENDED, MutexState.FREE, MutexState.LOCKED]}
     view = MutexDetailView(controller, theme)
 
     rows_by_size = []
     for size in (0, 1, 5):
-        controller.mutexes_data = [_lock_with(tuple(f"waiter_{i}" for i in range(size)))]
+        controller.frames = FrameHistory()
+        for state in (MutexState.CONTENDED, MutexState.FREE):
+            _put(controller, mutexes=[_mutex_in(state)])
+        _put(controller, mutexes=[_lock_with(tuple(f"waiter_{i}" for i in range(size)))])
         win = _StubWin()
         view.render(win, 24, 209)
         # Row of every line that is not part of the wait queue section.
@@ -785,17 +825,16 @@ def test_contention_strip_colors_contended_frames(controller, distinct_theme):
         curses.ACS_S3 = ord("-")
 
     controller.detailing_mutex_address = 0x3000
-    controller.mutexes_data = [_lock_with(("lock_waiter_id",))]
-    controller.mutex_history = {
-        0x3000: [
-            MutexState.FREE,
-            MutexState.FREE,
-            MutexState.CONTENDED,
-            MutexState.CONTENDED,
-            MutexState.LOCKED,
-            MutexState.LOCKED,
-        ]
-    }
+    controller.frames = FrameHistory()
+    for state in (
+        MutexState.FREE,
+        MutexState.FREE,
+        MutexState.CONTENDED,
+        MutexState.CONTENDED,
+        MutexState.LOCKED,
+        MutexState.LOCKED,
+    ):
+        _put(controller, mutexes=[_mutex_in(state)])
     view = MutexDetailView(controller, distinct_theme)
 
     win = _StubWin()
@@ -817,11 +856,11 @@ def test_count_graph_is_colored_while_threads_wait(controller, distinct_theme):
         curses.ACS_S3 = ord("-")
 
     controller.detailing_semaphore_address = 0x2000
-    controller.sem_history = {0x2000: [0, 1, 2]}
     view = SemaphoreDetailView(controller, distinct_theme)
 
     queued = SemaphoreInfo(name="s", address=0x2000, count=0, limit=4, waiters=("taker",))
     idle = SemaphoreInfo(name="s", address=0x2000, count=4, limit=4, waiters=())
+    _feed(controller, "semaphores", queued, "count", [0, 1, 2])
 
     drawn: list[int] = []
     view._draw_count_graph = lambda stdscr, width, sem, graph_height: drawn.append(
@@ -829,7 +868,7 @@ def test_count_graph_is_colored_while_threads_wait(controller, distinct_theme):
     )
 
     for sem in (queued, idle):
-        controller.semaphores_data = [sem]
+        _put(controller, semaphores=[sem])
         view.render(_StubWin(), 24, 209)
 
     assert drawn == [view._busy_attr, 0]
@@ -842,10 +881,8 @@ def test_count_graph_plots_one_column_per_sample(controller, theme):
 
     width = 60
     controller.detailing_semaphore_address = 0x2000
-    controller.semaphores_data = [
-        SemaphoreInfo(name="s", address=0x2000, count=2, limit=4, waiters=())
-    ]
-    controller.sem_history = {0x2000: list(range(500))}
+    sem = SemaphoreInfo(name="s", address=0x2000, count=2, limit=4, waiters=())
+    _feed(controller, "semaphores", sem, "count", range(500))
     view = SemaphoreDetailView(controller, theme)
 
     plotted: list[list[int]] = []
@@ -863,8 +900,7 @@ def test_count_graph_plots_one_column_per_sample(controller, theme):
 def _scaled_count_graph(controller, theme, sem: SemaphoreInfo, history: list[int]):
     """``(subtitle, y scale)`` of the count graph, and the info boxes drawn beside it."""
     controller.detailing_semaphore_address = sem.address
-    controller.semaphores_data = [sem]
-    controller.sem_history = {sem.address: history}
+    _feed(controller, "semaphores", sem, "count", history)
     view = SemaphoreDetailView(controller, theme)
 
     from zview.frontend.tui.widgets import TUIGraph
@@ -907,8 +943,7 @@ def test_history_legend_marks_match_the_strip_colors(controller, distinct_theme)
         curses.ACS_S3 = ord("-")
 
     controller.detailing_mutex_address = 0x3000
-    controller.mutexes_data = [_lock_with(("lock_waiter_id",))]
-    controller.mutex_history = {0x3000: [MutexState.CONTENDED]}
+    _put(controller, mutexes=[_mutex_in(MutexState.CONTENDED)])
     view = MutexDetailView(controller, distinct_theme)
 
     win = _StubWin()
@@ -929,12 +964,10 @@ def test_views_hold_a_waiter_burst_at_any_terminal_size(controller, theme, queue
     waiters = tuple(f"waiter_number_{i}" for i in range(queued))
     controller.detailing_mutex_address = 0x3000
     controller.detailing_semaphore_address = 0x2000
-    controller.mutexes_data = [_lock_with(waiters)]
-    controller.semaphores_data = [
-        SemaphoreInfo(name="bench_slots", address=0x2000, count=2, limit=4, waiters=waiters)
-    ]
-    controller.mutex_history = {0x3000: [MutexState.CONTENDED] * 500}
-    controller.sem_history = {0x2000: list(range(500))}
+    sem = SemaphoreInfo(name="bench_slots", address=0x2000, count=2, limit=4, waiters=waiters)
+    for _ in range(500):
+        _put(controller, mutexes=[_lock_with(waiters)])
+    _feed(controller, "semaphores", sem, "count", [*range(499), 2])
 
     for view_type in (MutexDetailView, SemaphoreDetailView, KernelObjectListView):
         win = _StubWin(height=height, width=width)
@@ -950,8 +983,7 @@ def test_wait_queue_truncation_covers_the_row_it_replaces(controller, theme):
         curses.ACS_S3 = ord("-")
 
     controller.detailing_mutex_address = 0x3000
-    controller.mutexes_data = [_lock_with(tuple(f"waiter_number_{i}" for i in range(40)))]
-    controller.mutex_history = {}
+    _put(controller, mutexes=[_lock_with(tuple(f"waiter_number_{i}" for i in range(40)))])
     view = MutexDetailView(controller, theme)
 
     win = _StubWin(height=20, width=85)
@@ -987,7 +1019,7 @@ def test_the_aggregate_row_is_labelled_by_the_filter(
 def test_msgq_row_shows_fill_and_message_size(controller, theme):
     view = KernelObjectListView(controller, theme)
 
-    fill, label, waiters, attr = view._info.row_values(MSGQ, controller.msgqs_data[0])
+    fill, label, waiters, attr = view._info.row_values(MSGQ, controller.frames.latest("msgqs")[0])
 
     assert fill == 25.0
     assert label == "2/8 × 16B"
@@ -1033,7 +1065,7 @@ def test_the_queue_detail_plots_its_depth_against_capacity(controller, distinct_
         curses.ACS_S3 = ord("-")
 
     controller.detailing_msgq_address = 0x4000
-    controller.msgq_history = {0x4000: [0, 1, 2, 3]}
+    _feed(controller, "msgqs", controller.frames.latest("msgqs")[0], "used_msgs", [0, 1, 2, 3])
     view = MsgqDetailView(controller, distinct_theme)
 
     win = _StubWin()
@@ -1069,8 +1101,8 @@ def _busy_workq(**fields) -> WorkqInfo:
 
 
 def test_the_work_queue_detail_shows_thread_flags_and_backlog(controller, theme):
-    controller.workqs_data = [_busy_workq()]
-    controller.workq_history = {0x7000: [0, 2, 1]}
+    busy = _busy_workq()
+    _feed(controller, "workqs", busy, "pending", [busy.pending[:n] for n in (0, 1, 2)])
     controller.detailing_workq_address = 0x7000
     view = WorkqDetailView(controller, theme)
 
@@ -1083,7 +1115,7 @@ def test_the_work_queue_detail_shows_thread_flags_and_backlog(controller, theme)
 
 def test_pending_items_sit_above_the_drain_waiters(controller, theme):
     """The drain waiters take a third of the 16 side rows, the items the rest."""
-    controller.workqs_data = [_busy_workq(waiters=("drainer",))]
+    _put(controller, workqs=[_busy_workq(waiters=("drainer",))])
     controller.detailing_workq_address = 0x7000
     view = WorkqDetailView(controller, theme)
 
@@ -1095,7 +1127,7 @@ def test_pending_items_sit_above_the_drain_waiters(controller, theme):
 
 
 def test_a_cut_walk_ends_the_pending_panel_in_an_ellipsis(controller, theme):
-    controller.workqs_data = [_busy_workq(pending_truncated=True)]
+    _put(controller, workqs=[_busy_workq(pending_truncated=True)])
     controller.detailing_workq_address = 0x7000
     view = WorkqDetailView(controller, theme)
 
@@ -1104,7 +1136,7 @@ def test_a_cut_walk_ends_the_pending_panel_in_an_ellipsis(controller, theme):
 
 def test_a_short_column_gives_the_pending_items_all_of_it(controller, theme):
     """Four side rows cannot hold two boxes, and the header row names the waiters."""
-    controller.workqs_data = [_busy_workq()]
+    _put(controller, workqs=[_busy_workq()])
     controller.detailing_workq_address = 0x7000
     view = WorkqDetailView(controller, theme)
 
@@ -1124,7 +1156,9 @@ def test_the_work_queue_detail_says_when_the_queue_is_gone(controller, theme):
 def test_mem_slab_row_shows_usage_block_size_and_peak(controller, theme):
     view = KernelObjectListView(controller, theme)
 
-    fill, label, waiters, attr = view._info.row_values(MEM_SLAB, controller.mem_slabs_data[0])
+    fill, label, waiters, attr = view._info.row_values(
+        MEM_SLAB, controller.frames.latest("mem_slabs")[0]
+    )
 
     assert fill == 37.5
     assert label == "6/16 × 256B"
@@ -1143,7 +1177,7 @@ def test_the_peak_is_marked_on_the_bar(controller, theme):
     )
 
     win = _StubWin()
-    view._info.draw(win, 4, 0, MEM_SLAB, controller.mem_slabs_data[0])
+    view._info.draw(win, 4, 0, MEM_SLAB, controller.frames.latest("mem_slabs")[0])
 
     # 11 of 16 blocks at its peak.
     assert marks == [pytest.approx(68.75)]
@@ -1214,7 +1248,7 @@ def test_the_slab_detail_plots_usage_and_names_the_peak(controller, distinct_the
         curses.ACS_S3 = ord("-")
 
     controller.detailing_mem_slab_address = 0x5000
-    controller.mem_slab_history = {0x5000: [1, 3, 6]}
+    _feed(controller, "mem_slabs", controller.frames.latest("mem_slabs")[0], "num_used", [1, 3, 6])
     view = MemSlabDetailView(controller, distinct_theme)
 
     win = _StubWin()
@@ -1231,10 +1265,14 @@ def test_the_slab_detail_says_when_the_peak_is_not_tracked(controller, distinct_
         curses.ACS_S3 = ord("-")
 
     controller.detailing_mem_slab_address = 0x5000
-    controller.mem_slabs_data = [
-        MemSlabInfo(name="frame_slab", address=0x5000, num_blocks=16, block_size=256, num_used=6)
-    ]
-    controller.mem_slab_history = {}
+    _put(
+        controller,
+        mem_slabs=[
+            MemSlabInfo(
+                name="frame_slab", address=0x5000, num_blocks=16, block_size=256, num_used=6
+            )
+        ],
+    )
     view = MemSlabDetailView(controller, distinct_theme)
 
     win = _StubWin()
@@ -1267,7 +1305,7 @@ def _heap(
 
 
 def test_an_allocator_filter_counts_exhaustion_not_contention(controller, theme):
-    controller.heaps_data = [_heap(free=0)]
+    _put(controller, heaps=[_heap(free=0)])
     view = KernelObjectListView(controller, theme)
     _filter_to(view, HEAP)
 
@@ -1321,7 +1359,7 @@ def test_a_heap_carries_no_peak_mark(controller, theme):
 
 
 def test_enter_on_a_heap_opens_its_own_view(controller, theme):
-    controller.heaps_data = [_heap()]
+    _put(controller, heaps=[_heap()])
     view = KernelObjectListView(controller, theme)
     _filter_to(view, HEAP)
 
@@ -1340,7 +1378,7 @@ def _render(view, height: int = 24, width: int = 209) -> _StubWin:
 
 def test_the_queue_is_drawn_in_its_own_column_beside_the_graph(controller, theme):
     controller.detailing_semaphore_address = 0x2000
-    controller.sem_history = {0x2000: [0, 1, 2]}
+    _feed(controller, "semaphores", controller.frames.latest("semaphores")[0], "count", [0, 1, 2])
     view = SemaphoreDetailView(controller, theme)
 
     win = _render(view)
@@ -1354,7 +1392,7 @@ def test_the_queue_is_drawn_in_its_own_column_beside_the_graph(controller, theme
 
 def test_a_narrow_terminal_draws_the_queue_under_the_graph(controller, theme):
     controller.detailing_semaphore_address = 0x2000
-    controller.sem_history = {0x2000: [0, 1, 2]}
+    _feed(controller, "semaphores", controller.frames.latest("semaphores")[0], "count", [0, 1, 2])
     view = SemaphoreDetailView(controller, theme)
 
     win = _render(view, height=24, width=70)

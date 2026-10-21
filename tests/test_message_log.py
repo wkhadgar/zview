@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from zview.frames import Frame, FrameHistory, Notice
 from zview.frontend.tui.views.base import Keybind, SpecialCode, ZViewState, ZViewTUIAttributes
 from zview.frontend.tui.widgets import PopupRow, TUIPopup
 from zview.frontend.zview_tui import _MESSAGE_LOG_SIZE, LogEntry, ZView
@@ -68,8 +69,7 @@ def app() -> ZView:
     """``ZView`` instance without going through curses init."""
     a = ZView.__new__(ZView)
     a.min_dimensions = (14, 85)
-    a.threads_data = []
-    a.heaps_data = []
+    a.frames = FrameHistory()
     a.status_message = ""
     a.messages = deque(maxlen=_MESSAGE_LOG_SIZE)
     a.update_count = 0
@@ -105,7 +105,7 @@ def test_heartbeat_does_not_reach_the_log(app):
     """``Running...`` is liveness, not a message, so it stays off the log."""
     app.report("Initializing...")
     for _ in range(5):
-        app.process_data({"threads": []})
+        app.process_data(Frame({"threads": []}))
 
     assert app.status_message.startswith("Running")
     assert [e.text for e in app.messages] == ["Initializing..."]
@@ -115,7 +115,7 @@ def test_repeats_collapse_into_a_count(app):
     """A per-poll error must not push everything else out of the log."""
     app.report("Refreshing thread list...")
     for _ in range(12):
-        app.process_data({"error": "read timeout"})
+        app.process_data(Notice("read timeout"))
 
     assert [e.text for e in app.messages] == [
         "Refreshing thread list...",

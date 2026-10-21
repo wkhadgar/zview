@@ -36,7 +36,9 @@ class WorkqDetailView(KernelObjectDetailView):
         if address is None:
             return None
 
-        return next((q for q in self.controller.workqs_data if q.address == address), None)
+        return next(
+            (q for q in self.controller.frames.latest("workqs") if q.address == address), None
+        )
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()
@@ -70,7 +72,7 @@ class WorkqDetailView(KernelObjectDetailView):
         self, stdscr: curses.window, width: int, workq: WorkqInfo, graph_height: int
     ) -> None:
         columns = max(1, width - 2)
-        history = list(self.controller.workq_history.get(workq.address, ()))[-columns:]
+        history = [q.depth for q in self.controller.frames.of("workqs", workq.address)][-columns:]
         # A work queue has no capacity, so the scale is the deepest backlog shown.
         deepest = max(history, default=0) or 1
 
