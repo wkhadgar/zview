@@ -108,6 +108,7 @@ def _usage_scraper(elf_path, threads, before: dict[int, int], now: dict[int, int
     scraper.last_thread_cycles = dict(before)
     mock.read64.side_effect = lambda address, amount=1: [now.get(address - _USAGE, 0)]
     mock.read_many.side_effect = lambda reads: AbstractScraper.read_many(mock, reads)
+    mock.read8.side_effect = lambda address, amount=1: [0] * amount
     mock.calculate_dynamic_watermark.return_value = 250
     return scraper, mock
 
@@ -214,12 +215,17 @@ def test_a_recording_from_before_the_snapshot_reads_counters_beside_the_stacks(e
     runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
 
     reads = [
-        c for c in mock.mock_calls if c[0] in ("read32", "read64", "calculate_dynamic_watermark")
+        c
+        for c in mock.mock_calls
+        if c[0] in ("read8", "read32", "read64", "calculate_dynamic_watermark")
     ]
-    assert [c[0] for c in reads[:4]] == [
+    # The metadata and entry reads sit between a stack and the next counter.
+    assert [c[0] for c in reads[:6]] == [
         "read32",
         "read64",
         "calculate_dynamic_watermark",
+        "read8",
+        "read32",
         "read64",
     ]
     assert reads[0].args == (0x9000,)
@@ -230,6 +236,7 @@ def _make_strike_scraper(elf_path):
     """``ZScraper`` shim with its usage counters and heaps left unread."""
     mock = MagicMock()
     mock.is_connected = True
+    mock.read8.side_effect = lambda address, amount=1: [0] * amount
     scraper = ZScraper(mock, elf_path=elf_path, max_threads=2)
     scraper.available["heaps"] = False
     scraper.has_usage = False

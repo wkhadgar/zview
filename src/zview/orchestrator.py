@@ -14,7 +14,7 @@ from typing import Literal
 
 from zview.backend.base import AbstractScraper, ThreadInfo, ThreadRuntime
 from zview.backend.elf_inspector import ElfInspector
-from zview.backend.replay import ReplayComplete
+from zview.backend.replay import ReplayComplete, ReplayMismatch
 from zview.kernel import compat
 from zview.kernel.groups import GROUPS
 from zview.kernel.heaps import walk_heap_fragmentation
@@ -289,10 +289,9 @@ class ZScraper:
         """Both the session's selection and the view's read the row ``name``."""
         return self.selection.reads(group, name) and self.view.reads(group, name)
 
-    def _poll_kernel_objects(self, data_queue: queue.Queue) -> dict:
+    def _poll_kernel_objects(self) -> dict:
         """
-        Read the kernel objects. A failing group is skipped, and the rows a
-        walk reports as failed are passed on as ``error`` frames.
+        Read the kernel objects. A failed read raises, and the frame is dropped.
 
         Wait queues are walked only on the ``simple`` layout; otherwise
         ``waiters`` is ``None``.
@@ -309,17 +308,7 @@ class ZScraper:
                 for label, address in label_instances(self.rows[group.key])
                 if self._reads(group.key, label)
             }
-            try:
-                objects = group.walk(session, selected)
-            except Exception as e:
-                data_queue.put({"error": f"Error reading {group.key}: {e}"}, block=False)
-                continue
-            finally:
-                for message in session.errors:
-                    data_queue.put({"error": message}, block=False)
-                session.errors.clear()
-
-            frame[group.key] = list(objects.values())
+            frame[group.key] = list(group.walk(session, selected).values())
 
         return frame
 
@@ -456,7 +445,7 @@ class ZScraper:
                 final_threads = self._finalize_threads(polled_raw, deltas)
 
                 frame: dict = {"threads": final_threads}
-                frame.update(self._poll_kernel_objects(data_queue))
+                frame.update(self._poll_kernel_objects())
                 data_queue.put(frame, block=False)
 
                 consecutive_errors = 0
@@ -600,12 +589,15 @@ class ZScraper:
                 else self._read_meta_fields(thread)
             )
             entry = self._read_thread_entry(thread)
-            if entry is not None:
-                meta["entry_point"] = entry
-                meta["entry_symbol"] = self._resolve_entry_symbol(entry)
-        except Exception:
-            # Per-frame read fault on metadata is non-fatal: leave fields ``None``.
-            pass
+        except ReplayMismatch:
+            # A recording taken before the metadata was read has no such reads.
+            # A drift leaves the cursor untouched, so the frame goes on.
+            return meta
+        except Exception as e:
+            raise RuntimeError(f"Error polling metadata for {thread.name}: {e}") from e
+        if entry is not None:
+            meta["entry_point"] = entry
+            meta["entry_symbol"] = self._resolve_entry_symbol(entry)
         return meta
 
     # The metadata bytes, by their offset in the layout.

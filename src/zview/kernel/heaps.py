@@ -106,8 +106,8 @@ def walk_heaps(session: Session, addresses: dict[str, list[int]]) -> dict[str, H
 
     Each heap costs four reads for its statistics, its wait queue with the
     ``heap_waiters`` part on, and its chunk map when ``state["all_chunks"]`` is
-    set or it is the ``state["detailed"]`` heap. A heap that fails to read is
-    reported in ``session.errors`` and left out.
+    set or it is the ``state["detailed"]`` heap. A failed read raises, naming
+    the heap.
     """
     scraper, layout = session.scraper, session.layout
     state = session.state.setdefault("heaps", {})
@@ -126,8 +126,7 @@ def walk_heaps(session: Session, addresses: dict[str, list[int]]) -> dict[str, H
             allocated = scraper.read32(heap_struct + layout.heap_allocated_bytes)[0]
             max_allocated = scraper.read32(heap_struct + layout.heap_max_allocated_bytes)[0]
         except Exception as e:
-            session.errors.append(f"Error reading heap info for {label}: {e}")
-            continue
+            raise RuntimeError(f"Error reading heap info for {label}: {e}") from e
 
         waiters = None
         if walk_waiters:
@@ -136,7 +135,7 @@ def walk_heaps(session: Session, addresses: dict[str, list[int]]) -> dict[str, H
                     scraper, address, layout.heap_wait_q, layout.thread_qnode, session.thread_names
                 )
             except Exception as e:
-                session.errors.append(f"Error reading waiters for {label}: {e}")
+                raise RuntimeError(f"Error reading waiters for {label}: {e}") from e
 
         chunks = None
         if state.get("all_chunks") or state.get("detailed") == heap_struct:
@@ -149,7 +148,7 @@ def walk_heaps(session: Session, addresses: dict[str, list[int]]) -> dict[str, H
                 state["all_chunks"] = False
                 state["detailed"] = None
             except Exception as e:
-                session.errors.append(f"Error reading sparsity for {label}: {e}")
+                raise RuntimeError(f"Error reading sparsity for {label}: {e}") from e
 
         total = allocated + free
         heaps[label] = HeapInfo(

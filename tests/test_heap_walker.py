@@ -277,7 +277,6 @@ def test_a_recording_without_a_chunk_map_stops_asking_for_one(monkeypatch):
     assert heap.chunks is None
     assert heap.free_bytes == 1536
     assert not session.state["heaps"]["all_chunks"]
-    assert session.errors == []
 
 
 class LiveHeapRefusingChunkMap(FakeHeapMemory):
@@ -309,6 +308,7 @@ def test_a_chunk_map_the_live_stub_refused_replays_frame_after_frame(tmp_path):
     # 264 chunks of 8 bytes: the 2112 byte read of the talk's recording.
     words = {**_STATS, _HEAP + _WAIT_Q: _HEAP + _WAIT_Q, _SYS_HEAP: 264}
     path = tmp_path / "refused.ndjson.gz"
+    refused = "Error reading sparsity for bench_heap: GDB error at 0x9000: E22"
 
     live = _heap_session(words, wait_q=_WAIT_Q)
     live.state["heaps"] = {"all_chunks": True}
@@ -316,7 +316,8 @@ def test_a_chunk_map_the_live_stub_refused_replays_frame_after_frame(tmp_path):
         live.scraper = recorder
         for _ in range(3):
             recorder.begin_batch()
-            _poll(live)
+            with pytest.raises(RuntimeError, match=refused):
+                _poll(live)
             recorder.end_batch()
 
     replayed = _heap_session(words, wait_q=_WAIT_Q)
@@ -325,12 +326,9 @@ def test_a_chunk_map_the_live_stub_refused_replays_frame_after_frame(tmp_path):
         replayed.scraper = replay
         for _ in range(3):
             replay.begin_batch()
-            assert _poll(replayed)[0].free_bytes == 1536
+            with pytest.raises(RuntimeError, match=refused):
+                _poll(replayed)
             replay.end_batch()
-
-    assert (
-        replayed.errors == ["Error reading sparsity for bench_heap: GDB error at 0x9000: E22"] * 3
-    )
 
 
 def test_a_recording_that_never_walked_the_queue_reports_no_waiter_list():

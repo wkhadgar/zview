@@ -14,7 +14,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import IO
 
-from zview.backend.base import AbstractScraper, Read
+from zview.backend.base import AbstractScraper, Read, ReplayError
 
 logger = logging.getLogger("zview.recording")
 
@@ -88,9 +88,15 @@ class RecordingScraper(AbstractScraper):
 
     @contextlib.contextmanager
     def _failure_recorded(self, op: str, args: dict) -> Iterator[None]:
-        """Record the error a read raises as its entry, then let it propagate."""
+        """
+        Record the error a read raises as its entry, then let it propagate. A
+        replayed source's own errors are not reads of the target, so they are
+        not recorded.
+        """
         try:
             yield
+        except ReplayError:
+            raise
         except Exception as e:
             self._emit(op, args, error={"kind": type(e).__name__, "message": str(e)})
             raise

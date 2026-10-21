@@ -4,7 +4,6 @@
 
 """Coverage for the kernel-object feature list a recording carries."""
 
-import queue
 from unittest.mock import MagicMock, patch
 
 from zview.kernel.groups import GROUPS
@@ -121,7 +120,7 @@ def test_nothing_is_polled_when_no_group_is_enabled():
     s = _polling_scraper()
 
     assert not s.has_kernel_objects()
-    assert s._poll_kernel_objects(queue.Queue()) == {}
+    assert s._poll_kernel_objects() == {}
 
 
 def test_a_build_with_only_heaps_still_has_objects_to_show():
@@ -135,7 +134,7 @@ def test_a_view_without_a_group_skips_its_reads():
     s = _polling_scraper(msgqs={"msgq": [0x100]})
     s.view = Selection(groups=frozenset({"threads"}))
 
-    assert s._poll_kernel_objects(queue.Queue()) == {}
+    assert s._poll_kernel_objects() == {}
     assert not s._m_scraper.method_calls
 
 
@@ -255,7 +254,7 @@ def test_a_group_walker_gets_only_the_selected_labels():
         "zview.orchestrator.GROUPS",
         _with_walks(semaphores=lambda session, rows: given.append(rows) or {}),
     ):
-        s._poll_kernel_objects(queue.Queue())
+        s._poll_kernel_objects()
 
     assert given == [{"sem_b@0x200": [0x200]}]
 
@@ -272,7 +271,7 @@ def test_the_poll_reads_the_work_queues_last():
         "zview.orchestrator.GROUPS",
         _with_walks(semaphores=walker("semaphores"), workqs=walker("workqs")),
     ):
-        frame = s._poll_kernel_objects(queue.Queue())
+        frame = s._poll_kernel_objects()
 
     assert order == ["semaphores", "workqs"]
     assert frame == {"semaphores": ["semaphores"], "workqs": ["workqs"]}
