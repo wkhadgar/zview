@@ -197,6 +197,35 @@ def test_a_read_failing_inside_a_batch_is_recorded_in_its_place(sample_path, sam
         list(replay.read_many(batch))
 
 
+def test_a_declared_selection_replays_as_it_was_recorded(tmp_path):
+    """Groups, patterns and the exact muted pairs survive the header."""
+    from zview.selection import Selection
+
+    selection = Selection(
+        groups=frozenset({"threads", "mutexes"}),
+        exclude=("log*",),
+        muted=frozenset({("threads", "z_idle_threads[0]")}),
+    )
+    path = tmp_path / "selected.ndjson.gz"
+    recorder = RecordingScraper(FakeBackend({}), path)
+    recorder.declare_selection(selection)
+    with recorder:
+        pass
+
+    assert ReplayScraper(path, honor_timing=False).selection == selection
+
+
+def test_a_recording_from_before_selections_reads_everything(tmp_path):
+    from zview.selection import Selection
+
+    path = tmp_path / "v4.ndjson.gz"
+    with gzip.open(path, "wt", encoding="utf-8") as fp:
+        header = {"schema": "zview-recording/4", "endianess": "<", "features": ["threads"]}
+        fp.write(json.dumps(header) + "\n")
+
+    assert ReplayScraper(path, honor_timing=False).selection == Selection()
+
+
 def test_a_recording_from_before_failed_reads_still_replays(tmp_path):
     """Schema /3 has no failure entries, and nothing in it needs one."""
     path = tmp_path / "v3.ndjson.gz"

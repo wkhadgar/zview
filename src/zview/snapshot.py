@@ -92,12 +92,14 @@ def record_session(
     duration: float | None = None,
     frames: int | None = None,
     period: float = 0.1,
+    selection: Selection | None = None,
 ) -> int:
     """
     Record a polling session to ``out_path``. Requires one of ``duration``
     (seconds) or ``frames`` (count). Captures fragmentation maps for every
-    heap so replay can navigate to any heap detail without drift. Returns
-    frame count.
+    heap so replay can navigate to any heap detail without drift. A live
+    target reads only the rows ``selection`` reads, and the header says so;
+    a replay keeps its recording's. Returns frame count.
     """
     if duration is None and frames is None:
         raise ValueError("record_session requires either duration or frames bound")
@@ -111,7 +113,12 @@ def record_session(
     # Built before connect: the header is written there, and the constructor
     # only reads the ELF.
     scraper = ZScraper(recorder, elf_path)
+    selection = selection or Selection()
+    scraper.check_selection(selection)
+    if backend.is_live:
+        scraper.selection = selection
     recorder.declare_features(scraper.active_features())
+    recorder.declare_selection(scraper.selection)
 
     with recorder:
         scraper.discover()

@@ -19,10 +19,16 @@ from zview.backend.base import (
     ReplayError,
 )
 from zview.backend.recording import SCHEMA_VERSION
+from zview.selection import Selection
 
 # Schema /2 has no feature list in its header; its read stream covers threads
 # and heaps only.
-SUPPORTED_SCHEMAS = (SCHEMA_VERSION, "zview-recording/3", "zview-recording/2")
+SUPPORTED_SCHEMAS = (
+    SCHEMA_VERSION,
+    "zview-recording/4",
+    "zview-recording/3",
+    "zview-recording/2",
+)
 LEGACY_FEATURES = ("threads", "heaps")
 
 # A recorded read failure is raised again as the probe error it was, and as a
@@ -67,6 +73,7 @@ class ReplayScraper(AbstractScraper):
         self._source_path = Path(source_path)
         # Overwritten from the header on load.
         self._features: tuple[str, ...] = LEGACY_FEATURES
+        self._selection = Selection()
         self._entries: list[dict] = []
         self._cursor: int = 0
         self._loaded: bool = False
@@ -79,6 +86,12 @@ class ReplayScraper(AbstractScraper):
         """The polling features the recording holds, read from its header before connect too."""
         self._load()
         return self._features
+
+    @property
+    def selection(self) -> Selection:
+        """The rows the recording read, from its header, before connect too."""
+        self._load()
+        return self._selection
 
     def _load(self) -> None:
         """Parse header and buffer all entries. Idempotent. Raises UnsupportedSchema."""
@@ -98,6 +111,7 @@ class ReplayScraper(AbstractScraper):
 
             self.endianess = header.get("endianess", "<")
             self._features = tuple(header.get("features") or LEGACY_FEATURES)
+            self._selection = Selection.from_header(header.get("selection"))
 
             for line in fp:
                 line = line.strip()

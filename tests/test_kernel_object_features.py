@@ -154,6 +154,19 @@ def test_a_group_absent_from_the_elf_stays_off_even_if_recorded():
     assert not s.available["msgqs"]
 
 
+def test_a_replay_reads_the_rows_its_recording_read():
+    """A recording made with a selection holds only its reads, so its replay asks for those."""
+    from zview.selection import Selection
+
+    recorded = Selection(groups=frozenset({"threads", "mutexes"}))
+    s = _scraper(mutexes=True)
+    s._m_scraper = MagicMock(is_live=False, features=("threads", "mutexes"), selection=recorded)
+
+    s._restrict_features_to_recording()
+
+    assert s.selection == recorded
+
+
 def test_a_scraper_reporting_no_features_is_left_alone():
     s = _scraper(msgqs=True)
     s._m_scraper = MagicMock(is_live=False, spec=["is_live"])

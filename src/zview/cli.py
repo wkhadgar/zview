@@ -170,6 +170,7 @@ def register_commands(
     bound.add_argument("--duration", type=float, help="Recording bound, in seconds.")
     bound.add_argument("--frames", type=int, help="Recording bound, in data frames.")
     _add_period(p_record)
+    _add_selection(p_record)
 
     p_replay = _sub("replay", "Render the TUI from a recording file.")
     _add_elf(p_replay)
@@ -379,6 +380,7 @@ def _do_record(args) -> int:
         duration=args.duration,
         frames=args.frames,
         period=args.period,
+        selection=_selection(args),
     )
     print(f"Recorded {captured} frames to {args.output}")
     return 0
