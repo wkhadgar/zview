@@ -104,8 +104,7 @@ class ZScraper:
         self._layout = self._resolve_layout()
         self._resolve_addresses()
 
-        if self.has_heaps:
-            self._discover_heap_addresses()
+        self._discover_heap_addresses()
 
         self._discover_kernel_object_addresses()
         self._restrict_features_to_recording()
@@ -273,7 +272,10 @@ class ZScraper:
             for enabled, notice in (
                 (self.has_names, "Warning: no thread names (CONFIG_THREAD_NAME=n)"),
                 (self.has_usage, "Warning: no cpu stats (CONFIG_THREAD_RUNTIME_STATS=n)"),
-                (self.has_heaps, "Warning: no heap stats (CONFIG_SYS_HEAP_RUNTIME_STATS=n)"),
+                (
+                    self.has_heaps or not self._k_heap_addresses,
+                    "Warning: no heap stats (CONFIG_SYS_HEAP_RUNTIME_STATS=n)",
+                ),
                 (
                     self.has_thread_list,
                     "Warning: static threads only (CONFIG_THREAD_MONITOR=n)",

@@ -122,6 +122,7 @@ def test_absent_features_name_the_kconfig_they_need():
     s.has_names = False
     s.has_usage = True
     s.has_heaps = False
+    s._k_heap_addresses = {"test_heap": [0x1000]}
     s.has_stack_info = False
 
     assert s.absent_features() == (
