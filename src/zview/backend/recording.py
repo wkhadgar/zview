@@ -15,18 +15,20 @@ from pathlib import Path
 from typing import IO
 
 from zview.backend.base import AbstractScraper, Read, ReplayError
+from zview.selection import Selection
 
 logger = logging.getLogger("zview.recording")
 
-# /3 added the header's ``features`` list, and /4 the reads that raised.
-SCHEMA_VERSION = "zview-recording/4"
+# /3 added the header's ``features`` list, /4 the reads that raised, and /5 the
+# header's ``selection``.
+SCHEMA_VERSION = "zview-recording/5"
 
 
 class RecordingScraper(AbstractScraper):
     """
     AbstractScraper wrapper that emits each call as one NDJSON line.
-    First line is a header ({schema, endianess, created_at}); ``read_bytes``
-    payloads are hex-encoded.
+    First line is a header ({schema, endianess, created_at, features,
+    selection}); ``read_bytes`` payloads are hex-encoded.
     """
 
     def __init__(self, wrapped: AbstractScraper, out_path: Path | str):
@@ -37,6 +39,7 @@ class RecordingScraper(AbstractScraper):
         self._stack = ExitStack()
         self.endianess = wrapped.endianess
         self._features: tuple[str, ...] = ()
+        self._selection = Selection()
         # A recording of a replay keeps the read shape of the one it replays.
         self.is_live = wrapped.is_live
 
@@ -44,6 +47,11 @@ class RecordingScraper(AbstractScraper):
     def features(self) -> tuple[str, ...] | None:
         """The features of the replay this records, None over a live target."""
         return getattr(self._wrapped, "features", None)
+
+    @property
+    def selection(self) -> Selection | None:
+        """The selection of the replay this records, None over a live target."""
+        return getattr(self._wrapped, "selection", None)
 
     def declare_features(self, features: Sequence[str]) -> None:
         """
@@ -57,6 +65,19 @@ class RecordingScraper(AbstractScraper):
             return
 
         self._features = tuple(features)
+
+    def declare_selection(self, selection: Selection) -> None:
+        """
+        Declare which rows this session reads, so its replay reads them alike.
+
+        Must be called before ``connect``, which writes the header; a later
+        call is ignored with a warning.
+        """
+        if self._fp is not None:
+            logger.warning("Recording header already written; selection declaration ignored.")
+            return
+
+        self._selection = selection
 
     def _open(self) -> None:
         """Open the gzip stream and write the header. Idempotent."""
@@ -72,6 +93,7 @@ class RecordingScraper(AbstractScraper):
             "endianess": self.endianess,
             "created_at": time.time(),
             "features": list(self._features),
+            "selection": self._selection.to_header(),
         }
         self._fp.write(json.dumps(header) + "\n")
 

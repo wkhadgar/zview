@@ -123,7 +123,8 @@ class ZScraper:
 
     def _restrict_features_to_recording(self) -> None:
         """
-        Limit a replayed session to the features its recording captured.
+        Limit a replayed session to the features and the selection its recording
+        captured.
 
         Replay matches a strict read sequence. A recording with no feature list
         predates the primitives and is treated as threads and heaps only.
@@ -131,6 +132,7 @@ class ZScraper:
         if self._m_scraper.is_live:
             return
 
+        self.selection = getattr(self._m_scraper, "selection", None) or Selection()
         features = getattr(self._m_scraper, "features", None)
         if features is None:
             return
