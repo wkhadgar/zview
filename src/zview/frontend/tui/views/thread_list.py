@@ -188,7 +188,7 @@ class ThreadListView(BaseStateView):
         ]
         # The footer shows the first three bindings only, so the view switches
         # come ahead of Refresh.
-        if self.controller.scraper.has_kernel_objects():
+        if self.controller.has_kernel_objects():
             bindings[1:1] = [Keybind("k", "Kernel objects", "Switch to the kernel objects view")]
         return bindings
 
@@ -225,8 +225,7 @@ class ThreadListView(BaseStateView):
                 self.controller.report("Refreshing thread list...")
 
                 try:
-                    self.controller.scraper.update_available_threads()
-                    self.controller.scraper.reset_thread_pool()
+                    self.controller.scraper.discover()
                     self.controller.scraper.reset_runtime_state()
                     self.controller.purge_queue()
                 except Exception as e:
@@ -235,7 +234,7 @@ class ThreadListView(BaseStateView):
                 return None
 
             case SpecialCode.KERNEL_OBJECTS:
-                if not self.controller.scraper.has_kernel_objects():
+                if not self.controller.has_kernel_objects():
                     return None
 
                 return ZViewState.KERNEL_OBJECT_LIST_VIEW

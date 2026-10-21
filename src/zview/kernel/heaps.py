@@ -138,6 +138,12 @@ class Heaps(Group):
         """
         self.all_chunks = True
 
+    def notices(self, session: Session) -> tuple[str, ...]:
+        # Only a build that declares heaps misses their stats.
+        if session.layout.heap_free_bytes is None and self.discover(session):
+            return ("Warning: no heap stats (CONFIG_SYS_HEAP_RUNTIME_STATS=n)",)
+        return ()
+
     def walk(self, session: Session, addresses: dict[str, list[int]]) -> dict[str, HeapInfo]:
         """
         Read every statically declared ``k_heap`` and return ``{label: HeapInfo}``.

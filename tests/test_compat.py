@@ -9,6 +9,15 @@ from zview.kernel.groups import GROUPS
 from zview.kernel.heaps import HEAP_FIELDS
 from zview.kernel.mem_slabs import MEM_SLAB_FIELDS
 from zview.kernel.semaphores import SEMAPHORE_FIELDS
+from zview.kernel.threads import (
+    THREAD_ENTRY_FIELDS,
+    THREAD_FIELDS,
+    THREAD_PRIORITY_FIELDS,
+    THREAD_STACK_FIELDS,
+    THREAD_STATE_FIELDS,
+    USAGE_FIELDS,
+    USAGE_STAMP_FIELDS,
+)
 
 
 class FakeElf:
@@ -205,13 +214,13 @@ def test_usage_group_needs_the_kernel_wide_counter():
         }
     )
 
-    assert compat.resolve_fields(elf, compat.USAGE_FIELDS) is None
+    assert compat.resolve_fields(elf, USAGE_FIELDS) is None
 
 
 def test_the_switch_stamp_is_found_inside_each_cpu():
     elf = FakeElf({("z_kernel", "cpus"): 0, ("_cpu", "usage0"): 20})
 
-    assert compat.resolve_fields(elf, compat.USAGE_STAMP_FIELDS) == {
+    assert compat.resolve_fields(elf, USAGE_STAMP_FIELDS) == {
         "kernel_cpus": 0,
         "cpu_usage0": 20,
     }
@@ -221,11 +230,11 @@ def test_the_thread_list_resolves_without_the_stack_geometry():
     """CONFIG_THREAD_STACK_INFO adds k_thread.stack_info, the monitor adds the list."""
     elf = FakeElf({("z_kernel", "threads"): 8, ("k_thread", "next_thread"): 96})
 
-    assert compat.resolve_fields(elf, compat.THREAD_FIELDS) == {
+    assert compat.resolve_fields(elf, THREAD_FIELDS) == {
         "threads_head": 8,
         "thread_next": 96,
     }
-    assert compat.resolve_fields(elf, compat.THREAD_STACK_FIELDS) is None
+    assert compat.resolve_fields(elf, THREAD_STACK_FIELDS) is None
 
 
 def test_heap_group_needs_max_allocated_bytes():
@@ -247,15 +256,15 @@ def test_thread_entry_accepts_either_struct_spelling():
     single = FakeElf({("k_thread", "entry"): 112, ("_thread_entry", "pEntry"): 0})
 
     for elf in (double, single):
-        assert compat.resolve_fields(elf, compat.THREAD_ENTRY_FIELDS) == {"thread_entry": 112}
+        assert compat.resolve_fields(elf, THREAD_ENTRY_FIELDS) == {"thread_entry": 112}
 
 
 def test_each_metadata_member_resolves_on_its_own():
     """Metadata members resolve independently of each other."""
     elf = FakeElf({("k_thread", "base"): 0, ("_thread_base", "prio"): 14})
 
-    assert compat.resolve_fields(elf, compat.THREAD_PRIORITY_FIELDS) == {"thread_priority": 14}
-    assert compat.resolve_fields(elf, compat.THREAD_STATE_FIELDS) is None
+    assert compat.resolve_fields(elf, THREAD_PRIORITY_FIELDS) == {"thread_priority": 14}
+    assert compat.resolve_fields(elf, THREAD_STATE_FIELDS) is None
 
 
 def test_the_group_registry_is_coherent():
@@ -266,7 +275,6 @@ def test_the_group_registry_is_coherent():
     assert len(set(structs)) == len(structs)
 
     for group in GROUPS:
-        assert group.required, group.key
         for table in (*group.required, *group.optional):
             for field, candidates in table.items():
                 assert candidates, f"{group.key}.{field}"

@@ -2,13 +2,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Zephyr kernel thread walkers."""
+"""Zephyr ``k_thread`` group, with its thread list and static thread walkers."""
 
 from typing import Literal
 
-from zview.backend.base import AbstractScraper, ThreadInfo
+from zview.backend.base import AbstractScraper, ThreadInfo, ThreadRuntime
 from zview.backend.elf_inspector import ElfInspector
+from zview.backend.replay import ReplayMismatch
+from zview.kernel.compat import CONFIG_INIT_STACKS, FieldTable, has_kconfig
+from zview.kernel.group import BrokenFrame, Group
 from zview.kernel.layout import KernelLayout
+from zview.kernel.object_names import label_instances
+from zview.kernel.session import Session
+from zview.kernel.usage import read_usage_snapshot
 
 # thread_state bits of an object that is not a live thread: the placeholder
 # the kernel switches away from at boot, and a thread that has exited.
@@ -17,6 +23,66 @@ _THREAD_DEAD = 1 << 3
 
 # K_THREAD_DEFINE names its object after the thread's id.
 _DEFINED_THREAD_PREFIX = "_k_thread_obj_"
+
+# CONFIG_THREAD_MONITOR: the kernel's list of every thread.
+THREAD_FIELDS: FieldTable = {
+    "threads_head": ((("z_kernel", "threads"),),),
+    "thread_next": ((("k_thread", "next_thread"),),),
+}
+
+# CONFIG_THREAD_STACK_INFO.
+THREAD_STACK_FIELDS: FieldTable = {
+    "stack_start": ((("k_thread", "stack_info"), ("_thread_stack_info", "start")),),
+    "stack_size": ((("k_thread", "stack_info"), ("_thread_stack_info", "size")),),
+}
+
+# CONFIG_THREAD_NAME.
+THREAD_NAME_FIELDS: FieldTable = {
+    "thread_name": ((("k_thread", "name"),),),
+}
+
+# CONFIG_THREAD_RUNTIME_STATS. z_kernel.usage exists from v3.5.0; on v3.0 and
+# v3.3 this group does not resolve.
+USAGE_FIELDS: FieldTable = {
+    "cpu_usage": ((("z_kernel", "usage"),),),
+    "thread_usage": (
+        (("k_thread", "base"), ("_thread_base", "usage"), ("k_cycle_stats", "total")),
+    ),
+}
+
+# CONFIG_SCHED_THREAD_USAGE. Each CPU's switch stamp, rewritten whenever the
+# kernel adds to a usage counter.
+USAGE_STAMP_FIELDS: FieldTable = {
+    "kernel_cpus": ((("z_kernel", "cpus"),),),
+    "cpu_usage0": ((("_cpu", "usage0"),),),
+}
+
+# Metadata mirroring `kernel threads list`, one table per member.
+THREAD_PRIORITY_FIELDS: FieldTable = {
+    "thread_priority": ((("k_thread", "base"), ("_thread_base", "prio")),),
+}
+
+THREAD_STATE_FIELDS: FieldTable = {
+    "thread_state": ((("k_thread", "base"), ("_thread_base", "thread_state")),),
+}
+
+THREAD_OPTIONS_FIELDS: FieldTable = {
+    "thread_user_options": ((("k_thread", "base"), ("_thread_base", "user_options")),),
+}
+
+THREAD_ENTRY_FIELDS: FieldTable = {
+    "thread_entry": (
+        (("k_thread", "entry"), ("__thread_entry", "pEntry")),
+        # Single-underscore struct name carried by some vendor trees.
+        (("k_thread", "entry"), ("_thread_entry", "pEntry")),
+    ),
+}
+
+# Wait queues hold ``_thread_base.qnode_dlist`` nodes; a thread address is a
+# node address minus this offset.
+THREAD_QNODE_FIELDS: FieldTable = {
+    "thread_qnode": ((("k_thread", "base"), ("_thread_base", "qnode_dlist")),),
+}
 
 
 def _word_at(words, offset: int | None) -> int | None:
@@ -145,3 +211,355 @@ def walk_static_threads(
 
     scraper.end_batch()
     return threads
+
+
+class Threads(Group):
+    key = "threads"
+    struct = "k_thread"
+    optional = (
+        THREAD_FIELDS,
+        THREAD_STACK_FIELDS,
+        THREAD_NAME_FIELDS,
+        USAGE_FIELDS,
+        USAGE_STAMP_FIELDS,
+        THREAD_PRIORITY_FIELDS,
+        THREAD_STATE_FIELDS,
+        THREAD_OPTIONS_FIELDS,
+        THREAD_ENTRY_FIELDS,
+        THREAD_QNODE_FIELDS,
+    )
+    # The metadata bytes in one read and the entry pointer once per thread,
+    # the stack scan skipped on a build that leaves its stacks unfilled, and
+    # every thread's usage counter read first, as of one instant. A recording
+    # taken before each holds those reads the way they were made then.
+    parts = ("merged_thread_meta", "unfilled_stacks", "usage_snapshot")
+    max_threads = 64
+
+    # The metadata bytes, by their offset in the layout.
+    _META_BYTES = (
+        ("priority", "thread_priority"),
+        ("state", "thread_state"),
+        ("user_options", "thread_user_options"),
+    )
+
+    def __init__(self) -> None:
+        # The discovered threads by address, one idle thread per CPU, and each
+        # thread's usage counter as of the last frame.
+        self.infos: dict[int, ThreadInfo] = {}
+        self.idle_addresses: tuple[int, ...] = ()
+        self.last_cycles: dict[int, int] = {}
+        self._entries: dict[int, int] = {}
+        self._symbols: dict[int, str | None] = {}
+        self._cpu_usage_address = 0
+        self._usage_stamps: tuple[int, ...] = ()
+
+    def discover(self, session: Session) -> dict[str, list[int]]:
+        """
+        ``{name: [address]}`` of the threads alive now: the kernel's list, or
+        without it the statically allocated ``k_thread`` objects.
+        """
+        elf, layout = session.elf, session.layout
+        kernel = elf.get_symbol_info("_kernel", "address")[0]
+        # z_idle_threads holds one idle thread per CPU.
+        idle = elf.get_symbol_info("z_idle_threads", "address")[0]
+        thread_size = elf.get_struct_size("k_thread")
+        cpus = max(1, elf.get_symbol_info("z_idle_threads", "size")[0] // thread_size)
+        self.idle_addresses = tuple(idle + i * thread_size for i in range(cpus))
+
+        if layout.thread_usage is not None:
+            self._cpu_usage_address = kernel + layout.cpu_usage
+            if layout.cpu_usage0 is not None:
+                cpu_size = elf.get_struct_size("_cpu")
+                self._usage_stamps = tuple(
+                    kernel + layout.kernel_cpus + i * cpu_size + layout.cpu_usage0
+                    for i in range(cpus)
+                )
+
+        endianess: Literal["little", "big"] = "little" if elf._little_endian else "big"
+        has_names = layout.thread_name is not None
+        if layout.threads_head is not None:
+            threads = walk_thread_list(
+                session.scraper,
+                elf,
+                kernel + layout.threads_head,
+                layout,
+                endianess,
+                has_names,
+                self.max_threads,
+            )
+        else:
+            # Without the kernel's list, the threads are the ones allocated statically.
+            threads = walk_static_threads(
+                session.scraper,
+                elf,
+                elf.find_nested_instances("k_thread"),
+                layout,
+                endianess,
+                has_names,
+                self.max_threads,
+            )
+
+        self.infos = {thread.address: thread for thread in threads.values()}
+        # A rebuilt list can hand the same address to a different thread.
+        self._entries.clear()
+        return {thread.name: [thread.address] for thread in threads.values()}
+
+    def live_parts(self, session: Session) -> frozenset[str]:
+        """
+        Every part, but the scan skip on a build that fills its stacks and the
+        usage snapshot on one that counts no usage.
+        """
+        off = {
+            "unfilled_stacks": has_kconfig(session.elf, CONFIG_INIT_STACKS),
+            "usage_snapshot": session.layout.thread_usage is None,
+        }
+        return frozenset(part for part in self.parts if not off.get(part, False))
+
+    def notices(self, session: Session) -> tuple[str, ...]:
+        layout = session.layout
+        return tuple(
+            notice
+            for enabled, notice in (
+                (layout.thread_name is not None, "Warning: no thread names (CONFIG_THREAD_NAME=n)"),
+                (
+                    layout.thread_usage is not None,
+                    "Warning: no cpu stats (CONFIG_THREAD_RUNTIME_STATS=n)",
+                ),
+                (
+                    layout.threads_head is not None,
+                    "Warning: static threads only (CONFIG_THREAD_MONITOR=n)",
+                ),
+                (
+                    layout.stack_size is not None,
+                    "Warning: no stack sizes (CONFIG_THREAD_STACK_INFO=n)",
+                ),
+                (
+                    has_kconfig(session.elf, CONFIG_INIT_STACKS),
+                    "Warning: no stack usage (CONFIG_INIT_STACKS=n)",
+                ),
+            )
+            if not enabled
+        )
+
+    def reset(self) -> None:
+        self.last_cycles = {}
+
+    def walk(self, session: Session, addresses: dict[str, list[int]]) -> dict[str, ThreadInfo]:
+        """
+        Read the threads at ``addresses`` and return ``{label: ThreadInfo}``.
+
+        Every discovered thread's usage counter is read, the ones left out too,
+        so each share is of all the threads' cycles. CPU% is a share of every
+        thread's cycles and load% of every busy thread's: read as one snapshot
+        or not, the shares add up to 100% and none passes it.
+        """
+        deltas = self._usage_deltas(session)
+        polled = [
+            self._poll(session, self.infos[address], deltas)
+            for _, address in label_instances(addresses)
+        ]
+        return {thread.name: thread for thread in self._finalize(session, polled, deltas)}
+
+    def _usage_delta(self, address: int, cycles: int) -> int:
+        """A thread's cycles since the last frame, 0 on its first. A regression breaks the frame."""
+        prev = self.last_cycles.get(address)
+        self.last_cycles[address] = cycles
+        if prev is None:
+            return 0
+        if cycles < prev:
+            raise BrokenFrame(f"usage counter of the thread at 0x{address:X} regressed")
+        return cycles - prev
+
+    def _usage_deltas(self, session: Session) -> dict[int, int]:
+        """
+        Every discovered thread's cycles since the last frame, ``{address: cycles}``.
+
+        Empty when the build counts no usage, and on a recording from before the
+        snapshot, whose counters sit beside each thread's stack.
+        """
+        scraper, layout = session.scraper, session.layout
+        if layout.thread_usage is None:
+            return {}
+
+        if not session.has_part("usage_snapshot"):
+            # The kernel-wide counter that recording read first. Its value is unused.
+            scraper.read32(self._cpu_usage_address)
+            return {}
+
+        if not self.infos:
+            return {}
+
+        try:
+            counters = read_usage_snapshot(
+                scraper, list(self.infos), layout.thread_usage, self._usage_stamps
+            )
+        except Exception as e:
+            raise RuntimeError(f"Error polling thread usage: {e}") from e
+
+        return {address: self._usage_delta(address, cycles) for address, cycles in counters.items()}
+
+    def _poll(self, session: Session, thread: ThreadInfo, deltas: dict[int, int]) -> dict:
+        """Read a thread's watermark and metadata, beside its share of ``deltas``."""
+        scraper, layout = session.scraper, session.layout
+        usage_delta = deltas.get(thread.address, 0)
+        if layout.thread_usage is not None and not session.has_part("usage_snapshot"):
+            try:
+                cycles = scraper.read64(thread.address + layout.thread_usage)[0]
+            except Exception as e:
+                raise RuntimeError(f"Error polling thread usage {thread.name}: {e}") from e
+            usage_delta = self._usage_delta(thread.address, cycles)
+
+        watermark = stack_usage_pct = None
+        if not session.has_part("unfilled_stacks") and thread.stack_size is not None:
+            try:
+                watermark = scraper.calculate_dynamic_watermark(
+                    thread.stack_start,
+                    thread.stack_size,
+                    thread_id=thread.address,
+                )
+            except Exception as e:
+                raise RuntimeError(f"Error polling stack watermark for {thread.name}: {e}") from e
+
+            stack_usage_pct = (
+                (watermark / thread.stack_size * 100) if thread.stack_size > 0 else 0.0
+            )
+
+        return {
+            "info": thread,
+            "usage_delta": usage_delta,
+            "is_active": usage_delta > 0,
+            "watermark": watermark,
+            "stack_usage_pct": stack_usage_pct,
+            "meta": self._read_meta(session, thread),
+        }
+
+    def _read_meta(self, session: Session, thread: ThreadInfo) -> dict:
+        """Read priority/state/options/entry for a thread; missing offsets yield ``None``."""
+        meta: dict = {
+            "priority": None,
+            "state": None,
+            "user_options": None,
+            "entry_point": None,
+            "entry_symbol": None,
+        }
+        try:
+            meta.update(
+                self._read_meta_span(session, thread)
+                if session.has_part("merged_thread_meta")
+                else self._read_meta_fields(session, thread)
+            )
+            entry = self._read_entry(session, thread)
+        except ReplayMismatch:
+            # A recording taken before the metadata was read has no such reads.
+            # A drift leaves the cursor untouched, so the frame goes on.
+            return meta
+        except Exception as e:
+            raise RuntimeError(f"Error polling metadata for {thread.name}: {e}") from e
+        if entry is not None:
+            meta["entry_point"] = entry
+            meta["entry_symbol"] = self._entry_symbol(session.elf, entry)
+        return meta
+
+    def _read_meta_span(self, session: Session, thread: ThreadInfo) -> dict:
+        """The metadata bytes in one read: they sit within a few bytes of each other."""
+        offsets = {
+            name: offset
+            for name, attribute in self._META_BYTES
+            if (offset := getattr(session.layout, attribute)) is not None
+        }
+        if not offsets:
+            return {}
+
+        base = min(offsets.values())
+        raw = session.scraper.read8(thread.address + base, max(offsets.values()) - base + 1)
+
+        values = {name: raw[offset - base] for name, offset in offsets.items()}
+        if "priority" in values:
+            values["priority"] = _signed_priority(values["priority"])
+        return values
+
+    def _read_meta_fields(self, session: Session, thread: ThreadInfo) -> dict:
+        """The metadata bytes one read apiece, as a recording made that way expects."""
+        values = {}
+        for name, attribute in self._META_BYTES:
+            offset = getattr(session.layout, attribute)
+            if offset is not None:
+                values[name] = session.scraper.read8(thread.address + offset)[0]
+        if "priority" in values:
+            values["priority"] = _signed_priority(values["priority"])
+        return values
+
+    def _read_entry(self, session: Session, thread: ThreadInfo) -> int | None:
+        """The entry pointer, read once per thread: it is fixed while the thread lives."""
+        if session.layout.thread_entry is None:
+            return None
+        if session.has_part("merged_thread_meta") and thread.address in self._entries:
+            return self._entries[thread.address]
+
+        entry = session.scraper.read32(thread.address + session.layout.thread_entry)[0]
+        self._entries[thread.address] = entry
+        return entry
+
+    def _entry_symbol(self, elf: ElfInspector, addr: int) -> str | None:
+        """Cache-backed reverse symbol lookup for a function pointer."""
+        if addr == 0:
+            return None
+        if addr in self._symbols:
+            return self._symbols[addr]
+        # Thumb code pointers have bit 0 set; mask before lookup.
+        try:
+            sym = elf.get_symbol_name_at(addr & ~1)
+        except Exception:
+            sym = None
+        self._symbols[addr] = sym
+        return sym
+
+    def _finalize(
+        self, session: Session, polled: list[dict], deltas: dict[int, int]
+    ) -> list[ThreadInfo]:
+        """Build ``ThreadInfo`` objects from raw polling state, computing CPU% and load%."""
+        has_usage = session.layout.thread_usage is not None
+        # A recording from before the snapshot has counters for the polled threads only.
+        deltas = deltas or {d["info"].address: d["usage_delta"] for d in polled}
+        total = sum(deltas.values())
+        busy = total - sum(deltas.get(address, 0) for address in self.idle_addresses)
+
+        final: list[ThreadInfo] = []
+        for data in polled:
+            absolute_cpu = (data["usage_delta"] / total * 100.0) if total > 0 else 0.0
+
+            if data["info"].address in self.idle_addresses:
+                load_pct = 0.0
+            elif busy > 0:
+                load_pct = data["usage_delta"] / busy * 100.0
+            else:
+                load_pct = 0.0
+
+            runtime = ThreadRuntime(
+                cpu=load_pct if has_usage else None,
+                cpu_normalized=absolute_cpu if has_usage else None,
+                active=data["is_active"],
+                stack_watermark=data["watermark"],
+                stack_watermark_percent=data["stack_usage_pct"],
+            )
+            meta = data.get("meta") or {}
+            final.append(
+                ThreadInfo(
+                    address=data["info"].address,
+                    stack_start=data["info"].stack_start,
+                    stack_size=data["info"].stack_size,
+                    name=data["info"].name,
+                    runtime=runtime,
+                    priority=meta.get("priority"),
+                    state=meta.get("state"),
+                    user_options=meta.get("user_options"),
+                    entry_point=meta.get("entry_point"),
+                    entry_symbol=meta.get("entry_symbol"),
+                )
+            )
+        return final
+
+
+def _signed_priority(raw: int) -> int:
+    """A Zephyr priority is a signed 8-bit value: cooperative ones are negative."""
+    return raw - 256 if raw >= 0x80 else raw

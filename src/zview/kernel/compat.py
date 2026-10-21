@@ -3,11 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Zephyr kernel offset and Kconfig compatibility tables.
+Zephyr kernel offset resolution and Kconfig compatibility probes.
 
-Field offsets are read from DWARF at runtime. This module holds the candidate
-member paths of the thread fields, the resolvers, the Kconfig probes and the
-Zephyr version lookup. Each group's module holds its own fields.
+Field offsets are read from DWARF at runtime. This module holds the resolvers,
+the Kconfig probes and the Zephyr version lookup. Each group's module holds the
+candidate member paths of its own fields.
 
 ``resolve_offset`` tries candidate paths in order, summing the steps of a path,
 so a field reached through a sub-struct such as ``k_mem_slab.info.num_used`` is
@@ -15,9 +15,9 @@ one entry. ``has_kconfig`` reads the ``CONFIG_*`` absolute symbols from the ELF
 symbol table. ``detect_zephyr_version`` reads ``KERNEL_VERSION_STRING`` from the
 build tree.
 
-The tables, here and in each group's module, match the struct definitions in
-Zephyr v3.0.0, v3.3.0, v3.7.0, v4.0.0 and v4.4.0. Where a field has more than
-one candidate, the comment names the release that differs.
+The groups' tables match the struct definitions in Zephyr v3.0.0, v3.3.0,
+v3.7.0, v4.0.0 and v4.4.0. Where a field has more than one candidate, the
+comment names the release that differs.
 """
 
 import re
@@ -41,66 +41,6 @@ WaitQFlavor = Literal["simple", "scalable", "unknown"]
 _VERSION_HEADER = Path("include") / "generated" / "zephyr" / "version.h"
 _VERSION_PATTERN = re.compile(r'#define\s+KERNEL_VERSION_STRING\s+"([^"]+)"')
 _VERSION_SEARCH_DEPTH = 4
-
-# CONFIG_THREAD_MONITOR: the kernel's list of every thread.
-THREAD_FIELDS: FieldTable = {
-    "threads_head": ((("z_kernel", "threads"),),),
-    "thread_next": ((("k_thread", "next_thread"),),),
-}
-
-# CONFIG_THREAD_STACK_INFO.
-THREAD_STACK_FIELDS: FieldTable = {
-    "stack_start": ((("k_thread", "stack_info"), ("_thread_stack_info", "start")),),
-    "stack_size": ((("k_thread", "stack_info"), ("_thread_stack_info", "size")),),
-}
-
-# CONFIG_THREAD_NAME.
-THREAD_NAME_FIELDS: FieldTable = {
-    "thread_name": ((("k_thread", "name"),),),
-}
-
-# CONFIG_THREAD_RUNTIME_STATS. z_kernel.usage exists from v3.5.0; on v3.0 and
-# v3.3 this group does not resolve.
-USAGE_FIELDS: FieldTable = {
-    "cpu_usage": ((("z_kernel", "usage"),),),
-    "thread_usage": (
-        (("k_thread", "base"), ("_thread_base", "usage"), ("k_cycle_stats", "total")),
-    ),
-}
-
-# CONFIG_SCHED_THREAD_USAGE. Each CPU's switch stamp, rewritten whenever the
-# kernel adds to a usage counter.
-USAGE_STAMP_FIELDS: FieldTable = {
-    "kernel_cpus": ((("z_kernel", "cpus"),),),
-    "cpu_usage0": ((("_cpu", "usage0"),),),
-}
-
-# Metadata mirroring `kernel threads list`, one table per member.
-THREAD_PRIORITY_FIELDS: FieldTable = {
-    "thread_priority": ((("k_thread", "base"), ("_thread_base", "prio")),),
-}
-
-THREAD_STATE_FIELDS: FieldTable = {
-    "thread_state": ((("k_thread", "base"), ("_thread_base", "thread_state")),),
-}
-
-THREAD_OPTIONS_FIELDS: FieldTable = {
-    "thread_user_options": ((("k_thread", "base"), ("_thread_base", "user_options")),),
-}
-
-THREAD_ENTRY_FIELDS: FieldTable = {
-    "thread_entry": (
-        (("k_thread", "entry"), ("__thread_entry", "pEntry")),
-        # Single-underscore struct name carried by some vendor trees.
-        (("k_thread", "entry"), ("_thread_entry", "pEntry")),
-    ),
-}
-
-# Wait queues hold ``_thread_base.qnode_dlist`` nodes; a thread address is a
-# node address minus this offset.
-THREAD_QNODE_FIELDS: FieldTable = {
-    "thread_qnode": ((("k_thread", "base"), ("_thread_base", "qnode_dlist")),),
-}
 
 
 def resolve_offset(elf: ElfInspector, candidates: Sequence[MemberPath]) -> int | None:

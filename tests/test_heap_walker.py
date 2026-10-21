@@ -228,7 +228,7 @@ def test_a_polled_heap_reports_the_threads_waiting_for_memory():
         {**_STATS, _HEAP + _WAIT_Q: thread, thread: _HEAP + _WAIT_Q},
         wait_q=_WAIT_Q,
     )
-    session.thread_names = {thread: "worker"}
+    session.rows = {"threads": {"worker": [thread]}}
 
     heaps = _poll(session)
 

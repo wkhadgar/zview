@@ -36,7 +36,7 @@ def app() -> ZView:
     a.update_count = 0
     a.data_queue = queue.Queue()
     a.scraper = MagicMock()
-    a.scraper.idle_thread_addresses = (0xDEAD,)
+    a.scraper.groups = {"threads": MagicMock(idle_addresses=(0xDEAD,))}
     a.state = ZViewState.THREAD_LIST_VIEW
     a.stdscr = MagicMock()
     a._overlay = None
@@ -96,7 +96,7 @@ def test_a_frame_with_work_queues_records_their_backlog(app):
 
 def test_process_data_strips_every_idle_thread(app):
     """An SMP build idles on each CPU, and none of its idle threads is listed."""
-    app.scraper.idle_thread_addresses = (0xDEAD, 0xBEEF)
+    app.scraper.groups = {"threads": MagicMock(idle_addresses=(0xDEAD, 0xBEEF))}
     main = ThreadInfo(address=0x1000, stack_start=0, stack_size=512, name="main", runtime=None)
     idle_00 = ThreadInfo(
         address=0xDEAD, stack_start=0, stack_size=128, name="idle 00", runtime=None
@@ -112,10 +112,9 @@ def test_process_data_strips_every_idle_thread(app):
 
 def test_a_thread_detail_scans_only_the_detailed_threads_stack(app):
     """The idle thread's cycles are read with every other thread's, so the view names only it."""
-    main = ThreadInfo(address=0x1000, stack_start=0, stack_size=512, name="main[0]", runtime=None)
     app.views = {ZViewState.THREAD_DETAIL_VIEW: MagicMock()}
     app.detailing_thread = "main[0]"
-    app.scraper.all_threads = {"main[0]": main}
+    app.scraper.rows = {"threads": {"main[0]": [0x1000]}}
     app.scraper._m_scraper.is_live = True
 
     app.transition_to(ZViewState.THREAD_DETAIL_VIEW)

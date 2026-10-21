@@ -253,7 +253,7 @@ class KernelObjectListView(BaseStateView):
         return summary
 
     def _empty_message(self) -> str:
-        if not self.controller.scraper.has_kernel_objects():
+        if not self.controller.has_kernel_objects():
             return " No statically declared kernel objects in this build."
 
         return f" No {self.filter_name} objects."

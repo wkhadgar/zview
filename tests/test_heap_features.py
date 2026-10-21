@@ -34,6 +34,9 @@ def test_heap_warnings_and_polling(monkeypatch, tmp_path, fields_available, obje
     monkeypatch.setattr(ElfInspector, 'find_struct_instances', discover)
     elf = Path(__file__).parent / 'fixtures' / 'zephyr.elf'
     scraper = ZScraper(MagicMock(is_live=True, is_connected=True, watermark_cache={}), elf)
+    # The mock target holds no thread list to walk.
+    monkeypatch.setattr(scraper.groups['threads'], 'discover', lambda session: {})
+    scraper.discover()
 
     can_poll = bool(objects) and fields_available
     assert scraper.available['heaps'] == can_poll
@@ -47,9 +50,6 @@ def test_heap_warnings_and_polling(monkeypatch, tmp_path, fields_available, obje
     assert ('heaps' in scraper.active_features()) == can_poll
     assert ('heap_waiters' in scraper.active_features()) == can_poll
 
-    monkeypatch.setattr(scraper, '_read_usage_deltas', lambda: {})
-    monkeypatch.setattr(scraper, '_poll_threads', lambda deltas: [])
-    monkeypatch.setattr(scraper, '_finalize_threads', lambda threads, deltas: [])
     walked = []
     for group in scraper.groups.values():
         group.walk = lambda session, rows, key=group.key: walked.append(key) or {}

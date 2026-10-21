@@ -68,7 +68,7 @@ def _session(scraper, elf, layout, thread_names=None, *, walk_waiters=True) -> S
         elf,
         layout,
         waitq_flavor="simple" if walk_waiters else "scalable",
-        thread_names=thread_names or {},
+        rows={"threads": {name: [address] for address, name in (thread_names or {}).items()}},
     )
 
 

@@ -289,8 +289,7 @@ class ZView:
 
         try:
             self._reload_and_verify()
-            self.scraper.update_available_threads()
-            self.scraper.reset_thread_pool()
+            self.scraper.discover()
             self.scraper.reset_runtime_state()
             self.scraper.start_polling_thread(
                 self.data_queue, self.stop_event, self.scraper.inspection_period
@@ -389,6 +388,13 @@ class ZView:
 
         return rows
 
+    def has_kernel_objects(self) -> bool:
+        """True while a group the objects view reads is available, so it has rows to draw."""
+        return any(
+            available and _OBJECTS_VIEW.reads_group(key)
+            for key, available in self.scraper.available.items()
+        )
+
     def transition_to(self, new_state: ZViewState):
         """Centralized state transition and data pipeline management."""
         if new_state not in self.views:
@@ -410,15 +416,14 @@ class ZView:
                 if self.detailing_thread is None:
                     return
 
-                target_thread = self.scraper.all_threads.get(self.detailing_thread)
-                if target_thread is None:
+                if self.detailing_thread not in self.scraper.rows["threads"]:
                     return
 
                 if live:
                     # Every thread's cycles are still read, so the view names
                     # only the stack to scan.
                     self.scraper.view = Selection(
-                        groups=frozenset({"threads"}), include=(glob.escape(target_thread.name),)
+                        groups=frozenset({"threads"}), include=(glob.escape(self.detailing_thread),)
                     )
 
                 self.purge_queue()
@@ -494,7 +499,7 @@ class ZView:
 
             if len(threads_data):
                 # One idle thread per CPU, none of them listed.
-                idle = self.scraper.idle_thread_addresses
+                idle = self.scraper.groups["threads"].idle_addresses
                 self.threads_data = [t for t in threads_data if t.address not in idle]
             if len(heaps_data):
                 self.heaps_data = heaps_data
@@ -559,11 +564,10 @@ class ZView:
         self.report("Initializing...")
 
         try:
-            self.scraper.update_available_threads()
+            self.scraper.discover()
         except RuntimeError as e:
             self.report(f"Unable to update available threads [{e}]")
 
-        self.scraper.reset_thread_pool()
         self.scraper.start_polling_thread(self.data_queue, self.stop_event, inspection_period)
 
         while self.running:
