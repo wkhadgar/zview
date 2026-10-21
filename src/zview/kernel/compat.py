@@ -75,11 +75,20 @@ USAGE_STAMP_FIELDS: FieldTable = {
     "cpu_usage0": ((("_cpu", "usage0"),),),
 }
 
-# Metadata mirroring `kernel threads list`. Resolved individually.
-THREAD_META_FIELDS: FieldTable = {
+# Metadata mirroring `kernel threads list`, one table per member.
+THREAD_PRIORITY_FIELDS: FieldTable = {
     "thread_priority": ((("k_thread", "base"), ("_thread_base", "prio")),),
+}
+
+THREAD_STATE_FIELDS: FieldTable = {
     "thread_state": ((("k_thread", "base"), ("_thread_base", "thread_state")),),
+}
+
+THREAD_OPTIONS_FIELDS: FieldTable = {
     "thread_user_options": ((("k_thread", "base"), ("_thread_base", "user_options")),),
+}
+
+THREAD_ENTRY_FIELDS: FieldTable = {
     "thread_entry": (
         (("k_thread", "entry"), ("__thread_entry", "pEntry")),
         # Single-underscore struct name carried by some vendor trees.
@@ -127,21 +136,6 @@ def resolve_fields(elf: ElfInspector, fields: FieldTable) -> dict[str, int] | No
         if offset is None:
             return None
         resolved[name] = offset
-
-    return resolved
-
-
-def resolve_optional_fields(elf: ElfInspector, fields: FieldTable) -> dict[str, int]:
-    """
-    Resolve the members of a group this ELF has, skipping the rest.
-
-    For groups whose fields are independent, such as the thread metadata.
-    """
-    resolved: dict[str, int] = {}
-    for name, candidates in fields.items():
-        offset = resolve_offset(elf, candidates)
-        if offset is not None:
-            resolved[name] = offset
 
     return resolved
 

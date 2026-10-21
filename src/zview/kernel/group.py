@@ -15,13 +15,14 @@ class Group(ABC):
     """
     A kind of kernel object a frame reads, declared in its own module.
 
-    ``key`` names it in a frame, a recording's features and a selection. The
-    group is read only when every ``required`` table resolves, and each
-    ``optional`` table resolves field by field. Each of its ``parts`` turns on
-    some of its reads: on live, on in a replay only when the recording names
-    it, as it does every part that was on. ``discover`` finds its rows once per
-    ELF, and ``walk`` reads them every frame as ``{label: row}``. One instance
-    lives per ELF load, so what a group keeps across frames is its own.
+    ``key`` names it in a frame, a recording's features and a selection. A
+    table resolves all of its fields or none: the group is read only when every
+    ``required`` table resolves, and each ``optional`` one resolves on its own,
+    so independent fields go in tables of their own. Each of its ``parts``
+    turns on some of its reads: on live, on in a replay only when the recording
+    names it, as it does every part that was on. ``discover`` finds its rows
+    once per ELF, and ``walk`` reads them every frame as ``{label: row}``. One
+    instance lives per ELF load, so what a group keeps across frames is its own.
     """
 
     key: ClassVar[str]

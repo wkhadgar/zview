@@ -247,20 +247,15 @@ def test_thread_entry_accepts_either_struct_spelling():
     single = FakeElf({("k_thread", "entry"): 112, ("_thread_entry", "pEntry"): 0})
 
     for elf in (double, single):
-        assert compat.resolve_optional_fields(elf, compat.THREAD_META_FIELDS) == {
-            "thread_entry": 112
-        }
+        assert compat.resolve_fields(elf, compat.THREAD_ENTRY_FIELDS) == {"thread_entry": 112}
 
 
-def test_resolve_optional_fields_keeps_what_it_finds():
+def test_each_metadata_member_resolves_on_its_own():
     """Metadata members resolve independently of each other."""
     elf = FakeElf({("k_thread", "base"): 0, ("_thread_base", "prio"): 14})
 
-    assert compat.resolve_optional_fields(elf, compat.THREAD_META_FIELDS) == {"thread_priority": 14}
-
-
-def test_resolve_optional_fields_of_nothing():
-    assert compat.resolve_optional_fields(FakeElf({}), compat.THREAD_META_FIELDS) == {}
+    assert compat.resolve_fields(elf, compat.THREAD_PRIORITY_FIELDS) == {"thread_priority": 14}
+    assert compat.resolve_fields(elf, compat.THREAD_STATE_FIELDS) is None
 
 
 def test_the_group_registry_is_coherent():

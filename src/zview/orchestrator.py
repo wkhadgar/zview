@@ -133,12 +133,17 @@ class ZScraper:
             for found in (t for t in required if t is not None):
                 fields.update(found)
             for table in group.optional:
-                fields.update(compat.resolve_optional_fields(elf, table))
+                fields.update(compat.resolve_fields(elf, table) or {})
 
-        # Metadata members and the qnode link resolve independently.
-        fields.update(compat.resolve_optional_fields(elf, compat.THREAD_META_FIELDS))
-        fields.update(compat.resolve_optional_fields(elf, compat.THREAD_QNODE_FIELDS))
-        fields.update(compat.resolve_fields(elf, compat.USAGE_STAMP_FIELDS) or {})
+        for table in (
+            compat.THREAD_PRIORITY_FIELDS,
+            compat.THREAD_STATE_FIELDS,
+            compat.THREAD_OPTIONS_FIELDS,
+            compat.THREAD_ENTRY_FIELDS,
+            compat.THREAD_QNODE_FIELDS,
+            compat.USAGE_STAMP_FIELDS,
+        ):
+            fields.update(compat.resolve_fields(elf, table) or {})
 
         return KernelLayout(**fields)
 
