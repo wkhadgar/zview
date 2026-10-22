@@ -8,6 +8,11 @@ from dataclasses import dataclass
 from fnmatch import fnmatchcase
 
 
+def _shown(scope: str | None, glob: str) -> str:
+    """A pattern as the flags write it."""
+    return glob if scope is None else f"{scope}:{glob}"
+
+
 @dataclass(frozen=True)
 class Selection:
     """
@@ -39,6 +44,34 @@ class Selection:
         return not any(
             fnmatchcase(name, pattern) for scope, pattern in self.exclude if scope in (None, group)
         )
+
+    def unmatched(self, names: dict[str, list[str]]) -> tuple[str, ...]:
+        """
+        One notice per pattern or muted row that names no row in ``names``,
+        each group's row names, among the groups this selection reads.
+        """
+        read = {group: rows for group, rows in names.items() if self.reads_group(group)}
+
+        def matches(scope: str | None, glob: str) -> bool:
+            return any(
+                fnmatchcase(name, glob)
+                for group, rows in read.items()
+                if scope in (None, group)
+                for name in rows
+            )
+
+        notices = [
+            f"Warning: {word} pattern {_shown(scope, glob)} matches no row"
+            for word, patterns in (("include", self.include), ("exclude", self.exclude))
+            for scope, glob in patterns
+            if not matches(scope, glob)
+        ]
+        notices += [
+            f"Warning: muted row {group}:{name} matches no row"
+            for group, name in sorted(self.muted)
+            if name not in read.get(group, ())
+        ]
+        return tuple(notices)
 
     def to_header(self) -> dict:
         """This selection as a recording header holds it."""

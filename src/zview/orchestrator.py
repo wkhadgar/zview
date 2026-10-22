@@ -173,6 +173,16 @@ class ZScraper:
             named, known = ", ".join(sorted(unknown)), ", ".join(self.groups)
             raise ValueError(f"Unknown group {named}; choose from {known}.")
 
+    def unmatched(self, selection: Selection) -> tuple[str, ...]:
+        """One notice per pattern of ``selection`` that names no discovered row."""
+        return selection.unmatched(
+            {
+                key: [label for label, _ in label_instances(self.rows[key])]
+                for key in self.groups
+                if self.available[key]
+            }
+        )
+
     def _reads_group(self, group: str) -> bool:
         """Both the session's selection and the view's read ``group``."""
         return self.selection.reads_group(group) and self.view.reads_group(group)

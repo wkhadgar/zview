@@ -6,6 +6,7 @@
 
 import dataclasses
 import queue
+import sys
 import threading
 import time
 
@@ -57,6 +58,8 @@ def dump_single_frame(
         if backend.is_live:
             scraper.selection = selection
         scraper.discover()
+        for notice in scraper.unmatched(selection):
+            print(notice, file=sys.stderr)
         data_queue: queue.Queue = queue.Queue()
         stop = threading.Event()
         scraper.start_polling_thread(data_queue, stop, period)
@@ -122,6 +125,8 @@ def record_session(
 
     with recorder:
         scraper.discover()
+        for notice in scraper.unmatched(scraper.selection):
+            print(notice, file=sys.stderr)
         scraper.capture_all()
 
         data_queue: queue.Queue = queue.Queue()
