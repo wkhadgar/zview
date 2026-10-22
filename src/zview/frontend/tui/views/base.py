@@ -69,13 +69,14 @@ class SpecialCode:
     INVERSE = ord("i")
     ESCAPE = 27
     KERNEL_OBJECTS = ord("k")
-    FILTER = ord("f")
     REFRESH = ord("r")
     RECONNECT = ord("R")
     HELP = ord("?")
     MESSAGES = ord("m")
     MUTE = ord("x")
     PATTERNS = ord("/")
+    GROUPS = ord("g")
+    SPACE = ord(" ")
     BACKSPACE = ord("\b")
     DELETE = 127
 
@@ -156,13 +157,22 @@ class BaseStateView:
         """Called as another view replaces it on a live target."""
 
     def _bar_count(self, count: str, room: int) -> str:
-        """``count``, then the patterns and the rows muted in this view, cut to ``room`` columns."""
+        """
+        ``count``, then the groups off, the patterns and the rows muted in this
+        view, cut to ``room`` columns.
+        """
         selection = self.controller.selection
         reads = self.reads()
+        off = [
+            group
+            for group, available in self.controller.scraper.available.items()
+            if available and reads.reads_group(group) and not selection.reads_group(group)
+        ]
         muted = sum(1 for group, _ in selection.muted if reads.reads_group(group))
         notes = [
             note
             for shown, note in (
+                (off, f"Off: {', '.join(off)}"),
                 (selection.include or selection.exclude, f"Patterns: {selection.pattern_line()}"),
                 (muted, f"{muted} muted"),
             )

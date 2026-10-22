@@ -42,6 +42,7 @@ _GLOBAL_KEYBINDINGS: list[Keybind] = [
     Keybind("?", "Help", "Toggle this help overlay"),
     Keybind("m", "Messages", "Toggle the message log"),
     Keybind("/", "Patterns", "Edit the row patterns: GLOB, GROUP:GLOB, !GLOB, comma separated"),
+    Keybind("g", "Groups", "Pick the groups read"),
     Keybind("R", "Reload", "Re-parse the ELF and reattach the probe (full cycle)"),
     Keybind("q", "Quit", "Exit ZView"),
 ]
@@ -124,8 +125,10 @@ class ZView:
         self.detailing: tuple[str, int] | None = None
         # Wait queues are walkable only in the dlist (simple) flavor.
         self.waiters_unknown: bool = scraper.waitq_flavor != "simple"
-        # Name of the open overlay ("help" or "messages"), or None.
+        # Name of the open overlay ("help", "messages" or "groups"), or None.
         self._overlay: str | None = None
+        # The row of the groups popup under its cursor.
+        self._group_cursor = 0
         # The pattern line being edited, or None.
         self._prompt: TUILineEdit | None = None
 
@@ -147,6 +150,13 @@ class ZView:
         # Keys carry their own color: the frame and the headings are already
         # cyan, and the key is what the reader is looking for.
         self._help_popup = TUIPopup(" Help ", theme.ACTIVE, theme.PROGRESS_BAR_LOW, levels)
+        self._groups_popup = TUIPopup(
+            " Groups ",
+            theme.ACTIVE,
+            theme.PROGRESS_BAR_LOW,
+            {"info": theme.INACTIVE, "cursor": theme.CURSOR},
+            hint=" Space: toggle | Esc: close ",
+        )
 
         self.views: dict[ZViewState, BaseStateView] = {
             ZViewState.FATAL_ERROR: FatalErrorView(self, theme),
@@ -350,11 +360,41 @@ class ZView:
             self.stdscr.refresh()
 
     def _draw_overlay(self, height: int, width: int) -> None:
-        if self._overlay == "messages":
-            self._log_popup.draw(self.stdscr, height, width, self._message_rows())
-            return
+        popup, rows = {
+            "messages": (self._log_popup, self._message_rows),
+            "groups": (self._groups_popup, self._group_rows),
+            "help": (self._help_popup, self._help_rows),
+        }[self._overlay]
+        popup.draw(self.stdscr, height, width, rows())
 
-        self._help_popup.draw(self.stdscr, height, width, self._help_rows())
+    def _listed_groups(self) -> list[str]:
+        """The groups the session can read, in the order a frame reads them."""
+        return [key for key, available in self.scraper.available.items() if available]
+
+    def _group_rows(self) -> list[PopupRow]:
+        """One checkbox per group, the one under the cursor marked."""
+        return [PopupRow("Select to read", heading=True)] + [
+            PopupRow(
+                "[x]" if self.selection.reads_group(key) else "[ ]",
+                key,
+                "cursor" if row == self._group_cursor else "info",
+            )
+            for row, key in enumerate(self._listed_groups())
+        ]
+
+    def _pick_group(self, key: int) -> None:
+        """Move through the groups popup, toggle the group under its cursor, or close it."""
+        groups = self._listed_groups()
+        match key:
+            case curses.KEY_UP:
+                self._group_cursor = max(0, self._group_cursor - 1)
+            case curses.KEY_DOWN:
+                self._group_cursor = min(len(groups) - 1, self._group_cursor + 1)
+            case SpecialCode.SPACE if groups:
+                self.toggle_group(groups[self._group_cursor])
+            case SpecialCode.ESCAPE | SpecialCode.GROUPS:
+                self._overlay = None
+                self.stdscr.clear()
 
     def _message_rows(self) -> list[PopupRow]:
         """The log, oldest first."""
@@ -387,6 +427,15 @@ class ZView:
         muted = self.selection.muted ^ {(group, name)}
         self.select(dataclasses.replace(self.selection, muted=muted))
 
+    def toggle_group(self, group: str) -> None:
+        """Read the group, or stop reading it if it is read."""
+        on = {key for key in self.scraper.groups if self.selection.reads_group(key)} ^ {group}
+        self.select(
+            dataclasses.replace(
+                self.selection, groups=frozenset(on), skipped=self.selection.skipped - {group}
+            )
+        )
+
     def _edit_prompt(self, key: int) -> None:
         """Type into the pattern line: Enter selects it, Esc drops it."""
         match key:
@@ -416,7 +465,7 @@ class ZView:
         return any(
             available
             and KernelObjectListView.OBJECTS.reads_group(key)
-            and self.scraper.selection.reads_group(key)
+            and self.selection.reads_group(key)
             for key, available in self.scraper.available.items()
         )
 
@@ -455,6 +504,10 @@ class ZView:
             self._edit_prompt(key)
             return
 
+        if self._overlay == "groups":
+            self._pick_group(key)
+            return
+
         if self._overlay:
             self._overlay = None
             self.stdscr.clear()
@@ -474,6 +527,10 @@ class ZView:
 
         if key == SpecialCode.PATTERNS:
             self._prompt = TUILineEdit(self.selection.pattern_line())
+            return
+
+        if key == SpecialCode.GROUPS:
+            self._overlay = "groups"
             return
 
         new_state = self.views[self.state].handle_input(key)

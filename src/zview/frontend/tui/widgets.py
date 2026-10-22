@@ -237,12 +237,14 @@ class TUIPopup:
         label_attr: int,
         level_attrs: dict[str, int],
         keep_tail: bool = False,
+        hint: str = " Press any key to dismiss ",
     ):
         self._title = title
         self._frame_attr = frame_attr
         self._label_attr = label_attr
         self._level_attrs = level_attrs
         self._keep_tail = keep_tail
+        self._hint = hint
 
     def _wrap(self, rows: list[PopupRow], text_room: int) -> list[PopupRow]:
         """
@@ -295,9 +297,7 @@ class TUIPopup:
             with contextlib.suppress(curses.error):
                 stdscr.addstr(y0 + row_offset, x0, blank)
 
-        TUIBox(self._title, " Press any key to dismiss ", self._frame_attr).draw(
-            stdscr, y0, x0, box_h, box_w
-        )
+        TUIBox(self._title, self._hint, self._frame_attr).draw(stdscr, y0, x0, box_h, box_w)
 
         inner_w = box_w - self._PADDING_COLS
         for i, row in enumerate(rows):
