@@ -17,6 +17,7 @@ from zview.backend.image import ImageMismatch
 from zview.frames import Fatal, Frame, FrameHistory, Notice, ReplayEnd
 from zview.frontend import zview_tui
 from zview.frontend.tui.views.base import ZViewState
+from zview.frontend.tui.views.thread_detail import ThreadDetailView
 from zview.frontend.tui.views.thread_list import listed_threads
 from zview.frontend.zview_tui import ZView
 
@@ -107,7 +108,10 @@ def test_process_data_strips_every_idle_thread(app):
 
 def test_a_thread_detail_scans_only_the_detailed_threads_stack(app):
     """The idle thread's cycles are read with every other thread's, so the view names only it."""
-    app.views = {ZViewState.THREAD_DETAIL_VIEW: MagicMock()}
+    app.views = {
+        ZViewState.THREAD_LIST_VIEW: MagicMock(),
+        ZViewState.THREAD_DETAIL_VIEW: ThreadDetailView(app, MagicMock()),
+    }
     app.detailing_thread = "main[0]"
     app.scraper.rows = {"threads": {"main[0]": [0x1000]}}
     app.scraper._m_scraper.is_live = True

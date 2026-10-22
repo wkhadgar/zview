@@ -9,6 +9,8 @@ from abc import abstractmethod
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 
+from zview.selection import Selection
+
 
 class Keybind(NamedTuple):
     """One keybinding entry; ``label`` is footer-sized, ``help_text`` is overlay-sized."""
@@ -78,13 +80,8 @@ class ZViewState(enum.Enum):
     FATAL_ERROR = 1
     THREAD_LIST_VIEW = 2
     THREAD_DETAIL_VIEW = 3
-    HEAPS_DETAIL_VIEW = 5
     KERNEL_OBJECT_LIST_VIEW = 6
-    MUTEX_DETAIL_VIEW = 7
-    SEMAPHORE_DETAIL_VIEW = 8
-    MSGQ_DETAIL_VIEW = 9
-    MEM_SLAB_DETAIL_VIEW = 10
-    WORKQ_DETAIL_VIEW = 11
+    OBJECT_DETAIL_VIEW = 7
 
 
 class BaseStateView:
@@ -140,6 +137,19 @@ class BaseStateView:
     def keybindings(self) -> list[Keybind]:
         """View-specific bindings, ordered most-important first."""
         return []
+
+    def reads(self) -> Selection:
+        """What the view needs read from a live target, within the session's selection."""
+        return Selection()
+
+    def can_open(self) -> bool:
+        return True
+
+    def opened(self) -> None:  # noqa: B027
+        """Called as the view opens on a live target."""
+
+    def closed(self) -> None:  # noqa: B027
+        """Called as another view replaces it on a live target."""
 
     def _footer_hint(self) -> str:
         """View bindings (up to ``_MAX_FOOTER_HINTS``, ``...`` if truncated) + ``Help: ?``."""

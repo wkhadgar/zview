@@ -12,25 +12,10 @@ from zview.frontend.tui.views.base import (
     ZViewState,
     ZViewTUIAttributes,
 )
-from zview.frontend.tui.widgets import (
-    HEAP,
-    MEM_SLAB,
-    MSGQ,
-    MUTEX,
-    SEMAPHORE,
-    WORKQ,
-    TUIKernelObjectInfo,
-)
-
-__all__ = [
-    "HEAP",
-    "MEM_SLAB",
-    "MSGQ",
-    "MUTEX",
-    "SEMAPHORE",
-    "WORKQ",
-    "KernelObjectListView",
-]
+from zview.frontend.tui.widgets import TUIKernelObjectInfo
+from zview.kinds import KINDS
+from zview.kinds.kind import Kind, Level
+from zview.selection import Selection
 
 
 class KernelObjectListView(BaseStateView):
@@ -51,24 +36,10 @@ class KernelObjectListView(BaseStateView):
     COLUMNS: list[str] = list(SCHEMA.keys())
     _BAR_COLUMN = 2
 
-    _FILTERS = ("ALL", SEMAPHORE, MUTEX, MSGQ, HEAP, MEM_SLAB, WORKQ)
-    # The aggregate row sums the filtered rows, so it is labelled by the filter.
-    _AGGREGATE_LABELS = {
-        "ALL": "All Objects",
-        SEMAPHORE: "All Semaphores",
-        MUTEX: "All Mutexes",
-        MSGQ: "All Queues",
-        HEAP: "All Heaps",
-        MEM_SLAB: "All Slabs",
-        WORKQ: "All Work Queues",
-    }
-    # An allocator out of room is exhausted, and a work queue turning work away
-    # is refusing, not contended.
-    _PRESSURE_WORDS = {
-        HEAP: "exhausted",
-        MEM_SLAB: "exhausted",
-        WORKQ: "refusing",
-    }
+    # Every group but the threads, which the thread views show.
+    OBJECTS = Selection(skipped=frozenset({"threads"}))
+    # The aggregate row sums the filtered rows, so it is titled by the filter.
+    _ALL_TITLE = "All Objects"
     _MAX_NAME = 34
     _MAX_LISTED_WAITERS = 3
     _UNKNOWN = "?"
@@ -77,6 +48,9 @@ class KernelObjectListView(BaseStateView):
         super().__init__(controller, theme)
 
         self.top_line: int = 0
+        # The kinds this view lists, and its filters: all of them, then each.
+        self._kinds = tuple(kind for kind in KINDS if self.OBJECTS.reads_group(kind.key))
+        self._filters: tuple[Kind | None, ...] = (None, *self._kinds)
         self._filter_idx: int = 0
         self._current_sort_idx: int = 0
         self._invert_sorting: bool = False
@@ -89,7 +63,7 @@ class KernelObjectListView(BaseStateView):
         # Type first by default, with the name as tiebreak so each group is
         # alphabetical.
         self._sort_keys = [
-            lambda row: (row[0], row[1].name),
+            lambda row: (row[0].label, row[1].name),
             lambda row: row[1].name,
             lambda row: len(row[1].waiters or ()),
             # Whatever its bar counts: a count, a depth, blocks or bytes.
@@ -98,26 +72,26 @@ class KernelObjectListView(BaseStateView):
         # Column each sort key orders by, for the header indicator.
         self._sort_columns = (0, 1, 3, 2)
 
+    def reads(self) -> Selection:
+        return self.OBJECTS
+
+    @property
+    def _filter(self) -> Kind | None:
+        """The kind the table is filtered to, or ``None`` for all of them."""
+        return self._filters[self._filter_idx]
+
     @property
     def filter_name(self) -> str:
-        return self._FILTERS[self._filter_idx]
+        return "ALL" if self._filter is None else self._filter.label
 
-    def _shows(self, kind: str) -> bool:
-        return self.filter_name in ("ALL", kind)
-
-    def _rows(self) -> list[tuple[str, Any]]:
+    def _rows(self) -> list[tuple[Kind, Any]]:
         """Typed, filtered and sorted rows backing the table."""
-        rows: list[tuple[str, Any]] = []
-        for kind, key in (
-            (SEMAPHORE, "semaphores"),
-            (MUTEX, "mutexes"),
-            (MSGQ, "msgqs"),
-            (MEM_SLAB, "mem_slabs"),
-            (HEAP, "heaps"),
-            (WORKQ, "workqs"),
-        ):
-            if self._shows(kind):
-                rows += [(kind, obj) for obj in self.controller.frames.latest(key)]
+        rows = [
+            (kind, obj)
+            for kind in self._kinds
+            if self._filter in (None, kind)
+            for obj in self.controller.frames.latest(kind.key)
+        ]
 
         return sorted(
             rows, key=self._sort_keys[self._current_sort_idx], reverse=self._invert_sorting
@@ -166,7 +140,7 @@ class KernelObjectListView(BaseStateView):
             2,
             0,
             self.filter_name,
-            f"{self._AGGREGATE_LABELS[self.filter_name]:^{widths[1]}}",
+            f"{self._ALL_TITLE if self._filter is None else self._filter.title:^{widths[1]}}",
             *self._aggregate(pairs),
             0,
         )
@@ -202,12 +176,12 @@ class KernelObjectListView(BaseStateView):
         self._render_status(stdscr, width, height - 2)
         stdscr.refresh()
 
-    def _aggregate(self, rows: list[tuple[str, Any]]) -> tuple[float, str, str]:
+    def _aggregate(self, rows: list[tuple[Kind, Any]]) -> tuple[float, str, str]:
         """``(bar percentage, bar label, waiters cell)`` for the aggregate row."""
         pressured = sum(
             1
             for kind, obj in rows
-            if obj.waiters or self._is_in_use(kind, obj) or self._is_contended(kind, obj)
+            if obj.waiters or kind.in_use(obj) or self._is_blocked(kind, obj)
         )
         fill = (pressured / len(rows) * 100.0) if rows else 0.0
 
@@ -217,34 +191,15 @@ class KernelObjectListView(BaseStateView):
 
         return fill, self._summary(rows).strip(), cell
 
-    def _is_in_use(self, kind: str, obj: Any) -> bool:
-        """A held mutex, or a work queue running a handler or holding work."""
-        if kind == MUTEX:
-            return obj.is_locked
-        if kind == WORKQ:
-            return obj.is_busy or bool(obj.depth)
+    @staticmethod
+    def _is_blocked(kind: Kind, obj: Any) -> bool:
+        return kind.state(obj).level is Level.BLOCKED
 
-        return False
-
-    def _is_contended(self, kind: str, obj: Any) -> bool:
-        """
-        A mutex held with threads queued on it, a full queue, an allocator out of
-        room, or a work queue refusing submissions.
-        """
-        if kind == MUTEX:
-            return bool(obj.is_locked and obj.waiters)
-        if kind == MSGQ:
-            return obj.is_full
-        if kind == WORKQ:
-            return obj.is_plugged or obj.is_draining
-
-        return kind in (MEM_SLAB, HEAP) and obj.is_exhausted
-
-    def _summary(self, rows: list[tuple[str, Any]]) -> str:
-        contended = sum(1 for kind, obj in rows if self._is_contended(kind, obj))
+    def _summary(self, rows: list[tuple[Kind, Any]]) -> str:
+        contended = sum(1 for kind, obj in rows if self._is_blocked(kind, obj))
         queued = sum(1 for _, obj in rows if obj.waiters)
 
-        word = self._PRESSURE_WORDS.get(self.filter_name, "contended")
+        word = "contended" if self._filter is None else self._filter.pressure
         summary = f" {len(rows)} objects | {contended} {word} | {queued} with waiters"
         if self.controller.waiters_unknown:
             # Stated once here instead of per row.
@@ -261,7 +216,11 @@ class KernelObjectListView(BaseStateView):
     def keybindings(self) -> list[Keybind]:
         return [
             Keybind("<Enter>", "Detail", "Open detail view for the selected object"),
-            Keybind("f", "Filter", "Cycle the type filter (ALL, SEM, MTX, MSG, HEP, SLB, WKQ)"),
+            Keybind(
+                "f",
+                "Filter",
+                f"Cycle the type filter ({', '.join(['ALL', *(k.label for k in self._kinds)])})",
+            ),
             Keybind("k", "Threads", "Switch back to the threads view"),
             Keybind("s", "Sort", "Cycle through sort keys"),
             Keybind("i", "Invert", "Reverse the current sort order"),
@@ -279,31 +238,11 @@ class KernelObjectListView(BaseStateView):
                     return None
 
                 kind, obj = rows[max(min(self.cursor, len(rows) - 1), 0)]
-                if kind == MUTEX:
-                    self.controller.detailing_mutex_address = obj.address
-                    return ZViewState.MUTEX_DETAIL_VIEW
-
-                if kind == MSGQ:
-                    self.controller.detailing_msgq_address = obj.address
-                    return ZViewState.MSGQ_DETAIL_VIEW
-
-                if kind == MEM_SLAB:
-                    self.controller.detailing_mem_slab_address = obj.address
-                    return ZViewState.MEM_SLAB_DETAIL_VIEW
-
-                if kind == HEAP:
-                    self.controller.detailing_heap_address = obj.address
-                    return ZViewState.HEAPS_DETAIL_VIEW
-
-                if kind == WORKQ:
-                    self.controller.detailing_workq_address = obj.address
-                    return ZViewState.WORKQ_DETAIL_VIEW
-
-                self.controller.detailing_semaphore_address = obj.address
-                return ZViewState.SEMAPHORE_DETAIL_VIEW
+                self.controller.detailing = (kind.key, obj.address)
+                return ZViewState.OBJECT_DETAIL_VIEW
 
             case SpecialCode.FILTER:
-                self._filter_idx = (self._filter_idx + 1) % len(self._FILTERS)
+                self._filter_idx = (self._filter_idx + 1) % len(self._filters)
                 self.cursor = 0
                 self.top_line = 0
 

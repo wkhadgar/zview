@@ -15,6 +15,7 @@ from zview.backend.nrfutil import NrfutilScraper
 from zview.backend.pyocd import PyOCDScraper
 from zview.backend.replay import ReplayScraper
 from zview.frontend.zview_tui import tui_run
+from zview.kinds import KINDS
 from zview.logging_setup import configure as configure_logging
 from zview.orchestrator import ZScraper
 from zview.runner_config import BuildDirError, RunnerConfig, find_elf, image_dir, runners_yaml_path
@@ -353,14 +354,6 @@ def _do_replay(args) -> int:
     return 0
 
 
-def _waiters(waiters) -> str:
-    """Render a waiter list. ``None`` prints as ``unknown``, empty as ``-``."""
-    if waiters is None:
-        return "unknown"
-
-    return ",".join(waiters) if waiters else "-"
-
-
 def _do_dump(args) -> int:
     if args.input:
         backend = ReplayScraper(args.input, honor_timing=False)
@@ -376,53 +369,9 @@ def _do_dump(args) -> int:
     if args.json:
         print(json.dumps(serialize_frame(frame)))
     else:
-        for t in frame.get("threads", []):
-            wm = getattr(t.runtime, "stack_watermark", None)
-            wm = "-" if wm is None else wm
-            size = "-" if t.stack_size is None else t.stack_size
-            print(f"thread {t.name:30s} stack={size:>6}  watermark={wm}")
-        for h in frame.get("heaps", []):
-            print(
-                f"heap {h.name:20s} free={h.free_bytes} "
-                f"alloc={h.allocated_bytes} max={h.max_allocated_bytes} "
-                f"waiters={_waiters(h.waiters)}"
-            )
-        for s in frame.get("semaphores", []):
-            # First match wins.
-            level = next(
-                text
-                for applies, text in (
-                    (not s.is_initialized, "not initialized"),
-                    (s.is_unbounded, f"{s.count}/-"),
-                    (True, f"{s.count}/{s.limit}"),
-                )
-                if applies
-            )
-            print(f"sem  {s.name:20s} {level}  waiters={_waiters(s.waiters)}")
-        for m in frame.get("mutexes", []):
-            state = f"owner={m.owner_name or hex(m.owner_address)} depth={m.lock_count}"
-            print(
-                f"mtx  {m.name:20s} {'LOCKED' if m.is_locked else 'FREE':6s} {state} "
-                f"waiters={_waiters(m.waiters)}"
-            )
-        for q in frame.get("msgqs", []):
-            print(
-                f"msgq {q.name:20s} {q.used_msgs}/{q.max_msgs} x {q.msg_size}B "
-                f"waiters={_waiters(q.waiters)}"
-            )
-        for sl in frame.get("mem_slabs", []):
-            peak = "-" if sl.max_used is None else sl.max_used
-            print(
-                f"slab {sl.name:20s} {sl.num_used}/{sl.num_blocks} x {sl.block_size}B "
-                f"peak={peak} waiters={_waiters(sl.waiters)}"
-            )
-        for w in frame.get("workqs", []):
-            items = ",".join(w.pending) + (",..." if w.pending_truncated else "")
-            print(
-                f"wkq  {w.name:20s} {w.depth} pending flags={','.join(w.states) or '-'} "
-                f"thread={w.thread_name or '-'} items={items or '-'} "
-                f"waiters={_waiters(w.waiters)}"
-            )
+        for kind in KINDS:
+            for info in frame.get(kind.key, []):
+                print(kind.dump(info))
     return 0
 
 

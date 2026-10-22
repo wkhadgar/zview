@@ -7,7 +7,8 @@ import curses
 from zview.backend.base import HeapInfo
 from zview.frontend.tui.views.base import Any, ZViewTUIAttributes
 from zview.frontend.tui.views.kernel_object_detail import KernelObjectDetailView, Panels
-from zview.frontend.tui.widgets import HEAP, TUIBox
+from zview.frontend.tui.widgets import TUIBox
+from zview.kinds import BY_KEY
 
 
 class HeapDetailView(KernelObjectDetailView):
@@ -18,6 +19,7 @@ class HeapDetailView(KernelObjectDetailView):
     much of the bytes it covers are in use.
     """
 
+    kind = BY_KEY["heaps"]
     _INFO_TITLES = (("Location", 2), ("Free", 1), ("Used", 1))
     _MAP_ROW = KernelObjectDetailView._INFO_ROW + KernelObjectDetailView._INFO_BOX_HEIGHT
     _UNCAPTURED = "chunk map not captured for this frame"
@@ -26,14 +28,13 @@ class HeapDetailView(KernelObjectDetailView):
         super().__init__(controller, theme)
         self._map_title = "Fragmentation map"
 
-    def _target(self) -> HeapInfo | None:
-        address = self.controller.detailing_heap_address
-        if address is None:
-            return None
+    def opened(self) -> None:
+        # The detailed heap's chunk map is read while its view is open.
+        _, address = self.controller.detailing
+        self.controller.scraper.groups["heaps"].detailed = address
 
-        return next(
-            (h for h in self.controller.frames.latest("heaps") if h.address == address), None
-        )
+    def closed(self) -> None:
+        self.controller.scraper.groups["heaps"].detailed = None
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()
@@ -46,7 +47,7 @@ class HeapDetailView(KernelObjectDetailView):
             stdscr.refresh()
             return
 
-        self._draw_title(stdscr, width, HEAP, heap)
+        self._draw_title(stdscr, width, heap)
         self._draw_info_boxes(
             stdscr,
             self._INFO_ROW,

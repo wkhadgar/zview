@@ -7,7 +7,8 @@ import curses
 from zview.backend.base import WorkqInfo
 from zview.frontend.tui.views.base import Any, ZViewTUIAttributes
 from zview.frontend.tui.views.kernel_object_detail import KernelObjectDetailView, Panels
-from zview.frontend.tui.widgets import WORKQ, TUIGraph, TUIWaitQueue
+from zview.frontend.tui.widgets import TUIGraph, TUIWaitQueue
+from zview.kinds import BY_KEY
 
 
 class WorkqDetailView(KernelObjectDetailView):
@@ -16,6 +17,7 @@ class WorkqDetailView(KernelObjectDetailView):
     backlog graph, the items waiting to run and the threads draining it.
     """
 
+    kind = BY_KEY["workqs"]
     # The title row already carries busy or idle, the backlog and the drain
     # waiters, so the boxes add what it cannot show.
     _INFO_TITLES = (("Location", 2), ("Thread", 1), ("Flags", 1))
@@ -31,15 +33,6 @@ class WorkqDetailView(KernelObjectDetailView):
         self._pending = TUIWaitQueue(theme.INACTIVE, "Pending")
         self._draining = TUIWaitQueue(theme.INACTIVE, "Drain waiters")
 
-    def _target(self) -> WorkqInfo | None:
-        address = self.controller.detailing_workq_address
-        if address is None:
-            return None
-
-        return next(
-            (q for q in self.controller.frames.latest("workqs") if q.address == address), None
-        )
-
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()
         self._render_frame(stdscr, self._footer_hint(), height, width)
@@ -53,7 +46,7 @@ class WorkqDetailView(KernelObjectDetailView):
             stdscr.refresh()
             return
 
-        self._draw_title(stdscr, width, WORKQ, workq)
+        self._draw_title(stdscr, width, workq)
         self._draw_info_boxes(
             stdscr,
             self._INFO_ROW,
@@ -80,7 +73,7 @@ class WorkqDetailView(KernelObjectDetailView):
             "Backlog",
             f"0 to {deepest} pending",
             (0, deepest),
-            self._info.row_values(WORKQ, workq)[3],
+            self._info.row_values(self.kind, workq)[3],
         )
         graph.draw(stdscr, self._GRAPH_ROW, 0, graph_height, width, points=history)
 
