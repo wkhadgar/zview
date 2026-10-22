@@ -4,6 +4,7 @@
 
 import contextlib
 import curses
+import dataclasses
 import io
 import queue
 import threading
@@ -35,6 +36,7 @@ from zview.frontend.tui.views.thread_list import ThreadListView
 from zview.frontend.tui.views.workq_detail import WorkqDetailView
 from zview.frontend.tui.widgets import PopupRow, TUIPopup
 from zview.orchestrator import ZScraper
+from zview.selection import Selection
 
 _GLOBAL_KEYBINDINGS: list[Keybind] = [
     Keybind("?", "Help", "Toggle this help overlay"),
@@ -105,6 +107,8 @@ class ZView:
         self.scraper: ZScraper = scraper
         self.running = True
         self.frames = FrameHistory()
+        # What the lists show: the session's selection, then what the keys change.
+        self.selection: Selection = scraper.selection
         self.status_message: str = ""
         # One entry per reported message, newest last.
         self.messages: deque[LogEntry] = deque(maxlen=_MESSAGE_LOG_SIZE)
@@ -264,6 +268,8 @@ class ZView:
         self.purge_queue()
         # A rebuilt ELF can reassign the addresses the rows are kept by.
         self.frames = FrameHistory()
+        # A muted row has no last info left to show, so it is read again.
+        self.select(dataclasses.replace(self.selection, muted=frozenset()))
 
         self.stop_event.clear()
 
@@ -360,6 +366,17 @@ class ZView:
 
         return rows
 
+    def select(self, selection: Selection) -> None:
+        """Show what ``selection`` reads, and read only that from a live target."""
+        self.selection = selection
+        if self.scraper._m_scraper.is_live:
+            self.scraper.selection = selection
+
+    def toggle_mute(self, group: str, name: str) -> None:
+        """Mute the row, or unmute it if it is muted."""
+        muted = self.selection.muted ^ {(group, name)}
+        self.select(dataclasses.replace(self.selection, muted=muted))
+
     def has_kernel_objects(self) -> bool:
         """True while a group the objects view and the selection read is available."""
         return any(
@@ -433,7 +450,8 @@ class ZView:
             case Frame():
                 self.status_message = f"Running{'.' * (self.update_count % 4)}"
                 self.update_count += 1
-                self.frames.add(data)
+                # A replay's frame holds the muted rows too.
+                self.frames.add(data, muted=self.selection.muted)
 
     def run(self, inspection_period):
         """

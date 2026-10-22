@@ -20,6 +20,7 @@ from zview.frontend.tui.views.base import ZViewState
 from zview.frontend.tui.views.thread_detail import ThreadDetailView
 from zview.frontend.tui.views.thread_list import listed_threads
 from zview.frontend.zview_tui import ZView
+from zview.selection import Selection
 
 
 @pytest.fixture
@@ -27,6 +28,7 @@ def app() -> ZView:
     """``ZView`` instance without going through curses init."""
     a = ZView.__new__(ZView)
     a.frames = FrameHistory()
+    a.selection = Selection()
     a.status_message = ""
     a.messages = deque(maxlen=64)
     a.update_count = 0
@@ -259,6 +261,46 @@ def test_reload_reports_its_stderr_and_restarts_polling(reloading_app, monkeypat
     assert reloading_app.frames.latest("semaphores") == []
     assert reloading_app.frames.of("semaphores", 0x10) == []
     assert reloading_app._overlay is None
+
+
+def test_a_reload_reads_the_muted_rows_again(reloading_app, monkeypatch):
+    """The history starts over, and a muted row would never be read into it."""
+    monkeypatch.setattr(zview_tui, "verify_target_image", lambda scraper, elf_path: None)
+    reloading_app.toggle_mute("semaphores", "s")
+
+    reloading_app.attempt_reconnect()
+
+    assert reloading_app.selection.muted == frozenset()
+    assert reloading_app.scraper.selection.muted == frozenset()
+
+
+def test_a_replayed_row_hidden_or_muted_shows_again_after_the_replay_ends(app):
+    """Until then a muted row stays at its last read."""
+    app.scraper._m_scraper.is_live = False
+
+    def frame(size: int) -> Frame:
+        return Frame({"threads": [ThreadInfo(a, 0, size, n, None) for a, n in enumerate("abc", 1)]})
+
+    app.process_data(frame(512))
+    app.select(Selection(exclude=((None, "b"),), muted=frozenset({("threads", "c")})))
+    app.process_data(frame(1024))
+    assert [(t.name, t.stack_size) for t in listed_threads(app)] == [("a", 1024), ("c", 512)]
+
+    app.select(Selection())
+    assert [t.stack_size for t in listed_threads(app)] == [1024, 1024, 1024]
+
+
+def test_a_muted_object_opens_on_its_last_read(app):
+    from zview.frontend.tui.views.base import ZViewTUIAttributes
+    from zview.frontend.tui.views.semaphore_detail import SemaphoreDetailView
+
+    sem = SemaphoreInfo("gate", 0x10, 1, 4, ())
+    app.process_data(Frame({"semaphores": [sem]}))
+    app.toggle_mute("semaphores", "gate")
+    app.process_data(Frame({"semaphores": []}))
+    app.detailing = ("semaphores", 0x10)
+
+    assert SemaphoreDetailView(app, ZViewTUIAttributes.create_mono())._target() == sem
 
 
 def test_reload_onto_a_target_running_another_image_is_fatal(reloading_app, monkeypatch):

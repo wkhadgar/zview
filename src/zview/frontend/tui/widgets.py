@@ -426,7 +426,13 @@ class TUIThreadInfo:
         self.watermark_bar.width = stack_bar
 
     def draw(
-        self, stdscr: curses.window, y: int, x: int, thread_info: ThreadInfo, selected: bool = False
+        self,
+        stdscr: curses.window,
+        y: int,
+        x: int,
+        thread_info: ThreadInfo,
+        selected: bool = False,
+        muted: bool = False,
     ):
         col_pos = x
         _, screen_w = stdscr.getmaxyx()
@@ -481,6 +487,11 @@ class TUIThreadInfo:
             self._stack_bytes_width,
         )
         _addstr_clipped(stdscr, y, col_pos, watermark_bytes_display, screen_w)
+
+        if muted:
+            # The cursor keeps the name cell.
+            start = x + self._thread_name_width + 1 if selected else x
+            stdscr.chgat(y, start, -1, curses.A_DIM)
 
 
 class TUIWaitQueue:
@@ -620,7 +631,14 @@ class TUIKernelObjectInfo:
         return state.fill, state.text, self.waiters_cell(obj.waiters, self._waiters_width), attr
 
     def draw(
-        self, stdscr: curses.window, y: int, x: int, kind: Kind, obj, selected: bool = False
+        self,
+        stdscr: curses.window,
+        y: int,
+        x: int,
+        kind: Kind,
+        obj,
+        selected: bool = False,
+        muted: bool = False,
     ) -> None:
         fill, label, waiters, attr = self.row_values(kind, obj)
         # Only a slab carries a peak, and only where the build tracks it. A
@@ -631,6 +649,11 @@ class TUIKernelObjectInfo:
         self.draw_cells(
             stdscr, y, x, kind.label, obj.name, fill, label, waiters, attr, selected, mark
         )
+
+        if muted:
+            # The cursor keeps the type and name cells.
+            start = x + self._type_width + self._name_width + 2 if selected else x
+            stdscr.chgat(y, start, -1, curses.A_DIM)
 
     def draw_cells(
         self,

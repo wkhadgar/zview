@@ -77,19 +77,13 @@ class KernelObjectDetailView(BaseStateView):
         return KernelObjectListView.OBJECTS
 
     def _target(self) -> Any:
-        """The detailed object's latest info, or ``None`` once it is no longer read."""
+        """The detailed object's latest info, as last read if muted, or ``None`` once it is gone."""
         if self.controller.detailing is None:
             return None
 
         _, address = self.controller.detailing
-        return next(
-            (
-                info
-                for info in self.controller.frames.latest(self.kind.key)
-                if info.address == address
-            ),
-            None,
-        )
+        listed = self.controller.frames.latest(self.kind.key, self.controller.selection)
+        return next((info for info in listed if info.address == address), None)
 
     def _draw_title(self, stdscr: curses.window, width: int, obj: Any) -> None:
         """Draw the list column headers and the object's row beneath them."""
