@@ -1,6 +1,6 @@
 [project]
 name = "zview"
-version = "0.25.2"
+version = "0.26.0"
 authors = [{ name = "Paulo Santos", email = "pauloxrms@gmail.com" }]
 description = "ZView, a Zephyr RTOS runtime visualizer"
 dependencies = [
