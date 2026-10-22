@@ -76,7 +76,6 @@ def test_a_pattern_scoped_to_an_unknown_group_is_refused(monkeypatch, capsys):
 
     assert rc != 0
     assert "Unknown group thread" in err
-    assert cli._pattern("main*") == (None, "main*")
 
 
 def test_dump_replay_json_stdout_is_valid_json(monkeypatch, capsys):

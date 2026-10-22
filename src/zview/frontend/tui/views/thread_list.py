@@ -92,7 +92,8 @@ class ThreadListView(BaseStateView):
 
         stdscr.erase()
 
-        self._render_frame(stdscr, self._footer_hint(), height, width)
+        hint = self._footer_hint()
+        self._render_frame(stdscr, hint, height, width)
 
         threads = self._sorted_threads()
         muted = self.controller.selection.muted
@@ -126,8 +127,10 @@ class ThreadListView(BaseStateView):
             stdscr.addstr(1, curr_x, txt)
             curr_x += h_width + 1
 
-        scroll_indicator = f" Threads: {start_num}-{end_num} of {total_threads} "
-        stdscr.addstr(height - 1, 0, scroll_indicator[:width], self._frame_attr)
+        scroll_indicator = self._bar_count(
+            f"Threads: {start_num}-{end_num} of {total_threads}", width - len(hint)
+        )
+        stdscr.addstr(height - 1, 0, scroll_indicator, self._frame_attr)
 
         table_start = 4
 

@@ -19,7 +19,7 @@ from zview.kinds import KINDS
 from zview.logging_setup import configure as configure_logging
 from zview.orchestrator import ZScraper
 from zview.runner_config import BuildDirError, RunnerConfig, find_elf, image_dir, runners_yaml_path
-from zview.selection import Selection
+from zview.selection import Selection, parse_pattern
 from zview.snapshot import dump_single_frame, record_session, serialize_frame
 
 logger = logging.getLogger("zview.cli")
@@ -103,12 +103,6 @@ def _groups(value: str) -> frozenset[str]:
     return frozenset(group.strip() for group in value.split(",") if group.strip())
 
 
-def _pattern(value: str) -> tuple[str | None, str]:
-    """``GROUP:GLOB`` for one group, or a bare ``GLOB`` for every group."""
-    group, sep, glob = value.partition(":")
-    return (group, glob) if sep else (None, value)
-
-
 def _add_selection(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--only",
@@ -120,7 +114,7 @@ def _add_selection(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--include",
         action="append",
-        type=_pattern,
+        type=parse_pattern,
         default=[],
         metavar="PATTERN",
         help="Read only rows whose name matches this glob, or GROUP:GLOB within one group. "
@@ -129,7 +123,7 @@ def _add_selection(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--exclude",
         action="append",
-        type=_pattern,
+        type=parse_pattern,
         default=[],
         metavar="PATTERN",
         help="Skip rows whose name matches this glob, or GROUP:GLOB within one group. Repeatable.",

@@ -4,8 +4,14 @@
 
 """Which groups of a frame, and which of their rows, are read."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
+
+
+def parse_pattern(value: str) -> tuple[str | None, str]:
+    """``GROUP:GLOB`` for one group, or a bare ``GLOB`` for every group."""
+    group, sep, glob = value.partition(":")
+    return (group, glob) if sep else (None, value)
 
 
 def _shown(scope: str | None, glob: str) -> str:
@@ -76,6 +82,24 @@ class Selection:
             if name not in read.get(group, ())
         ]
         return tuple(notices)
+
+    def pattern_line(self) -> str:
+        """The include patterns, then the excludes marked ``!``, comma separated."""
+        return ", ".join(
+            [
+                *(_shown(scope, glob) for scope, glob in self.include),
+                *(f"!{_shown(scope, glob)}" for scope, glob in self.exclude),
+            ]
+        )
+
+    def with_pattern_line(self, line: str) -> "Selection":
+        """This selection with the patterns of ``line``, as ``pattern_line`` writes them."""
+        patterns = [pattern.strip() for pattern in line.split(",") if pattern.strip()]
+        return replace(
+            self,
+            include=tuple(parse_pattern(p) for p in patterns if not p.startswith("!")),
+            exclude=tuple(parse_pattern(p[1:]) for p in patterns if p.startswith("!")),
+        )
 
     def to_header(self) -> dict:
         """This selection as a recording header holds it."""

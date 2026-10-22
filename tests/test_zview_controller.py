@@ -16,7 +16,7 @@ from zview.backend.base import HeapInfo, SemaphoreInfo, ThreadInfo, WorkqInfo
 from zview.backend.image import ImageMismatch
 from zview.frames import Fatal, Frame, FrameHistory, Notice, ReplayEnd
 from zview.frontend import zview_tui
-from zview.frontend.tui.views.base import ZViewState
+from zview.frontend.tui.views.base import SpecialCode, ZViewState
 from zview.frontend.tui.views.thread_detail import ThreadDetailView
 from zview.frontend.tui.views.thread_list import listed_threads
 from zview.frontend.zview_tui import ZView
@@ -38,6 +38,7 @@ def app() -> ZView:
     a.state = ZViewState.THREAD_LIST_VIEW
     a.stdscr = MagicMock()
     a._overlay = None
+    a._prompt = None
     return a
 
 
@@ -285,3 +286,33 @@ def test_reload_onto_a_target_running_another_image_is_fatal(reloading_app, monk
     assert reloading_app.state is ZViewState.FATAL_ERROR
     assert "the target is not running this ELF" in reloading_app.status_message
     reloading_app.scraper.start_polling_thread.assert_not_called()
+
+
+def test_escape_drops_the_pattern_line_and_enter_selects_it(app):
+    """The second line opens on the patterns selected, so a dropped edit would show in it."""
+    keys = [
+        ord("/"),
+        *map(ord, "idle"),
+        SpecialCode.ESCAPE,
+        ord("/"),
+        *map(ord, "maix"),
+        SpecialCode.DELETE,
+        ord("n"),
+        SpecialCode.NEWLINE,
+    ]
+    app.stdscr.getch.side_effect = keys
+
+    for _ in keys:
+        app.process_events()
+
+    assert app.selection.include == ((None, "main"),)
+    assert app._prompt is None
+
+
+def test_a_pattern_line_naming_an_unknown_group_keeps_the_patterns(app):
+    app.scraper.check_selection.side_effect = ValueError("Unknown group thread")
+
+    app._select_patterns("thread:main")
+
+    assert app.selection == Selection()
+    assert app.messages[-1].text == "Error: Unknown group thread"

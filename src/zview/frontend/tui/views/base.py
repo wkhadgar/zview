@@ -75,6 +75,9 @@ class SpecialCode:
     HELP = ord("?")
     MESSAGES = ord("m")
     MUTE = ord("x")
+    PATTERNS = ord("/")
+    BACKSPACE = ord("\b")
+    DELETE = 127
 
 
 class ZViewState(enum.Enum):
@@ -151,6 +154,22 @@ class BaseStateView:
 
     def closed(self) -> None:  # noqa: B027
         """Called as another view replaces it on a live target."""
+
+    def _bar_count(self, count: str, room: int) -> str:
+        """``count``, then the patterns and the rows muted in this view, cut to ``room`` columns."""
+        selection = self.controller.selection
+        reads = self.reads()
+        muted = sum(1 for group, _ in selection.muted if reads.reads_group(group))
+        notes = [
+            note
+            for shown, note in (
+                (selection.include or selection.exclude, f"Patterns: {selection.pattern_line()}"),
+                (muted, f"{muted} muted"),
+            )
+            if shown
+        ]
+        text = f" {' | '.join([count, *notes])} "
+        return text if len(text) <= room else text[: max(0, room - 2)] + "… "
 
     def _footer_hint(self) -> str:
         """View bindings (up to ``_MAX_FOOTER_HINTS``, ``...`` if truncated) + ``Help: ?``."""

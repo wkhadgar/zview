@@ -379,6 +379,24 @@ def test_a_build_without_stack_info_draws_no_stack_size(controller, theme):
     assert sum("- / -" in text for text in win.drawn) == 2
 
 
+def test_the_bottom_bar_names_the_patterns_and_the_rows_muted_in_its_view(controller, theme):
+    """A muted semaphore narrows nothing in the thread list."""
+    from zview.selection import Selection
+
+    controller.selection = Selection(
+        exclude=((None, "main"),),
+        muted=frozenset({("threads", "logging"), ("semaphores", "gate")}),
+    )
+    view = ThreadListView(controller, theme)
+
+    assert view._bar_count("Threads: 1-2 of 2", 80) == (
+        " Threads: 1-2 of 2 | Patterns: !main | 1 muted "
+    )
+    assert view._bar_count("Threads: 1-2 of 2", 30) == " Threads: 1-2 of 2 | Pattern… "
+    controller.selection = Selection()
+    assert view._bar_count("Threads: 1-2 of 2", 80) == " Threads: 1-2 of 2 "
+
+
 def test_the_all_threads_row_sums_only_the_threads_read(controller, theme):
     """A muted thread's last load would add a stale number to the total."""
     from zview.backend.base import ThreadRuntime
