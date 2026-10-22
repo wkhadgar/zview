@@ -55,6 +55,28 @@ def test_a_frame_keeps_only_the_selected_groups_and_rows():
     }
 
 
+def test_only_the_patterns_that_name_no_read_row_are_reported():
+    """A typo would empty a group silently, and a group left out matches no pattern."""
+    selection = Selection(
+        groups=frozenset({"threads", "semaphores"}),
+        include=(("threads", "gate*"), ("threads", "gtae*"), (None, "lock")),
+        exclude=((None, "*_old"),),
+        muted=frozenset({("semaphores", "bench_gate"), ("threads", "gone")}),
+    )
+    names = {
+        "threads": ["gate_keeper", "main"],
+        "semaphores": ["bench_gate"],
+        "mutexes": ["lock"],
+    }
+
+    assert selection.unmatched(names) == (
+        "Warning: include pattern threads:gtae* matches no row",
+        "Warning: include pattern lock matches no row",
+        "Warning: exclude pattern *_old matches no row",
+        "Warning: muted row threads:gone matches no row",
+    )
+
+
 def test_a_muted_row_is_matched_by_its_exact_name():
     """The brackets of an array element would read as a glob character class."""
     selection = Selection(muted=frozenset({("threads", "z_idle_threads[0]")}))

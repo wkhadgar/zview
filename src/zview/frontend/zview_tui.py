@@ -448,6 +448,8 @@ class ZView:
             self.scraper.discover()
         except RuntimeError as e:
             self.report(f"Unable to update available threads [{e}]")
+        for notice in self.scraper.unmatched(self.scraper.selection):
+            self.report(notice)
 
         self.scraper.start_polling_thread(self.data_queue, self.stop_event, inspection_period)
 
