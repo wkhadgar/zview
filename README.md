@@ -106,6 +106,11 @@ ZView is invoked through one of four commands. Bare `zview` with no command runs
 | `-t, --runner-target` | `live`, `record`, `dump` | MCU descriptor for the chosen runner (see below). |
 | `--frequency` | `live`, `record`, `dump` | SWD clock of `-r pyocd` and `-r jlink`, in Hz or with a `k` or `M` suffix (default: `4M` on pyocd, the J-Link's own on jlink). Lower it if long wires give read errors. |
 | `--period` | `live`, `record`, `dump` | Polling period in seconds (default: `0.10`). |
+| `--only` | `live`, `record`, `dump` | Read only these groups, comma separated, such as `threads,mutexes`. The groups are `threads`, `heaps`, `semaphores`, `mutexes`, `msgqs`, `mem_slabs` and `workqs`. |
+| `--include` | `live`, `record`, `dump` | Read only rows whose name matches this glob, or `GROUP:GLOB` within one group. Repeatable. |
+| `--exclude` | `live`, `record`, `dump` | Skip rows whose name matches this glob, or `GROUP:GLOB` within one group. Repeatable. |
+
+Reading fewer rows makes each frame shorter. A recording keeps the selection it was made with, and a replay reads the same rows. On `dump -i` the three flags filter only what is shown. A pattern that matches no row is reported, in the message log on `live` and on stderr otherwise.
 
 ### Command-specific arguments
 
@@ -164,9 +169,13 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
 * **ENTER**: Get details for the selected thread or kernel object (hit ENTER again to return).
 * **S / I**: Sort the data and invert the sorting order.
 * **k**: Access the **Kernel Objects** view listing semaphores, mutexes, message queues, memory slabs, heaps and work queues (hit k again to return).
+* **x**: Mute the selected thread or object. It stays listed, dimmed, with its last values, and is no longer read.
+* **/**: Edit the row patterns on one line, as the flags take them: `GLOB`, `GROUP:GLOB`, or `!GLOB` to exclude, comma separated. **ENTER** applies the line, **Esc** drops it.
 * **g**: Pick the groups read (threads, heaps, semaphores and the rest) from a checklist, where **Space** toggles one.
 * **r**: Soft refresh, re-walks the kernel thread list and clears runtime baselines.
-* **R**: Full reload, tears down the polling thread, disconnects the probe, re-parses the ELF, reconnects, checks the target runs that ELF, and resumes. After a rebuild, press it once the target runs the new image.
+* **R**: Full reload, tears down the polling thread, disconnects the probe, re-parses the ELF, reconnects, checks the target runs that ELF, and resumes. After a rebuild, press it once the target runs the new image. It also unmutes every row.
+
+The bottom bar names the groups turned off, the patterns and the muted rows. On a replay, **x**, **/** and **g** change what is shown, not what is read.
 
 ### See your threads
 
