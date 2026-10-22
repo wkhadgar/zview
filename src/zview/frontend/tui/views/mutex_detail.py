@@ -5,10 +5,11 @@
 import curses
 from itertools import groupby
 
-from zview.backend.base import MutexInfo, MutexState
+from zview.backend.base import MutexState
 from zview.frontend.tui.views.base import Any, ZViewTUIAttributes
 from zview.frontend.tui.views.kernel_object_detail import KernelObjectDetailView
-from zview.frontend.tui.widgets import MUTEX, TUIBox
+from zview.frontend.tui.widgets import TUIBox
+from zview.kinds import BY_KEY
 
 
 class MutexDetailView(KernelObjectDetailView):
@@ -20,6 +21,7 @@ class MutexDetailView(KernelObjectDetailView):
     with threads queued on it.
     """
 
+    kind = BY_KEY["mutexes"]
     CONTENDED_MARK = "●"
     LOCKED_MARK = "○"
     FREE_MARK = "·"
@@ -53,15 +55,6 @@ class MutexDetailView(KernelObjectDetailView):
         )
         self._history_box = TUIBox("Contention history", self._history_legend, 0)
 
-    def _target(self) -> MutexInfo | None:
-        address = self.controller.detailing_mutex_address
-        if address is None:
-            return None
-
-        return next(
-            (m for m in self.controller.frames.latest("mutexes") if m.address == address), None
-        )
-
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()
         self._render_frame(stdscr, self._footer_hint(), height, width)
@@ -73,7 +66,7 @@ class MutexDetailView(KernelObjectDetailView):
             stdscr.refresh()
             return
 
-        self._draw_title(stdscr, width, MUTEX, mutex)
+        self._draw_title(stdscr, width, mutex)
 
         waiters = mutex.waiters
         owner = "-"

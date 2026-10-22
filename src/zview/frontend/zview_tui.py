@@ -4,7 +4,6 @@
 
 import contextlib
 import curses
-import glob
 import io
 import queue
 import threading
@@ -25,6 +24,7 @@ from zview.frontend.tui.views.base import (
 )
 from zview.frontend.tui.views.fatal_error import FatalErrorView
 from zview.frontend.tui.views.heap_detail import HeapDetailView
+from zview.frontend.tui.views.kernel_object_detail import ObjectDetailView
 from zview.frontend.tui.views.kernel_object_list import KernelObjectListView
 from zview.frontend.tui.views.mem_slab_detail import MemSlabDetailView
 from zview.frontend.tui.views.msgq_detail import MsgqDetailView
@@ -35,11 +35,6 @@ from zview.frontend.tui.views.thread_list import ThreadListView
 from zview.frontend.tui.views.workq_detail import WorkqDetailView
 from zview.frontend.tui.widgets import PopupRow, TUIPopup
 from zview.orchestrator import ZScraper
-from zview.selection import Selection
-
-# What each kind of view reads from a live target, within the session's selection.
-_THREADS_VIEW = Selection(groups=frozenset({"threads"}))
-_OBJECTS_VIEW = Selection(skipped=frozenset({"threads"}))
 
 _GLOBAL_KEYBINDINGS: list[Keybind] = [
     Keybind("?", "Help", "Toggle this help overlay"),
@@ -120,12 +115,8 @@ class ZView:
         self.state: ZViewState = ZViewState.THREAD_LIST_VIEW
 
         self.detailing_thread: str | None = None
-        self.detailing_heap_address: int | None = None
-        self.detailing_mutex_address: int | None = None
-        self.detailing_semaphore_address: int | None = None
-        self.detailing_msgq_address: int | None = None
-        self.detailing_mem_slab_address: int | None = None
-        self.detailing_workq_address: int | None = None
+        # The group key and address of the object the detail view shows.
+        self.detailing: tuple[str, int] | None = None
         # Wait queues are walkable only in the dlist (simple) flavor.
         self.waiters_unknown: bool = scraper.waitq_flavor != "simple"
         # Name of the open overlay ("help" or "messages"), or None.
@@ -154,19 +145,28 @@ class ZView:
             ZViewState.FATAL_ERROR: FatalErrorView(self, theme),
             ZViewState.THREAD_LIST_VIEW: ThreadListView(self, theme),
             ZViewState.THREAD_DETAIL_VIEW: ThreadDetailView(self, theme),
-            ZViewState.HEAPS_DETAIL_VIEW: HeapDetailView(self, theme),
             ZViewState.KERNEL_OBJECT_LIST_VIEW: KernelObjectListView(self, theme),
-            ZViewState.MUTEX_DETAIL_VIEW: MutexDetailView(self, theme),
-            ZViewState.SEMAPHORE_DETAIL_VIEW: SemaphoreDetailView(self, theme),
-            ZViewState.MSGQ_DETAIL_VIEW: MsgqDetailView(self, theme),
-            ZViewState.MEM_SLAB_DETAIL_VIEW: MemSlabDetailView(self, theme),
-            ZViewState.WORKQ_DETAIL_VIEW: WorkqDetailView(self, theme),
+            ZViewState.OBJECT_DETAIL_VIEW: ObjectDetailView(
+                self,
+                theme,
+                [
+                    view(self, theme)
+                    for view in (
+                        HeapDetailView,
+                        SemaphoreDetailView,
+                        MutexDetailView,
+                        MsgqDetailView,
+                        MemSlabDetailView,
+                        WorkqDetailView,
+                    )
+                ],
+            ),
         }
 
         # The opening view is the thread list. A replay keeps polling whatever
         # its recording holds.
         if self.scraper._m_scraper.is_live:
-            self.scraper.view = _THREADS_VIEW
+            self.scraper.view = self.views[self.state].reads()
 
     def _init_curses(self) -> ZViewTUIAttributes:
         """
@@ -363,60 +363,28 @@ class ZView:
     def has_kernel_objects(self) -> bool:
         """True while a group the objects view reads is available, so it has rows to draw."""
         return any(
-            available and _OBJECTS_VIEW.reads_group(key)
+            available and KernelObjectListView.OBJECTS.reads_group(key)
             for key, available in self.scraper.available.items()
         )
 
     def transition_to(self, new_state: ZViewState):
-        """Centralized state transition and data pipeline management."""
+        """Open ``new_state``'s view, reading on a live target what the view declares."""
         if new_state not in self.views:
             self.report(f"Warning: {new_state.name} is not yet implemented.")
+            return
+
+        view = self.views[new_state]
+        if not view.can_open():
             return
 
         # Replay backends cannot absorb polling-shape mutations without drifting
         # against the recording. Views still transition; the display filters
         # from the full frame on its own.
-        live = self.scraper._m_scraper.is_live
-
-        match new_state:
-            case ZViewState.THREAD_LIST_VIEW:
-                if live:
-                    self.scraper.view = _THREADS_VIEW
-                self.purge_queue()
-
-            case ZViewState.THREAD_DETAIL_VIEW:
-                if self.detailing_thread is None:
-                    return
-
-                if self.detailing_thread not in self.scraper.rows["threads"]:
-                    return
-
-                if live:
-                    # Every thread's cycles are still read, so the view names
-                    # only the stack to scan.
-                    self.scraper.view = Selection(
-                        groups=frozenset({"threads"}), include=(glob.escape(self.detailing_thread),)
-                    )
-
-                self.purge_queue()
-
-            case (
-                ZViewState.KERNEL_OBJECT_LIST_VIEW
-                | ZViewState.MUTEX_DETAIL_VIEW
-                | ZViewState.SEMAPHORE_DETAIL_VIEW
-                | ZViewState.MSGQ_DETAIL_VIEW
-                | ZViewState.MEM_SLAB_DETAIL_VIEW
-                | ZViewState.WORKQ_DETAIL_VIEW
-            ):
-                if live:
-                    self.scraper.groups["heaps"].detailed = None
-                    self.scraper.view = _OBJECTS_VIEW
-                self.purge_queue()
-
-            case ZViewState.HEAPS_DETAIL_VIEW:
-                if live:
-                    self.scraper.groups["heaps"].detailed = self.detailing_heap_address
-                self.purge_queue()
+        if self.scraper._m_scraper.is_live:
+            self.views[self.state].closed()
+            self.scraper.view = view.reads()
+            view.opened()
+        self.purge_queue()
 
         self.state = new_state
 

@@ -6,7 +6,8 @@ import curses
 
 from zview.backend.base import MemSlabInfo
 from zview.frontend.tui.views.kernel_object_detail import KernelObjectDetailView
-from zview.frontend.tui.widgets import MEM_SLAB, TUIGraph
+from zview.frontend.tui.widgets import TUIGraph
+from zview.kinds import BY_KEY
 
 
 class MemSlabDetailView(KernelObjectDetailView):
@@ -17,20 +18,12 @@ class MemSlabDetailView(KernelObjectDetailView):
     The graph plots one sample per polled frame.
     """
 
+    kind = BY_KEY["mem_slabs"]
     # The title row already carries used over capacity and the waiters, so the
     # boxes add what it cannot show.
     _INFO_TITLES = (("Location", 2), ("Block size", 1), ("Peak", 1))
     _GRAPH_ROW = KernelObjectDetailView._INFO_ROW + KernelObjectDetailView._INFO_BOX_HEIGHT
     _UNTRACKED = "not tracked"
-
-    def _target(self) -> MemSlabInfo | None:
-        address = self.controller.detailing_mem_slab_address
-        if address is None:
-            return None
-
-        return next(
-            (s for s in self.controller.frames.latest("mem_slabs") if s.address == address), None
-        )
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()
@@ -43,7 +36,7 @@ class MemSlabDetailView(KernelObjectDetailView):
             stdscr.refresh()
             return
 
-        self._draw_title(stdscr, width, MEM_SLAB, slab)
+        self._draw_title(stdscr, width, slab)
         self._draw_info_boxes(
             stdscr,
             self._INFO_ROW,

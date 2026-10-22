@@ -7,7 +7,8 @@ import curses
 import textwrap
 from typing import NamedTuple
 
-from zview.backend.base import MutexState, ThreadInfo, ThreadRuntime
+from zview.backend.base import ThreadInfo, ThreadRuntime
+from zview.kinds.kind import Kind, Level
 
 
 def _truncate_str(text: str, max_size: int) -> str:
@@ -541,14 +542,6 @@ class TUIWaitQueue:
             stdscr.addstr(row, text_x, f"{branch} {waiter}"[:inner_w])
 
 
-SEMAPHORE = "SEM"
-MUTEX = "MTX"
-MSGQ = "MSG"
-MEM_SLAB = "SLB"
-HEAP = "HEP"
-WORKQ = "WKQ"
-
-
 class TUIKernelObjectInfo:
     """
     One kernel object as a table row: type, name, state bar, wait queue.
@@ -616,91 +609,18 @@ class TUIKernelObjectInfo:
 
         return next((c for c in candidates if len(c) <= max_width), candidates[-1])
 
-    def row_values(self, kind: str, obj) -> tuple[float, str, str, int]:
+    def row_values(self, kind: Kind, obj) -> tuple[float, str, str, int]:
         """``(bar percentage, bar label, waiters cell, attribute)`` for one object."""
-        cell = self.waiters_cell(obj.waiters, self._waiters_width)
-
-        if kind == SEMAPHORE:
-            # First match wins.
-            label = next(
-                text
-                for applies, text in (
-                    (not obj.is_initialized, "NOT INITIALIZED"),
-                    (obj.is_unbounded, f"{obj.count} / unlimited"),
-                    (True, f"{obj.count}/{obj.limit}"),
-                )
-                if applies
-            )
-            attr = self._busy_attr if obj.waiters else 0
-            return obj.fill_percent, label, cell, attr
-
-        if kind == MSGQ:
-            label = f"{obj.used_msgs}/{obj.max_msgs} × {obj.msg_size}B"
-            # A full queue blocks its senders.
-            attr = self._contended_attr if obj.is_full else (self._busy_attr if obj.waiters else 0)
-            return obj.fill_percent, label, cell, attr
-
-        if kind == MEM_SLAB:
-            label = f"{obj.num_used}/{obj.num_blocks} × {obj.block_size}B"
-            # An exhausted slab blocks the next allocation.
-            attr = (
-                self._contended_attr
-                if obj.is_exhausted
-                else (self._busy_attr if obj.waiters else 0)
-            )
-            return obj.fill_percent, label, cell, attr
-
-        if kind == HEAP:
-            label = f"{obj.allocated_bytes}/{obj.total_bytes}B"
-            # A heap with nothing free blocks the next allocation.
-            attr = (
-                self._contended_attr
-                if obj.is_exhausted
-                else (self._busy_attr if obj.waiters else 0)
-            )
-            return obj.usage_percent, label, cell, attr
-
-        if kind == WORKQ:
-            # First match wins, in both tables.
-            label = next(
-                word
-                for applies, word in (
-                    (obj.is_busy, "BUSY"),
-                    (obj.is_started, "IDLE"),
-                    (True, "NOT STARTED"),
-                )
-                if applies
-            )
-            if obj.depth:
-                more = "+" if obj.pending_truncated else ""
-                label += f" ● {obj.depth}{more} pending"
-            attr = next(
-                color
-                for applies, color in (
-                    # Plugged or draining, it refuses submissions from outside.
-                    (obj.is_plugged, self._contended_attr),
-                    (obj.is_draining, self._contended_attr),
-                    (bool(obj.depth or obj.waiters), self._busy_attr),
-                    (True, 0),
-                )
-                if applies
-            )
-            return (100.0 if obj.is_busy else 0.0), label, cell, attr
-
-        if not obj.is_locked:
-            return 0.0, "FREE", cell, 0
-
-        owner = obj.owner_name or f"0x{obj.owner_address:X}"
-        label = f"LOCKED ● {owner}"
-        if obj.lock_count > 1:
-            label += f" ×{obj.lock_count}"
-
-        attr = self._contended_attr if obj.state is MutexState.CONTENDED else self._busy_attr
-
-        return 100.0, label, cell, attr
+        state = kind.state(obj)
+        attr = {
+            Level.QUIET: 0,
+            Level.BUSY: self._busy_attr,
+            Level.BLOCKED: self._contended_attr,
+        }[state.level]
+        return state.fill, state.text, self.waiters_cell(obj.waiters, self._waiters_width), attr
 
     def draw(
-        self, stdscr: curses.window, y: int, x: int, kind: str, obj, selected: bool = False
+        self, stdscr: curses.window, y: int, x: int, kind: Kind, obj, selected: bool = False
     ) -> None:
         fill, label, waiters, attr = self.row_values(kind, obj)
         # Only a slab carries a peak, and only where the build tracks it. A
@@ -708,7 +628,9 @@ class TUIKernelObjectInfo:
         mark = getattr(obj, "peak_percent", None)
         if mark == 0:
             mark = None
-        self.draw_cells(stdscr, y, x, kind, obj.name, fill, label, waiters, attr, selected, mark)
+        self.draw_cells(
+            stdscr, y, x, kind.label, obj.name, fill, label, waiters, attr, selected, mark
+        )
 
     def draw_cells(
         self,

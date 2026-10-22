@@ -6,7 +6,8 @@ import curses
 
 from zview.backend.base import MsgqInfo
 from zview.frontend.tui.views.kernel_object_detail import KernelObjectDetailView
-from zview.frontend.tui.widgets import MSGQ, TUIGraph
+from zview.frontend.tui.widgets import TUIGraph
+from zview.kinds import BY_KEY
 
 
 class MsgqDetailView(KernelObjectDetailView):
@@ -18,19 +19,11 @@ class MsgqDetailView(KernelObjectDetailView):
     between two frames cancels out and leaves no trace.
     """
 
+    kind = BY_KEY["msgqs"]
     # The title row already carries used over capacity and the waiters, so the
     # boxes add what it cannot show.
     _INFO_TITLES = (("Location", 2), ("Capacity", 1), ("Message size", 1))
     _GRAPH_ROW = KernelObjectDetailView._INFO_ROW + KernelObjectDetailView._INFO_BOX_HEIGHT
-
-    def _target(self) -> MsgqInfo | None:
-        address = self.controller.detailing_msgq_address
-        if address is None:
-            return None
-
-        return next(
-            (q for q in self.controller.frames.latest("msgqs") if q.address == address), None
-        )
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()
@@ -43,7 +36,7 @@ class MsgqDetailView(KernelObjectDetailView):
             stdscr.refresh()
             return
 
-        self._draw_title(stdscr, width, MSGQ, msgq)
+        self._draw_title(stdscr, width, msgq)
         self._draw_info_boxes(
             stdscr,
             self._INFO_ROW,

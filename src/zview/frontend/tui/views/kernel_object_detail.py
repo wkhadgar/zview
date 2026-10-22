@@ -5,7 +5,8 @@
 """Shared layout for the per-object detail views."""
 
 import curses
-from typing import NamedTuple
+from collections.abc import Sequence
+from typing import ClassVar, NamedTuple
 
 from zview.frontend.tui.views.base import (
     Any,
@@ -17,6 +18,8 @@ from zview.frontend.tui.views.base import (
 )
 from zview.frontend.tui.views.kernel_object_list import KernelObjectListView
 from zview.frontend.tui.widgets import SiteValue, TUIBox, TUIKernelObjectInfo, TUIWaitQueue
+from zview.kinds.kind import Kind
+from zview.selection import Selection
 
 
 class Panels(NamedTuple):
@@ -34,11 +37,13 @@ class KernelObjectDetailView(BaseStateView):
     """
     Identity line, a row of info boxes, a graph and a wait queue panel.
 
-    Subclasses declare ``_INFO_TITLES`` as ``(title, weight)`` pairs and pass
-    the matching values to ``_draw_info_boxes``. ``_panels`` puts the queue
-    beside the graph, or under it on a terminal too narrow to hold both.
+    Subclasses declare the ``kind`` they detail and ``_INFO_TITLES`` as
+    ``(title, weight)`` pairs, and pass the matching values to
+    ``_draw_info_boxes``. ``_panels`` puts the queue beside the graph, or under
+    it on a terminal too narrow to hold both.
     """
 
+    kind: ClassVar[Kind]
     _INFO_BOX_HEIGHT = 3
     _INFO_TITLES: tuple[tuple[str, int], ...] = ()
     # The wait queue column, and the graph width it may not eat into.
@@ -68,7 +73,25 @@ class KernelObjectDetailView(BaseStateView):
         self._info_boxes = [TUIBox(title, "", 0) for title, _ in self._INFO_TITLES]
         self._queue = TUIWaitQueue(theme.INACTIVE)
 
-    def _draw_title(self, stdscr: curses.window, width: int, kind: str, obj: Any) -> None:
+    def reads(self) -> Selection:
+        return KernelObjectListView.OBJECTS
+
+    def _target(self) -> Any:
+        """The detailed object's latest info, or ``None`` once it is no longer read."""
+        if self.controller.detailing is None:
+            return None
+
+        _, address = self.controller.detailing
+        return next(
+            (
+                info
+                for info in self.controller.frames.latest(self.kind.key)
+                if info.address == address
+            ),
+            None,
+        )
+
+    def _draw_title(self, stdscr: curses.window, width: int, obj: Any) -> None:
         """Draw the list column headers and the object's row beneath them."""
         names = [obj.name]
         widths = KernelObjectListView.compute_widths(width, names)
@@ -81,7 +104,7 @@ class KernelObjectDetailView(BaseStateView):
             stdscr.addstr(self._HEADER_ROW, curr_x, f"{header:^{col_width}}"[: width - curr_x])
             curr_x += col_width + 1
 
-        self._info.draw(stdscr, self._OBJECT_ROW, 0, kind, obj)
+        self._info.draw(stdscr, self._OBJECT_ROW, 0, self.kind, obj)
 
     def _draw_info_boxes(
         self, stdscr: curses.window, y: int, width: int, values: list[str | SiteValue]
@@ -162,3 +185,42 @@ class KernelObjectDetailView(BaseStateView):
                 return None
 
         return None
+
+
+class ObjectDetailView(BaseStateView):
+    """The detail view of the kind of object ``controller.detailing`` names."""
+
+    def __init__(
+        self,
+        controller: Any,
+        theme: ZViewTUIAttributes,
+        views: Sequence[KernelObjectDetailView],
+    ):
+        super().__init__(controller, theme)
+        self._views = {view.kind.key: view for view in views}
+
+    def _view(self) -> KernelObjectDetailView:
+        key, _ = self.controller.detailing
+        return self._views[key]
+
+    def can_open(self) -> bool:
+        detailing = self.controller.detailing
+        return detailing is not None and detailing[0] in self._views
+
+    def reads(self) -> Selection:
+        return self._view().reads()
+
+    def opened(self) -> None:
+        self._view().opened()
+
+    def closed(self) -> None:
+        self._view().closed()
+
+    def keybindings(self) -> list[Keybind]:
+        return self._view().keybindings()
+
+    def render(self, stdscr: curses.window, height: int, width: int) -> None:
+        self._view().render(stdscr, height, width)
+
+    def handle_input(self, key: int) -> ZViewState | None:
+        return self._view().handle_input(key)

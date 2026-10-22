@@ -15,6 +15,7 @@ from zview.frontend.tui.views.base import (
     compute_flex_widths,
 )
 from zview.frontend.tui.widgets import TUIThreadInfo
+from zview.selection import Selection
 
 
 def _runtime_key(field: str):
@@ -43,6 +44,7 @@ class ThreadListView(BaseStateView):
     }
     COLLUMS: list[str] = list(SCHEMA.keys())
     COLLUM_WIDTHS: list[int] = list(SCHEMA.values())
+    THREADS = Selection(groups=frozenset({"threads"}))
 
     def __init__(self, controller: Any, theme: ZViewTUIAttributes):
         super().__init__(controller, theme)
@@ -70,6 +72,9 @@ class ThreadListView(BaseStateView):
             self.COLLUM_WIDTHS[3],
             self.COLLUM_WIDTHS[4],
         )
+
+    def reads(self) -> Selection:
+        return self.THREADS
 
     def _compute_widths(self, terminal_width: int, threads: list[ThreadInfo]) -> list[int]:
         return compute_flex_widths(list(self.SCHEMA.values()), terminal_width, threads)

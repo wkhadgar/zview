@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import curses
+import glob
 
 from zview.backend.base import ThreadInfo
 from zview.frontend.tui.views.base import (
@@ -16,6 +17,7 @@ from zview.frontend.tui.views.base import (
 )
 from zview.frontend.tui.views.thread_list import ThreadListView, listed_threads
 from zview.frontend.tui.widgets import SiteValue, TUIBox, TUIGraph, TUIThreadInfo
+from zview.selection import Selection
 
 
 def _format_priority(thread: ThreadInfo) -> str:
@@ -63,6 +65,16 @@ class ThreadDetailView(BaseStateView):
         )
         self._current_thread_name: str | None = None
         self._usages: dict[str, list[int]] = {"cpu": [], "load": []}
+
+    def can_open(self) -> bool:
+        name = self.controller.detailing_thread
+        return name is not None and name in self.controller.scraper.rows["threads"]
+
+    def reads(self) -> Selection:
+        # Every thread's cycles are still read, so the view names only the stack to scan.
+        return Selection(
+            groups=frozenset({"threads"}), include=(glob.escape(self.controller.detailing_thread),)
+        )
 
     def _entry_cell(self, thread: ThreadInfo) -> str | SiteValue:
         """The entry function, with the source site the ELF gives for it."""

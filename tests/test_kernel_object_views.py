@@ -21,20 +21,20 @@ from zview.backend.base import (
 )
 from zview.frames import Frame, FrameHistory
 from zview.frontend.tui.views.base import SpecialCode, ZViewState, ZViewTUIAttributes
-from zview.frontend.tui.views.kernel_object_list import (
-    HEAP,
-    MEM_SLAB,
-    MSGQ,
-    MUTEX,
-    SEMAPHORE,
-    KernelObjectListView,
-)
+from zview.frontend.tui.views.kernel_object_list import KernelObjectListView
 from zview.frontend.tui.views.mem_slab_detail import MemSlabDetailView
 from zview.frontend.tui.views.msgq_detail import MsgqDetailView
 from zview.frontend.tui.views.mutex_detail import MutexDetailView
 from zview.frontend.tui.views.semaphore_detail import SemaphoreDetailView
 from zview.frontend.tui.views.workq_detail import WorkqDetailView
-from zview.frontend.tui.widgets import WORKQ
+from zview.kinds import BY_KEY
+
+SEMAPHORE = BY_KEY["semaphores"]
+MUTEX = BY_KEY["mutexes"]
+MSGQ = BY_KEY["msgqs"]
+MEM_SLAB = BY_KEY["mem_slabs"]
+HEAP = BY_KEY["heaps"]
+WORKQ = BY_KEY["workqs"]
 
 
 @pytest.fixture
@@ -109,10 +109,10 @@ def _put(controller, **groups) -> None:
     controller.frames.add(Frame(groups))
 
 
-def _filter_to(view: KernelObjectListView, step: str) -> None:
+def _filter_to(view: KernelObjectListView, step) -> None:
     """Press ``f`` until the view sits on one filter step."""
-    for _ in range(len(view._FILTERS)):
-        if view.filter_name == step:
+    for _ in range(len(view._filters)):
+        if view.filter_name == step.label:
             return
         view.handle_input(SpecialCode.FILTER)
 
@@ -134,27 +134,27 @@ def test_filter_cycles_through_types(controller, theme):
     assert view.filter_name == "ALL"
 
     view.handle_input(SpecialCode.FILTER)
-    assert view.filter_name == SEMAPHORE
-    assert {kind for kind, _ in view._rows()} == {SEMAPHORE}
-
-    view.handle_input(SpecialCode.FILTER)
-    assert view.filter_name == MUTEX
-    assert {kind for kind, _ in view._rows()} == {MUTEX}
-
-    view.handle_input(SpecialCode.FILTER)
-    assert view.filter_name == MSGQ
-    assert {kind for kind, _ in view._rows()} == {MSGQ}
-
-    view.handle_input(SpecialCode.FILTER)
-    assert view.filter_name == HEAP
+    assert view.filter_name == HEAP.label
     assert view._rows() == []
 
     view.handle_input(SpecialCode.FILTER)
-    assert view.filter_name == MEM_SLAB
+    assert view.filter_name == SEMAPHORE.label
+    assert {kind for kind, _ in view._rows()} == {SEMAPHORE}
+
+    view.handle_input(SpecialCode.FILTER)
+    assert view.filter_name == MUTEX.label
+    assert {kind for kind, _ in view._rows()} == {MUTEX}
+
+    view.handle_input(SpecialCode.FILTER)
+    assert view.filter_name == MSGQ.label
+    assert {kind for kind, _ in view._rows()} == {MSGQ}
+
+    view.handle_input(SpecialCode.FILTER)
+    assert view.filter_name == MEM_SLAB.label
     assert {kind for kind, _ in view._rows()} == {MEM_SLAB}
 
     view.handle_input(SpecialCode.FILTER)
-    assert view.filter_name == WORKQ
+    assert view.filter_name == WORKQ.label
     assert view._rows() == []
 
     view.handle_input(SpecialCode.FILTER)
@@ -353,12 +353,11 @@ def test_enter_on_a_work_queue_opens_its_detail_view(controller, theme):
         mem_slabs=[],
         workqs=[WorkqInfo(name="bench_workq", address=0x7000, flags=0b01)],
     )
-    controller.detailing_semaphore_address = None
+    controller.detailing = None
     view = KernelObjectListView(controller, theme)
 
-    assert view.handle_input(SpecialCode.NEWLINE) == ZViewState.WORKQ_DETAIL_VIEW
-    assert controller.detailing_workq_address == 0x7000
-    assert controller.detailing_semaphore_address is None
+    assert view.handle_input(SpecialCode.NEWLINE) == ZViewState.OBJECT_DETAIL_VIEW
+    assert controller.detailing == ("workqs", 0x7000)
 
 
 def test_summary_counts_contention(controller, theme):
@@ -426,27 +425,26 @@ def test_empty_message_distinguishes_absent_from_filtered(controller, theme):
 
 def test_enter_on_a_mutex_opens_the_detail_view(controller, theme):
     view = KernelObjectListView(controller, theme)
-    view.handle_input(SpecialCode.FILTER)  # SEM
-    view.handle_input(SpecialCode.FILTER)  # MTX
+    _filter_to(view, MUTEX)
     view.cursor = 0
 
     target = view._rows()[0][1]
     state = view.handle_input(SpecialCode.NEWLINE)
 
-    assert state == ZViewState.MUTEX_DETAIL_VIEW
-    assert controller.detailing_mutex_address == target.address
+    assert state == ZViewState.OBJECT_DETAIL_VIEW
+    assert controller.detailing == ("mutexes", target.address)
 
 
 def test_enter_on_a_semaphore_opens_its_detail_view(controller, theme):
     view = KernelObjectListView(controller, theme)
-    view.handle_input(SpecialCode.FILTER)  # SEM
+    _filter_to(view, SEMAPHORE)
     view.cursor = 0
 
     target = view._rows()[0][1]
     state = view.handle_input(SpecialCode.NEWLINE)
 
-    assert state == ZViewState.SEMAPHORE_DETAIL_VIEW
-    assert controller.detailing_semaphore_address == target.address
+    assert state == ZViewState.OBJECT_DETAIL_VIEW
+    assert controller.detailing == ("semaphores", target.address)
 
 
 def test_enter_on_an_empty_list_is_a_no_op(controller, theme):
@@ -480,7 +478,7 @@ def test_footer_lists_the_view_bindings(controller, theme):
 
 
 def test_mutex_detail_finds_its_target(controller, theme):
-    controller.detailing_mutex_address = 0x3100
+    controller.detailing = ("mutexes", 0x3100)
     view = MutexDetailView(controller, theme)
 
     assert view._target().name == "spi_bus"
@@ -488,12 +486,12 @@ def test_mutex_detail_finds_its_target(controller, theme):
 
 def test_mutex_detail_target_absent(controller, theme):
     """A target absent from the current frame resolves to None."""
-    controller.detailing_mutex_address = 0xDEAD
+    controller.detailing = ("mutexes", 0xDEAD)
     view = MutexDetailView(controller, theme)
 
     assert view._target() is None
 
-    controller.detailing_mutex_address = None
+    controller.detailing = None
     assert view._target() is None
 
 
@@ -802,7 +800,7 @@ def test_detail_layout_holds_as_the_wait_queue_grows(controller, theme):
     if not hasattr(curses, "ACS_S3"):
         curses.ACS_S3 = ord("-")
 
-    controller.detailing_mutex_address = 0x3000
+    controller.detailing = ("mutexes", 0x3000)
     view = MutexDetailView(controller, theme)
 
     rows_by_size = []
@@ -824,7 +822,7 @@ def test_contention_strip_colors_contended_frames(controller, distinct_theme):
     if not hasattr(curses, "ACS_S3"):
         curses.ACS_S3 = ord("-")
 
-    controller.detailing_mutex_address = 0x3000
+    controller.detailing = ("mutexes", 0x3000)
     controller.frames = FrameHistory()
     for state in (
         MutexState.FREE,
@@ -855,7 +853,7 @@ def test_count_graph_is_colored_while_threads_wait(controller, distinct_theme):
     if not hasattr(curses, "ACS_S3"):
         curses.ACS_S3 = ord("-")
 
-    controller.detailing_semaphore_address = 0x2000
+    controller.detailing = ("semaphores", 0x2000)
     view = SemaphoreDetailView(controller, distinct_theme)
 
     queued = SemaphoreInfo(name="s", address=0x2000, count=0, limit=4, waiters=("taker",))
@@ -880,7 +878,7 @@ def test_count_graph_plots_one_column_per_sample(controller, theme):
         curses.ACS_S3 = ord("-")
 
     width = 60
-    controller.detailing_semaphore_address = 0x2000
+    controller.detailing = ("semaphores", 0x2000)
     sem = SemaphoreInfo(name="s", address=0x2000, count=2, limit=4, waiters=())
     _feed(controller, "semaphores", sem, "count", range(500))
     view = SemaphoreDetailView(controller, theme)
@@ -899,7 +897,7 @@ def test_count_graph_plots_one_column_per_sample(controller, theme):
 
 def _scaled_count_graph(controller, theme, sem: SemaphoreInfo, history: list[int]):
     """``(subtitle, y scale)`` of the count graph, and the info boxes drawn beside it."""
-    controller.detailing_semaphore_address = sem.address
+    controller.detailing = ("semaphores", sem.address)
     _feed(controller, "semaphores", sem, "count", history)
     view = SemaphoreDetailView(controller, theme)
 
@@ -942,7 +940,7 @@ def test_history_legend_marks_match_the_strip_colors(controller, distinct_theme)
     if not hasattr(curses, "ACS_S3"):
         curses.ACS_S3 = ord("-")
 
-    controller.detailing_mutex_address = 0x3000
+    controller.detailing = ("mutexes", 0x3000)
     _put(controller, mutexes=[_mutex_in(MutexState.CONTENDED)])
     view = MutexDetailView(controller, distinct_theme)
 
@@ -962,8 +960,8 @@ def test_views_hold_a_waiter_burst_at_any_terminal_size(controller, theme, queue
         curses.ACS_S3 = ord("-")
 
     waiters = tuple(f"waiter_number_{i}" for i in range(queued))
-    controller.detailing_mutex_address = 0x3000
-    controller.detailing_semaphore_address = 0x2000
+    controller.detailing = ("mutexes", 0x3000)
+    controller.detailing = ("semaphores", 0x2000)
     sem = SemaphoreInfo(name="bench_slots", address=0x2000, count=2, limit=4, waiters=waiters)
     for _ in range(500):
         _put(controller, mutexes=[_lock_with(waiters)])
@@ -982,7 +980,7 @@ def test_wait_queue_truncation_covers_the_row_it_replaces(controller, theme):
     if not hasattr(curses, "ACS_S3"):
         curses.ACS_S3 = ord("-")
 
-    controller.detailing_mutex_address = 0x3000
+    controller.detailing = ("mutexes", 0x3000)
     _put(controller, mutexes=[_lock_with(tuple(f"waiter_number_{i}" for i in range(40)))])
     view = MutexDetailView(controller, theme)
 
@@ -994,19 +992,23 @@ def test_wait_queue_truncation_covers_the_row_it_replaces(controller, theme):
 
 
 @pytest.mark.parametrize(
-    ("presses", "expected_type", "expected_label"),
-    ((0, "ALL", "All Objects"), (1, SEMAPHORE, "All Semaphores"), (2, MUTEX, "All Mutexes")),
+    ("step", "expected_type", "expected_label"),
+    (
+        (None, "ALL", "All Objects"),
+        (SEMAPHORE, SEMAPHORE.label, "All Semaphores"),
+        (MUTEX, MUTEX.label, "All Mutexes"),
+    ),
 )
 def test_the_aggregate_row_is_labelled_by_the_filter(
-    controller, theme, presses, expected_type, expected_label
+    controller, theme, step, expected_type, expected_label
 ):
     """The row sums the filtered objects, so it must not claim to sum them all."""
     if not hasattr(curses, "ACS_S3"):
         curses.ACS_S3 = ord("-")
 
     view = KernelObjectListView(controller, theme)
-    for _ in range(presses):
-        view.handle_input(SpecialCode.FILTER)
+    if step is not None:
+        _filter_to(view, step)
 
     win = _StubWin()
     view.render(win, 24, 209)
@@ -1048,23 +1050,21 @@ def test_a_zero_capacity_queue_row_does_not_divide_by_zero(controller, theme):
 
 def test_enter_on_a_queue_opens_its_detail_view(controller, theme):
     view = KernelObjectListView(controller, theme)
-    view.handle_input(SpecialCode.FILTER)  # SEM
-    view.handle_input(SpecialCode.FILTER)  # MTX
-    view.handle_input(SpecialCode.FILTER)  # MSG
+    _filter_to(view, MSGQ)
     view.cursor = 0
 
     target = view._rows()[0][1]
     state = view.handle_input(SpecialCode.NEWLINE)
 
-    assert state == ZViewState.MSGQ_DETAIL_VIEW
-    assert controller.detailing_msgq_address == target.address
+    assert state == ZViewState.OBJECT_DETAIL_VIEW
+    assert controller.detailing == ("msgqs", target.address)
 
 
 def test_the_queue_detail_plots_its_depth_against_capacity(controller, distinct_theme):
     if not hasattr(curses, "ACS_S3"):
         curses.ACS_S3 = ord("-")
 
-    controller.detailing_msgq_address = 0x4000
+    controller.detailing = ("msgqs", 0x4000)
     _feed(controller, "msgqs", controller.frames.latest("msgqs")[0], "used_msgs", [0, 1, 2, 3])
     view = MsgqDetailView(controller, distinct_theme)
 
@@ -1078,7 +1078,7 @@ def test_the_queue_detail_plots_its_depth_against_capacity(controller, distinct_
 
 
 def test_the_queue_detail_says_when_the_queue_is_gone(controller, theme):
-    controller.detailing_msgq_address = 0x9999
+    controller.detailing = ("msgqs", 0x9999)
     view = MsgqDetailView(controller, theme)
 
     win = _StubWin()
@@ -1103,7 +1103,7 @@ def _busy_workq(**fields) -> WorkqInfo:
 def test_the_work_queue_detail_shows_thread_flags_and_backlog(controller, theme):
     busy = _busy_workq()
     _feed(controller, "workqs", busy, "pending", [busy.pending[:n] for n in (0, 1, 2)])
-    controller.detailing_workq_address = 0x7000
+    controller.detailing = ("workqs", 0x7000)
     view = WorkqDetailView(controller, theme)
 
     drawn = " ".join(text for _, _, text in _render(view).writes)
@@ -1116,7 +1116,7 @@ def test_the_work_queue_detail_shows_thread_flags_and_backlog(controller, theme)
 def test_pending_items_sit_above_the_drain_waiters(controller, theme):
     """The drain waiters take a third of the 16 side rows, the items the rest."""
     _put(controller, workqs=[_busy_workq(waiters=("drainer",))])
-    controller.detailing_workq_address = 0x7000
+    controller.detailing = ("workqs", 0x7000)
     view = WorkqDetailView(controller, theme)
 
     writes = _render(view, height=24, width=209).writes
@@ -1128,7 +1128,7 @@ def test_pending_items_sit_above_the_drain_waiters(controller, theme):
 
 def test_a_cut_walk_ends_the_pending_panel_in_an_ellipsis(controller, theme):
     _put(controller, workqs=[_busy_workq(pending_truncated=True)])
-    controller.detailing_workq_address = 0x7000
+    controller.detailing = ("workqs", 0x7000)
     view = WorkqDetailView(controller, theme)
 
     assert any(t == "└─ ..." for _, _, t in _render(view).writes)
@@ -1137,7 +1137,7 @@ def test_a_cut_walk_ends_the_pending_panel_in_an_ellipsis(controller, theme):
 def test_a_short_column_gives_the_pending_items_all_of_it(controller, theme):
     """Four side rows cannot hold two boxes, and the header row names the waiters."""
     _put(controller, workqs=[_busy_workq()])
-    controller.detailing_workq_address = 0x7000
+    controller.detailing = ("workqs", 0x7000)
     view = WorkqDetailView(controller, theme)
 
     writes = _render(view, height=12, width=209).writes
@@ -1147,7 +1147,7 @@ def test_a_short_column_gives_the_pending_items_all_of_it(controller, theme):
 
 
 def test_the_work_queue_detail_says_when_the_queue_is_gone(controller, theme):
-    controller.detailing_workq_address = 0x9999
+    controller.detailing = ("workqs", 0x9999)
     view = WorkqDetailView(controller, theme)
 
     assert any("no longer being reported" in t for _, _, t in _render(view).writes)
@@ -1239,15 +1239,15 @@ def test_enter_on_a_slab_opens_its_detail_view(controller, theme):
     target = view._rows()[0][1]
     state = view.handle_input(SpecialCode.NEWLINE)
 
-    assert state == ZViewState.MEM_SLAB_DETAIL_VIEW
-    assert controller.detailing_mem_slab_address == target.address
+    assert state == ZViewState.OBJECT_DETAIL_VIEW
+    assert controller.detailing == ("mem_slabs", target.address)
 
 
 def test_the_slab_detail_plots_usage_and_names_the_peak(controller, distinct_theme):
     if not hasattr(curses, "ACS_S3"):
         curses.ACS_S3 = ord("-")
 
-    controller.detailing_mem_slab_address = 0x5000
+    controller.detailing = ("mem_slabs", 0x5000)
     _feed(controller, "mem_slabs", controller.frames.latest("mem_slabs")[0], "num_used", [1, 3, 6])
     view = MemSlabDetailView(controller, distinct_theme)
 
@@ -1264,7 +1264,7 @@ def test_the_slab_detail_says_when_the_peak_is_not_tracked(controller, distinct_
     if not hasattr(curses, "ACS_S3"):
         curses.ACS_S3 = ord("-")
 
-    controller.detailing_mem_slab_address = 0x5000
+    controller.detailing = ("mem_slabs", 0x5000)
     _put(
         controller,
         mem_slabs=[
@@ -1365,8 +1365,8 @@ def test_enter_on_a_heap_opens_its_own_view(controller, theme):
 
     state = view.handle_input(SpecialCode.NEWLINE)
 
-    assert state is ZViewState.HEAPS_DETAIL_VIEW
-    assert controller.detailing_heap_address == 0x6000
+    assert state is ZViewState.OBJECT_DETAIL_VIEW
+    assert controller.detailing == ("heaps", 0x6000)
 
 
 def _render(view, height: int = 24, width: int = 209) -> _StubWin:
@@ -1377,7 +1377,7 @@ def _render(view, height: int = 24, width: int = 209) -> _StubWin:
 
 
 def test_the_queue_is_drawn_in_its_own_column_beside_the_graph(controller, theme):
-    controller.detailing_semaphore_address = 0x2000
+    controller.detailing = ("semaphores", 0x2000)
     _feed(controller, "semaphores", controller.frames.latest("semaphores")[0], "count", [0, 1, 2])
     view = SemaphoreDetailView(controller, theme)
 
@@ -1391,7 +1391,7 @@ def test_the_queue_is_drawn_in_its_own_column_beside_the_graph(controller, theme
 
 
 def test_a_narrow_terminal_draws_the_queue_under_the_graph(controller, theme):
-    controller.detailing_semaphore_address = 0x2000
+    controller.detailing = ("semaphores", 0x2000)
     _feed(controller, "semaphores", controller.frames.latest("semaphores")[0], "count", [0, 1, 2])
     view = SemaphoreDetailView(controller, theme)
 
@@ -1404,7 +1404,7 @@ def test_a_narrow_terminal_draws_the_queue_under_the_graph(controller, theme):
 
 def test_a_detail_view_names_where_the_object_is_declared(controller, theme):
     controller.scraper.decl_site.return_value = ("/home/dev/ws/app/src/main.c", 264)
-    controller.detailing_semaphore_address = 0x2000
+    controller.detailing = ("semaphores", 0x2000)
     view = SemaphoreDetailView(controller, theme)
 
     win = _render(view)
@@ -1414,7 +1414,7 @@ def test_a_detail_view_names_where_the_object_is_declared(controller, theme):
 
 def test_a_detail_view_falls_back_to_the_address(controller, theme):
     """An object the ELF has no site for keeps the address it always showed."""
-    controller.detailing_semaphore_address = 0x2000
+    controller.detailing = ("semaphores", 0x2000)
     view = SemaphoreDetailView(controller, theme)
 
     win = _render(view)
