@@ -177,7 +177,7 @@ def test_a_detail_view_shares_count_the_threads_it_does_not_scan(elf_path):
         before={_MAIN: 0, _WORKER: 0, _IDLE: 0},
         now={_MAIN: 10, _WORKER: 30, _IDLE: 60},
     )
-    scraper.view = Selection(include=("main", "idle"))
+    scraper.view = Selection(include=((None, "main"), (None, "idle")))
 
     runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
 

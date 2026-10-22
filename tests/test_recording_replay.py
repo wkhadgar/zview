@@ -203,7 +203,8 @@ def test_a_declared_selection_replays_as_it_was_recorded(tmp_path):
 
     selection = Selection(
         groups=frozenset({"threads", "mutexes"}),
-        exclude=("log*",),
+        include=(("threads", "gate*"),),
+        exclude=((None, "log*"),),
         muted=frozenset({("threads", "z_idle_threads[0]")}),
     )
     path = tmp_path / "selected.ndjson.gz"

@@ -17,12 +17,24 @@ def test_a_group_left_out_reads_none_of_its_rows():
 
 
 def test_include_patterns_narrow_and_exclude_patterns_win():
-    selection = Selection(include=("Philosopher*", "logging"), exclude=("Philosopher 5",))
+    selection = Selection(
+        include=((None, "Philosopher*"), (None, "logging")), exclude=((None, "Philosopher 5"),)
+    )
 
     assert selection.reads("threads", "Philosopher 0")
     assert selection.reads("threads", "logging")
     assert not selection.reads("threads", "Philosopher 5")
     assert not selection.reads("threads", "idle")
+
+
+def test_a_scoped_include_narrows_only_its_own_group():
+    """``threads:gate*`` keeps the gate threads without emptying the semaphores."""
+    selection = Selection(include=(("threads", "gate*"),), exclude=((None, "*_old"),))
+
+    assert selection.reads("threads", "gate_keeper")
+    assert not selection.reads("threads", "main")
+    assert selection.reads("semaphores", "bench_slots")
+    assert not selection.reads("semaphores", "bench_old")
 
 
 def test_a_frame_keeps_only_the_selected_groups_and_rows():
@@ -33,7 +45,7 @@ def test_a_frame_keeps_only_the_selected_groups_and_rows():
         "semaphores": [Row(name="gate")],
         "mutexes": [Row(name="lock")],
     }
-    selection = Selection(groups=frozenset({"threads", "mutexes"}), exclude=("logging",))
+    selection = Selection(groups=frozenset({"threads", "mutexes"}), exclude=((None, "logging"),))
 
     kept = selection.keep(frame)
 

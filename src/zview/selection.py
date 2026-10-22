@@ -14,16 +14,17 @@ class Selection:
     The groups a frame reads, narrowed by name.
 
     A row is read when its group is in ``groups`` and not in ``skipped``, its
-    name matches an ``include`` pattern or none are given, it matches no
-    ``exclude`` pattern, and it is not ``muted``. Patterns are shell globs.
-    ``muted`` holds exact ``(group, name)`` pairs, since a name such as
-    ``z_idle_threads[0]`` reads as a glob.
+    name matches an ``include`` pattern that applies to the group or none
+    applies, it matches no ``exclude`` pattern that applies, and it is not
+    ``muted``. Patterns are ``(group, glob)`` pairs, and a pattern with no
+    group applies to every group. ``muted`` holds exact ``(group, name)``
+    pairs, since a name such as ``z_idle_threads[0]`` reads as a glob.
     """
 
     groups: frozenset[str] | None = None
     skipped: frozenset[str] = frozenset()
-    include: tuple[str, ...] = ()
-    exclude: tuple[str, ...] = ()
+    include: tuple[tuple[str | None, str], ...] = ()
+    exclude: tuple[tuple[str | None, str], ...] = ()
     muted: frozenset[tuple[str, str]] = frozenset()
 
     def reads_group(self, group: str) -> bool:
@@ -32,17 +33,20 @@ class Selection:
     def reads(self, group: str, name: str) -> bool:
         if not self.reads_group(group) or (group, name) in self.muted:
             return False
-        if self.include and not any(fnmatchcase(name, pattern) for pattern in self.include):
+        includes = [pattern for scope, pattern in self.include if scope in (None, group)]
+        if includes and not any(fnmatchcase(name, pattern) for pattern in includes):
             return False
-        return not any(fnmatchcase(name, pattern) for pattern in self.exclude)
+        return not any(
+            fnmatchcase(name, pattern) for scope, pattern in self.exclude if scope in (None, group)
+        )
 
     def to_header(self) -> dict:
         """This selection as a recording header holds it."""
         return {
             "groups": None if self.groups is None else sorted(self.groups),
             "skipped": sorted(self.skipped),
-            "include": list(self.include),
-            "exclude": list(self.exclude),
+            "include": [[scope, pattern] for scope, pattern in self.include],
+            "exclude": [[scope, pattern] for scope, pattern in self.exclude],
             "muted": sorted([group, name] for group, name in self.muted),
         }
 
@@ -54,8 +58,8 @@ class Selection:
         return cls(
             groups=None if header.get("groups") is None else frozenset(header["groups"]),
             skipped=frozenset(header.get("skipped", ())),
-            include=tuple(header.get("include", ())),
-            exclude=tuple(header.get("exclude", ())),
+            include=tuple((scope, pattern) for scope, pattern in header.get("include", ())),
+            exclude=tuple((scope, pattern) for scope, pattern in header.get("exclude", ())),
             muted=frozenset((group, name) for group, name in header.get("muted", ())),
         )
 
