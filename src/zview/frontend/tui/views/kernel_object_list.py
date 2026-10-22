@@ -90,7 +90,7 @@ class KernelObjectListView(BaseStateView):
             (kind, obj)
             for kind in self._kinds
             if self._filter in (None, kind)
-            for obj in self.controller.frames.latest(kind.key)
+            for obj in self.controller.frames.latest(kind.key, self.controller.selection)
         ]
 
         return sorted(
@@ -122,6 +122,9 @@ class KernelObjectListView(BaseStateView):
         self._render_frame(stdscr, self._footer_hint(), height, width)
 
         pairs = self._rows()
+        muted = self.controller.selection.muted
+        # A muted object's last values would add stale numbers to the aggregate.
+        read = [(kind, obj) for kind, obj in pairs if (kind.key, obj.name) not in muted]
         widths = self.compute_widths(width, [obj.name for _, obj in pairs])
         self._info.set_field_widths(*widths)
 
@@ -141,7 +144,7 @@ class KernelObjectListView(BaseStateView):
             0,
             self.filter_name,
             f"{self._ALL_TITLE if self._filter is None else self._filter.title:^{widths[1]}}",
-            *self._aggregate(pairs),
+            *self._aggregate(read),
             0,
         )
         stdscr.hline(3, 0, curses.ACS_S3, width)
@@ -166,7 +169,9 @@ class KernelObjectListView(BaseStateView):
                 break
 
             selected = (self.top_line + idx) == self.cursor
-            self._info.draw(stdscr, target_y, 0, kind, obj, selected)
+            self._info.draw(
+                stdscr, target_y, 0, kind, obj, selected, muted=(kind.key, obj.name) in muted
+            )
 
         start_num = self.top_line + 1 if total else 0
         end_num = min(self.top_line + max_table_rows, total)
@@ -224,6 +229,7 @@ class KernelObjectListView(BaseStateView):
             Keybind("k", "Threads", "Switch back to the threads view"),
             Keybind("s", "Sort", "Cycle through sort keys"),
             Keybind("i", "Invert", "Reverse the current sort order"),
+            Keybind("x", "Mute", "Mute or unmute the selected object, kept dimmed as last read"),
         ]
 
     def handle_input(self, key: int) -> ZViewState | None:
@@ -240,6 +246,11 @@ class KernelObjectListView(BaseStateView):
                 kind, obj = rows[max(min(self.cursor, len(rows) - 1), 0)]
                 self.controller.detailing = (kind.key, obj.address)
                 return ZViewState.OBJECT_DETAIL_VIEW
+
+            case SpecialCode.MUTE:
+                if rows := self._rows():
+                    kind, obj = rows[max(min(self.cursor, len(rows) - 1), 0)]
+                    self.controller.toggle_mute(kind.key, obj.name)
 
             case SpecialCode.FILTER:
                 self._filter_idx = (self._filter_idx + 1) % len(self._filters)

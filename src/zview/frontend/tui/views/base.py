@@ -74,6 +74,7 @@ class SpecialCode:
     RECONNECT = ord("R")
     HELP = ord("?")
     MESSAGES = ord("m")
+    MUTE = ord("x")
 
 
 class ZViewState(enum.Enum):

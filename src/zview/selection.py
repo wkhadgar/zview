@@ -36,7 +36,11 @@ class Selection:
         return (self.groups is None or group in self.groups) and group not in self.skipped
 
     def reads(self, group: str, name: str) -> bool:
-        if not self.reads_group(group) or (group, name) in self.muted:
+        return self.matches(group, name) and (group, name) not in self.muted
+
+    def matches(self, group: str, name: str) -> bool:
+        """The row's group is read and its name passes the patterns, muted or not."""
+        if not self.reads_group(group):
             return False
         includes = [pattern for scope, pattern in self.include if scope in (None, group)]
         if includes and not any(fnmatchcase(name, pattern) for pattern in includes):

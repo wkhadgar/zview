@@ -29,9 +29,10 @@ def _total(values: list) -> float | None:
 
 
 def listed_threads(controller: Any) -> list[ThreadInfo]:
-    """The threads read, but for the idle thread of each CPU."""
+    """The threads listed, but for the idle thread of each CPU."""
     idle = controller.scraper.groups["threads"].idle_addresses
-    return [t for t in controller.frames.latest("threads") if t.address not in idle]
+    threads = controller.frames.latest("threads", controller.selection)
+    return [t for t in threads if t.address not in idle]
 
 
 class ThreadListView(BaseStateView):
@@ -79,6 +80,11 @@ class ThreadListView(BaseStateView):
     def _compute_widths(self, terminal_width: int, threads: list[ThreadInfo]) -> list[int]:
         return compute_flex_widths(list(self.SCHEMA.values()), terminal_width, threads)
 
+    def _sorted_threads(self) -> list[ThreadInfo]:
+        """The listed threads in the table's order."""
+        key_func = self._sort_keys[self._current_sort_idx]
+        return sorted(listed_threads(self.controller), key=key_func, reverse=self._invert_sorting)
+
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         """
         Draws the thread data table and its general informations.
@@ -88,7 +94,8 @@ class ThreadListView(BaseStateView):
 
         self._render_frame(stdscr, self._footer_hint(), height, width)
 
-        threads = listed_threads(self.controller)
+        threads = self._sorted_threads()
+        muted = self.controller.selection.muted
         widths = self._compute_widths(width, threads)
         self._tui_thread_info.set_field_widths(*widths)
 
@@ -124,8 +131,10 @@ class ThreadListView(BaseStateView):
 
         table_start = 4
 
-        runtimes = [t.runtime for t in threads if t.runtime]
-        stack_size_sum = _total([t.stack_size for t in threads])
+        # A muted thread's last values would add stale numbers to the totals.
+        read = [t for t in threads if ("threads", t.name) not in muted]
+        runtimes = [t.runtime for t in read if t.runtime]
+        stack_size_sum = _total([t.stack_size for t in read])
         stack_watermark_sum = _total([r.stack_watermark for r in runtimes])
         is_any_thread_active = any(r.active for r in runtimes)
         aggregate_stack_usage_pct = None
@@ -153,13 +162,7 @@ class ThreadListView(BaseStateView):
         self._tui_thread_info.draw(stdscr, 2, 0, all_threads_info, False)
         stdscr.addstr(3, 0, "─" * width)
 
-        key_func = self._sort_keys[self._current_sort_idx]
-
-        sorted_threads = sorted(threads, key=key_func, reverse=self._invert_sorting)
-
-        for idx, thread in enumerate(
-            sorted_threads[self.top_line : self.top_line + max_table_rows]
-        ):
+        for idx, thread in enumerate(threads[self.top_line : self.top_line + max_table_rows]):
             target_y = table_start + idx
 
             if target_y >= height - 2:
@@ -172,9 +175,10 @@ class ThreadListView(BaseStateView):
                 0,
                 thread,
                 selected=(absolute_idx == self.cursor),
+                muted=("threads", thread.name) in muted,
             )
 
-        if not sorted_threads:
+        if not threads:
             no_threads_strs = (
                 "No threads found on kernel.",
                 "If you had any, they are probably dead.",
@@ -193,6 +197,7 @@ class ThreadListView(BaseStateView):
             Keybind("r", "Refresh", "Re-walk the kernel thread list and resync baselines"),
             Keybind("s", "Sort", "Cycle through sort keys"),
             Keybind("i", "Invert", "Reverse the current sort order"),
+            Keybind("x", "Mute", "Mute or unmute the selected thread, kept dimmed as last read"),
         ]
         # The footer shows the first three bindings only, so the view switches
         # come ahead of Refresh.
@@ -207,16 +212,17 @@ class ThreadListView(BaseStateView):
             case curses.KEY_UP:
                 self.cursor -= 1
             case curses.KEY_ENTER | SpecialCode.NEWLINE | SpecialCode.RETURN:
-                threads = listed_threads(self.controller)
+                threads = self._sorted_threads()
                 if not threads:
                     return None
 
-                key_func = self._sort_keys[self._current_sort_idx]
-                sorted_threads = sorted(threads, key=key_func, reverse=self._invert_sorting)
-
-                self.controller.detailing_thread = sorted_threads[self.cursor].name
+                self.controller.detailing_thread = threads[self.cursor].name
 
                 return ZViewState.THREAD_DETAIL_VIEW
+
+            case SpecialCode.MUTE:
+                if threads := self._sorted_threads():
+                    self.controller.toggle_mute("threads", threads[self.cursor].name)
 
             case SpecialCode.SORT:
                 self._current_sort_idx = (self._current_sort_idx + 1) % len(self._sort_keys)

@@ -16,6 +16,7 @@ from zview.frames import Frame, FrameHistory, Notice
 from zview.frontend.tui.views.base import Keybind, SpecialCode, ZViewState, ZViewTUIAttributes
 from zview.frontend.tui.widgets import PopupRow, TUIPopup
 from zview.frontend.zview_tui import _MESSAGE_LOG_SIZE, LogEntry, ZView
+from zview.selection import Selection
 
 
 class _StrictWin:
@@ -70,6 +71,7 @@ def app() -> ZView:
     a = ZView.__new__(ZView)
     a.min_dimensions = (14, 85)
     a.frames = FrameHistory()
+    a.selection = Selection()
     a.status_message = ""
     a.messages = deque(maxlen=_MESSAGE_LOG_SIZE)
     a.update_count = 0
