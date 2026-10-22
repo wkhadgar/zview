@@ -7,6 +7,8 @@
 from collections import deque
 from dataclasses import dataclass
 
+from zview.selection import Selection
+
 # The frames an object's history keeps.
 HISTORY_LENGTH = 256
 
@@ -45,6 +47,7 @@ class FrameHistory:
     def __init__(self) -> None:
         self._latest: dict[str, list] = {}
         self._history: dict[tuple[str, int], deque] = {}
+        self._named: dict[tuple[str, str], object] = {}
 
     def add(self, frame: Frame) -> None:
         """Take a frame's infos. A group the frame leaves out keeps its last ones."""
@@ -53,9 +56,21 @@ class FrameHistory:
             for info in infos:
                 key = (group, info.address)
                 self._history.setdefault(key, deque(maxlen=HISTORY_LENGTH)).append(info)
+                self._named[(group, info.name)] = info
 
-    def latest(self, group: str) -> list:
-        return self._latest.get(group, [])
+    def latest(self, group: str, selection: Selection | None = None) -> list:
+        """
+        The group's infos from the last frame that read it, those ``selection``
+        reads, then each row it mutes and its patterns match, as last read.
+        """
+        selection = selection or Selection()
+        infos = [info for info in self._latest.get(group, []) if selection.reads(group, info.name)]
+        muted = (
+            self._named.get(row)
+            for row in sorted(selection.muted)
+            if row[0] == group and selection.matches(*row)
+        )
+        return infos + [info for info in muted if info is not None]
 
     def of(self, group: str, address: int) -> list:
         """The info of the object at ``address`` in each frame that read it, oldest first."""

@@ -27,8 +27,8 @@ class KernelObjectListView(BaseStateView):
     count over limit for a semaphore, held or free for a mutex, used over
     capacity for a queue, blocks out over the block count for a slab, bytes
     out over the size for a heap, and busy or idle for a work queue, captioned
-    with the count, the owner, the size or the backlog. ``f`` filters by type,
-    ``Enter`` opens the detail view for the selected object.
+    with the count, the owner, the size or the backlog. ``Enter`` opens the
+    detail view for the selected object.
     """
 
     # ``State`` is the bar column and absorbs the spare width.
@@ -38,7 +38,7 @@ class KernelObjectListView(BaseStateView):
 
     # Every group but the threads, which the thread views show.
     OBJECTS = Selection(skipped=frozenset({"threads"}))
-    # The aggregate row sums the filtered rows, so it is titled by the filter.
+    # The aggregate row sums the rows listed, so a single kind listed titles it.
     _ALL_TITLE = "All Objects"
     _MAX_NAME = 34
     _MAX_LISTED_WAITERS = 3
@@ -48,10 +48,8 @@ class KernelObjectListView(BaseStateView):
         super().__init__(controller, theme)
 
         self.top_line: int = 0
-        # The kinds this view lists, and its filters: all of them, then each.
+        # The kinds this view lists.
         self._kinds = tuple(kind for kind in KINDS if self.OBJECTS.reads_group(kind.key))
-        self._filters: tuple[Kind | None, ...] = (None, *self._kinds)
-        self._filter_idx: int = 0
         self._current_sort_idx: int = 0
         self._invert_sorting: bool = False
 
@@ -75,22 +73,22 @@ class KernelObjectListView(BaseStateView):
     def reads(self) -> Selection:
         return self.OBJECTS
 
-    @property
-    def _filter(self) -> Kind | None:
-        """The kind the table is filtered to, or ``None`` for all of them."""
-        return self._filters[self._filter_idx]
-
-    @property
-    def filter_name(self) -> str:
-        return "ALL" if self._filter is None else self._filter.label
+    def _only_kind(self) -> Kind | None:
+        """The kind listed while it is the only one read and available, or ``None``."""
+        listed = [
+            kind
+            for kind in self._kinds
+            if self.controller.scraper.available.get(kind.key)
+            and self.controller.selection.reads_group(kind.key)
+        ]
+        return listed[0] if len(listed) == 1 else None
 
     def _rows(self) -> list[tuple[Kind, Any]]:
         """Typed, filtered and sorted rows backing the table."""
         rows = [
             (kind, obj)
             for kind in self._kinds
-            if self._filter in (None, kind)
-            for obj in self.controller.frames.latest(kind.key)
+            for obj in self.controller.frames.latest(kind.key, self.controller.selection)
         ]
 
         return sorted(
@@ -119,9 +117,15 @@ class KernelObjectListView(BaseStateView):
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()
-        self._render_frame(stdscr, self._footer_hint(), height, width)
+        hint = self._footer_hint()
+        self._render_frame(stdscr, hint, height, width)
 
         pairs = self._rows()
+        only = self._only_kind()
+        name = "ALL" if only is None else only.label
+        muted = self.controller.selection.muted
+        # A muted object's last values would add stale numbers to the aggregate.
+        read = [(kind, obj) for kind, obj in pairs if (kind.key, obj.name) not in muted]
         widths = self.compute_widths(width, [obj.name for _, obj in pairs])
         self._info.set_field_widths(*widths)
 
@@ -139,9 +143,9 @@ class KernelObjectListView(BaseStateView):
             stdscr,
             2,
             0,
-            self.filter_name,
-            f"{self._ALL_TITLE if self._filter is None else self._filter.title:^{widths[1]}}",
-            *self._aggregate(pairs),
+            name,
+            f"{self._ALL_TITLE if only is None else only.title:^{widths[1]}}",
+            *self._aggregate(read, only),
             0,
         )
         stdscr.hline(3, 0, curses.ACS_S3, width)
@@ -157,7 +161,7 @@ class KernelObjectListView(BaseStateView):
             self.top_line = self.cursor
 
         if not pairs:
-            stdscr.addstr(table_start, 0, self._empty_message()[:width])
+            stdscr.addstr(table_start, 0, self._empty_message(name)[:width])
 
         visible = pairs[self.top_line : self.top_line + max_table_rows]
         for idx, (kind, obj) in enumerate(visible):
@@ -166,17 +170,21 @@ class KernelObjectListView(BaseStateView):
                 break
 
             selected = (self.top_line + idx) == self.cursor
-            self._info.draw(stdscr, target_y, 0, kind, obj, selected)
+            self._info.draw(
+                stdscr, target_y, 0, kind, obj, selected, muted=(kind.key, obj.name) in muted
+            )
 
         start_num = self.top_line + 1 if total else 0
         end_num = min(self.top_line + max_table_rows, total)
-        indicator = f" {self.filter_name} objects: {start_num}-{end_num} of {total} "
-        stdscr.addstr(height - 1, 0, indicator[:width], self._frame_attr)
+        indicator = self._bar_count(
+            f"{name} objects: {start_num}-{end_num} of {total}", width - len(hint)
+        )
+        stdscr.addstr(height - 1, 0, indicator, self._frame_attr)
 
         self._render_status(stdscr, width, height - 2)
         stdscr.refresh()
 
-    def _aggregate(self, rows: list[tuple[Kind, Any]]) -> tuple[float, str, str]:
+    def _aggregate(self, rows: list[tuple[Kind, Any]], only: Kind | None) -> tuple[float, str, str]:
         """``(bar percentage, bar label, waiters cell)`` for the aggregate row."""
         pressured = sum(
             1
@@ -189,17 +197,17 @@ class KernelObjectListView(BaseStateView):
         queued = sum(len(w) for w in walked)
         cell = str(queued) if len(walked) == len(rows) else f"{queued}+?"
 
-        return fill, self._summary(rows).strip(), cell
+        return fill, self._summary(rows, only).strip(), cell
 
     @staticmethod
     def _is_blocked(kind: Kind, obj: Any) -> bool:
         return kind.state(obj).level is Level.BLOCKED
 
-    def _summary(self, rows: list[tuple[Kind, Any]]) -> str:
+    def _summary(self, rows: list[tuple[Kind, Any]], only: Kind | None) -> str:
         contended = sum(1 for kind, obj in rows if self._is_blocked(kind, obj))
         queued = sum(1 for _, obj in rows if obj.waiters)
 
-        word = "contended" if self._filter is None else self._filter.pressure
+        word = "contended" if only is None else only.pressure
         summary = f" {len(rows)} objects | {contended} {word} | {queued} with waiters"
         if self.controller.waiters_unknown:
             # Stated once here instead of per row.
@@ -207,23 +215,19 @@ class KernelObjectListView(BaseStateView):
 
         return summary
 
-    def _empty_message(self) -> str:
+    def _empty_message(self, name: str) -> str:
         if not self.controller.has_kernel_objects():
-            return " No statically declared kernel objects in this build."
+            return " No kernel object group is read, g picks the groups."
 
-        return f" No {self.filter_name} objects."
+        return f" No {name} objects."
 
     def keybindings(self) -> list[Keybind]:
         return [
             Keybind("<Enter>", "Detail", "Open detail view for the selected object"),
-            Keybind(
-                "f",
-                "Filter",
-                f"Cycle the type filter ({', '.join(['ALL', *(k.label for k in self._kinds)])})",
-            ),
             Keybind("k", "Threads", "Switch back to the threads view"),
             Keybind("s", "Sort", "Cycle through sort keys"),
             Keybind("i", "Invert", "Reverse the current sort order"),
+            Keybind("x", "Mute", "Mute or unmute the selected object, kept dimmed as last read"),
         ]
 
     def handle_input(self, key: int) -> ZViewState | None:
@@ -241,10 +245,10 @@ class KernelObjectListView(BaseStateView):
                 self.controller.detailing = (kind.key, obj.address)
                 return ZViewState.OBJECT_DETAIL_VIEW
 
-            case SpecialCode.FILTER:
-                self._filter_idx = (self._filter_idx + 1) % len(self._filters)
-                self.cursor = 0
-                self.top_line = 0
+            case SpecialCode.MUTE:
+                if rows := self._rows():
+                    kind, obj = rows[max(min(self.cursor, len(rows) - 1), 0)]
+                    self.controller.toggle_mute(kind.key, obj.name)
 
             case SpecialCode.SORT:
                 self._current_sort_idx = (self._current_sort_idx + 1) % len(self._sort_keys)

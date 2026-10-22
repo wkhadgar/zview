@@ -8,7 +8,35 @@ import curses
 
 import pytest
 
-from zview.frontend.tui.widgets import SiteValue, TUIGraph, TUIProgressBar, _addstr_clipped
+from zview.frontend.tui.views.base import SpecialCode
+from zview.frontend.tui.widgets import (
+    SiteValue,
+    TUIGraph,
+    TUILineEdit,
+    TUIProgressBar,
+    _addstr_clipped,
+)
+
+
+def test_a_pattern_in_the_middle_of_a_line_is_dropped_alone():
+    line = TUILineEdit("gate*, main, idle")
+
+    for key in (curses.KEY_HOME, *[curses.KEY_RIGHT] * 7, *[curses.KEY_DC] * 6):
+        line.edit(key)
+    assert line.text == "gate*, idle"
+
+    line.edit(curses.KEY_LEFT)
+    line.edit(SpecialCode.DELETE)
+    line.edit(ord("|"))
+    assert (line.text, line.at) == ("gate*| idle", 6)
+
+
+def test_backspace_at_the_start_of_a_line_deletes_nothing():
+    line = TUILineEdit("main")
+    line.edit(curses.KEY_HOME)
+    line.edit(SpecialCode.DELETE)
+
+    assert (line.text, line.at) == ("main", 0)
 
 
 @pytest.fixture

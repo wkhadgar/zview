@@ -65,6 +65,9 @@ class ZViewCommand(WestCommand):
             runner_target=None,
             frequency=None,
             period=0.10,
+            only=None,
+            include=[],
+            exclude=[],
         )
         return parser
 
