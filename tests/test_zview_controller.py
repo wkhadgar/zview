@@ -39,6 +39,7 @@ def app() -> ZView:
     a.stdscr = MagicMock()
     a._overlay = None
     a._prompt = None
+    a._group_cursor = 0
     return a
 
 
@@ -336,6 +337,42 @@ def test_escape_drops_the_pattern_line_and_enter_selects_it(app):
 
     assert app.selection.include == ((None, "main"),)
     assert app._prompt is None
+
+
+def test_space_in_the_groups_popup_flips_the_group_under_its_cursor(app):
+    """The popup lists the groups the session can read, and the others stay as they were."""
+    app.scraper.available = {"threads": True, "heaps": False, "semaphores": True, "mutexes": True}
+    app.scraper.groups = dict.fromkeys(app.scraper.available)
+    keys = [ord("g"), curses.KEY_DOWN, SpecialCode.SPACE]
+    app.stdscr.getch.side_effect = [*keys, SpecialCode.SPACE, SpecialCode.ESCAPE]
+
+    for _ in keys:
+        app.process_events()
+    assert [key for key in app.scraper.groups if app.selection.reads_group(key)] == [
+        "threads",
+        "heaps",
+        "mutexes",
+    ]
+
+    app.process_events()
+    app.process_events()
+    assert app.selection.reads_group("semaphores")
+    assert app._overlay is None
+
+
+def test_the_groups_popup_reopens_inside_a_list_that_shrank(app):
+    """A reload onto a build with fewer groups leaves the cursor past the end."""
+    app.scraper.available = dict.fromkeys(["threads", "heaps", "semaphores", "mutexes"], True)
+    app.scraper.groups = dict.fromkeys(app.scraper.available)
+    app._group_cursor = 3
+    app.scraper.available = {"threads": True, "heaps": True}
+    app.scraper.groups = dict.fromkeys(app.scraper.available)
+    app.stdscr.getch.side_effect = [ord("g"), SpecialCode.SPACE]
+
+    app.process_events()
+    app.process_events()
+
+    assert not app.selection.reads_group("heaps")
 
 
 def test_a_pattern_line_naming_an_unknown_group_keeps_the_patterns(app):

@@ -91,6 +91,7 @@ def _objects_shown(s: ZScraper) -> bool:
 
     view = ZView.__new__(ZView)
     view.scraper = s
+    view.selection = s.selection
     return view.has_kernel_objects()
 
 

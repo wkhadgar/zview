@@ -164,7 +164,7 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
 * **ENTER**: Get details for the selected thread or kernel object (hit ENTER again to return).
 * **S / I**: Sort the data and invert the sorting order.
 * **k**: Access the **Kernel Objects** view listing semaphores, mutexes, message queues, memory slabs, heaps and work queues (hit k again to return).
-* **f**: In the kernel objects view, cycle the type filter (ALL, SEM, MTX, MSG, HEP, SLB, WKQ).
+* **g**: Pick the groups read (threads, heaps, semaphores and the rest) from a checklist, where **Space** toggles one.
 * **r**: Soft refresh, re-walks the kernel thread list and clears runtime baselines.
 * **R**: Full reload, tears down the polling thread, disconnects the probe, re-parses the ELF, reconnects, checks the target runs that ELF, and resumes. After a rebuild, press it once the target runs the new image.
 
@@ -189,8 +189,8 @@ A thread carries its CPU and load graphs, building up live as it is polled.
 Press **k** for every statically declared `k_sem`, `k_mutex`, `k_msgq`, `k_mem_slab`,
 `k_heap` and `k_work_q`: semaphore counts with their waiter lists, mutexes with the thread
 that holds each lock, queues with their fill level, slabs and heaps with what they have
-handed out, and work queues with the work waiting to run. **f** cycles the type filter,
-and the aggregate row on top sums whatever the filter leaves.
+handed out, and work queues with the work waiting to run. The aggregate row on top sums
+the objects listed, and takes a type's own wording when **g** leaves only that type read.
 
 ![Kernel objects list](docs/assets/kernel_objects.gif)
 

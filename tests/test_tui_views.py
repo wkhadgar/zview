@@ -396,6 +396,10 @@ def test_the_bottom_bar_names_the_patterns_and_the_rows_muted_in_its_view(contro
     controller.selection = Selection()
     assert view._bar_count("Threads: 1-2 of 2", 80) == " Threads: 1-2 of 2 "
 
+    controller.scraper.available = {"threads": True, "semaphores": True}
+    controller.selection = Selection(groups=frozenset())
+    assert view._bar_count("Threads: 0-0 of 0", 80) == " Threads: 0-0 of 0 | Off: threads "
+
 
 def test_the_all_threads_row_sums_only_the_threads_read(controller, theme):
     """A muted thread's last load would add a stale number to the total."""
