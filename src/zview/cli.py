@@ -103,6 +103,12 @@ def _groups(value: str) -> frozenset[str]:
     return frozenset(group.strip() for group in value.split(",") if group.strip())
 
 
+def _pattern(value: str) -> tuple[str | None, str]:
+    """``GROUP:GLOB`` for one group, or a bare ``GLOB`` for every group."""
+    group, sep, glob = value.partition(":")
+    return (group, glob) if sep else (None, value)
+
+
 def _add_selection(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--only",
@@ -114,16 +120,19 @@ def _add_selection(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--include",
         action="append",
+        type=_pattern,
         default=[],
         metavar="PATTERN",
-        help="Read only rows whose name matches this glob. Repeatable.",
+        help="Read only rows whose name matches this glob, or GROUP:GLOB within one group. "
+        "Repeatable.",
     )
     parser.add_argument(
         "--exclude",
         action="append",
+        type=_pattern,
         default=[],
         metavar="PATTERN",
-        help="Skip rows whose name matches this glob. Repeatable.",
+        help="Skip rows whose name matches this glob, or GROUP:GLOB within one group. Repeatable.",
     )
 
 

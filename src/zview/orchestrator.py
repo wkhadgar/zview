@@ -165,7 +165,11 @@ class ZScraper:
 
     def check_selection(self, selection: Selection) -> None:
         """Raises ``ValueError`` when ``selection`` names a group no frame holds."""
-        if unknown := set(selection.groups or ()) - set(self.groups):
+        mentioned = {
+            *(selection.groups or ()),
+            *(scope for scope, _ in (*selection.include, *selection.exclude) if scope is not None),
+        }
+        if unknown := mentioned - set(self.groups):
             named, known = ", ".join(sorted(unknown)), ", ".join(self.groups)
             raise ValueError(f"Unknown group {named}; choose from {known}.")
 
