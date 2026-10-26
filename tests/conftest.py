@@ -29,5 +29,5 @@ def app() -> ZView:
     """A ``ZView`` on a core over a mocked scraper, built without a terminal."""
     scraper = MagicMock()
     scraper.selection = Selection()
-    scraper.groups = {"threads": MagicMock(idle_addresses=(0xDEAD,))}
+    scraper.groups = {"threads": MagicMock()}
     return ZView(Core(scraper), MagicMock(), theme=ZViewTUIAttributes.create_mono())

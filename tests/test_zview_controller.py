@@ -80,14 +80,9 @@ def test_a_frame_with_work_queues_records_their_backlog(app):
 
 def test_process_data_strips_every_idle_thread(app):
     """An SMP build idles on each CPU, and none of its idle threads is listed."""
-    app.scraper.groups = {"threads": MagicMock(idle_addresses=(0xDEAD, 0xBEEF))}
     main = ThreadInfo(address=0x1000, stack_start=0, stack_size=512, name="main", runtime=None)
-    idle_00 = ThreadInfo(
-        address=0xDEAD, stack_start=0, stack_size=128, name="idle 00", runtime=None
-    )
-    idle_01 = ThreadInfo(
-        address=0xBEEF, stack_start=0, stack_size=128, name="idle 01", runtime=None
-    )
+    idle_00 = ThreadInfo(0xDEAD, 0, 128, "idle 00", None, idle=True)
+    idle_01 = ThreadInfo(0xBEEF, 0, 128, "idle 01", None, idle=True)
 
     _feed(app, Frame({"threads": [main, idle_00, idle_01]}))
 

@@ -205,7 +205,8 @@ class KernelObjectListView(BaseStateView):
 
     @staticmethod
     def _is_blocked(kind: Kind, obj: Any) -> bool:
-        return kind.state(obj).level is Level.BLOCKED
+        state = kind.state(obj)
+        return state is not None and state.level is Level.BLOCKED
 
     def _summary(self, rows: list[tuple[Kind, Any]], only: Kind | None) -> str:
         contended = sum(1 for kind, obj in rows if self._is_blocked(kind, obj))

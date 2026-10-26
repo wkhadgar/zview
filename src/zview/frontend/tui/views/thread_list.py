@@ -20,6 +20,7 @@ from zview.frontend.tui.views.base import (
     compute_flex_widths,
 )
 from zview.frontend.tui.widgets import TUIThreadInfo
+from zview.kinds import BY_KEY
 from zview.selection import Selection
 
 
@@ -34,10 +35,9 @@ def _total(values: list) -> float | None:
 
 
 def listed_threads(controller: Any) -> list[ThreadInfo]:
-    """The threads listed, but for the idle thread of each CPU."""
-    idle = controller.scraper.groups["threads"].idle_addresses
+    """The threads the thread kind lists, as the selection shows them."""
     threads = controller.frames.latest("threads", controller.selection)
-    return [t for t in threads if t.address not in idle]
+    return [t for t in threads if BY_KEY["threads"].listed(t)]
 
 
 class ThreadListView(BaseStateView):

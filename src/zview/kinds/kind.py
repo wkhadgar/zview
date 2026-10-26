@@ -51,9 +51,10 @@ class Kind(ABC):
     One group's infos as a reader sees them, keyed like its kernel ``Group``.
 
     ``label`` and ``title`` name the kind in a table and on its aggregate row,
-    ``pressure`` is the word for an info that is ``BLOCKED``, and ``state``
-    reads one info at a glance. A view lists the kinds its selection reads, so
-    a kind no table lists leaves them unset.
+    ``pressure`` is the word for an info that is ``BLOCKED``, ``state`` reads
+    one info at a glance, and ``listed`` says whether a table lists it. A view
+    lists the kinds its selection reads, so a kind no table lists leaves them
+    unset.
     """
 
     key: ClassVar[str]
@@ -65,8 +66,12 @@ class Kind(ABC):
     def dump(self, info) -> str:
         """The info as one line of ``zview dump``."""
 
-    def state(self, info) -> State:
-        raise NotImplementedError(f"the {self.key} kind has no state")
+    def state(self, info) -> State | None:
+        """The info at a glance, or ``None`` for a kind or an info without one."""
+        return None
+
+    def listed(self, info) -> bool:
+        return True
 
     def in_use(self, info) -> bool:
         """Held or working, with or without threads queued on it."""

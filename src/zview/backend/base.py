@@ -78,6 +78,8 @@ class ThreadInfo:
     user_options: int | None = None
     entry_point: int | None = None
     entry_symbol: str | None = None
+    # The idle thread of a CPU.
+    idle: bool = False
 
 
 @dataclass(frozen=True)

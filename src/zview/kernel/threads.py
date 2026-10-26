@@ -675,6 +675,7 @@ class Threads(Group):
                     user_options=meta.get("user_options"),
                     entry_point=meta.get("entry_point"),
                     entry_symbol=meta.get("entry_symbol"),
+                    idle=data["info"].address in self.idle_addresses,
                 )
             )
         return final

@@ -160,11 +160,13 @@ def test_every_idle_thread_counts_as_idle(elf_path):
     )
     scraper.groups["threads"].idle_addresses = (_IDLE, second_idle)
 
-    runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
+    threads = _one_frame(scraper)["threads"]
+    runtimes = {t.name: t.runtime for t in threads}
 
     assert runtimes["main"].cpu == 100.0
     assert runtimes["idle 01"].cpu == 0.0
     assert runtimes["main"].cpu_normalized == pytest.approx(10.0)
+    assert {t.name for t in threads if t.idle} == {"idle 00", "idle 01"}
 
 
 def test_a_detail_view_shares_count_the_threads_it_does_not_scan(elf_path):
