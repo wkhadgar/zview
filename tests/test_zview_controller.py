@@ -6,39 +6,18 @@
 
 import curses
 import sys
-from collections import deque
 from unittest.mock import MagicMock
 
 import pytest
 
 from zview.backend.base import HeapInfo, SemaphoreInfo, ThreadInfo, WorkqInfo
 from zview.backend.image import ImageMismatch
-from zview.core import Core
 from zview.frames import Fatal, Frame, Notice, ReplayEnd
 from zview.frontend.tui.views.base import SpecialCode, ZViewState
 from zview.frontend.tui.views.thread_detail import ThreadDetailView
 from zview.frontend.tui.views.thread_list import listed_threads
 from zview.frontend.zview_tui import ZView
 from zview.selection import Selection
-
-
-@pytest.fixture
-def app() -> ZView:
-    """``ZView`` instance without going through curses init."""
-    a = ZView.__new__(ZView)
-    a.status_message = ""
-    a.messages = deque(maxlen=64)
-    a.update_count = 0
-    a.scraper = MagicMock()
-    a.scraper.selection = Selection()
-    a.scraper.groups = {"threads": MagicMock(idle_addresses=(0xDEAD,))}
-    a.core = Core(a.scraper)
-    a.data_queue = a.core.events
-    a.state = ZViewState.THREAD_LIST_VIEW
-    a.stdscr = MagicMock()
-    a._overlay = None
-    a._prompt = None
-    return a
 
 
 def _feed(app: ZView, frame: Frame) -> None:

@@ -99,22 +99,19 @@ class ZView:
     core it is attached to.
     """
 
-    def __init__(self, scraper: ZScraper, stdscr, selection: Selection):
+    def __init__(self, core: Core, stdscr, theme: ZViewTUIAttributes | None = None):
         """
-        Initializes the ZView application.
+        Initializes the ZView application, the frontend of ``core``.
 
         Args:
             stdscr: The main curses window object provided by curses.wrapper.
-            selection: What the lists show, and all a live target reads.
+            theme: The colors to draw with. Given, the terminal is left as it
+                is, for a controller without curses.
         """
         self.min_dimensions = (14, 85)
         self.stdscr: curses.window = stdscr
-        self.scraper: ZScraper = scraper
+        self.core = core
         self.running = True
-        self.core = Core(scraper)
-        self.data_queue = self.core.events
-        # What the lists show: the launch's selection, then what the keys change.
-        self.core.select(selection)
         self.status_message: str = ""
         # One entry per reported message, newest last.
         self.messages: deque[LogEntry] = deque(maxlen=_MESSAGE_LOG_SIZE)
@@ -126,13 +123,13 @@ class ZView:
         # The group key and address of the object the detail view shows.
         self.detailing: tuple[str, int] | None = None
         # Wait queues are walkable only in the dlist (simple) flavor.
-        self.waiters_unknown: bool = scraper.waitq_flavor != "simple"
+        self.waiters_unknown: bool = self.scraper.waitq_flavor != "simple"
         # Name of the open overlay ("help" or "messages"), or None.
         self._overlay: str | None = None
         # The pattern line being edited, or None.
         self._prompt: TUILineEdit | None = None
 
-        theme = self._init_curses()
+        theme = theme or self._init_curses()
         self._theme = theme
 
         levels = {
@@ -365,6 +362,14 @@ class ZView:
         return rows
 
     @property
+    def scraper(self) -> ZScraper:
+        return self.core.scraper
+
+    @property
+    def data_queue(self) -> queue.Queue:
+        return self.core.events
+
+    @property
     def frames(self) -> FrameHistory:
         return self.core.frames
 
@@ -525,7 +530,7 @@ class ZView:
             time.sleep(0.01)
 
 
-def tui_run(stdscr, scraper: ZScraper, inspection_period, selection: Selection):
+def tui_run(stdscr, core: Core, inspection_period):
     """
     The entry point for the curses application.
 
@@ -534,12 +539,11 @@ def tui_run(stdscr, scraper: ZScraper, inspection_period, selection: Selection):
 
     Args:
         :param stdscr: Standard screen window object provided by `curses.wrapper`.
-        :param scraper: ZScraper instance for data gathering.
+        :param core: The session the TUI is the frontend of.
         :param inspection_period: Period for inspection, in seconds.
-        :param selection: What the lists show, and all a live target reads.
     """
-    app = ZView(scraper, stdscr, selection)
-    for notice in scraper.absent_features():
+    app = ZView(core, stdscr)
+    for notice in core.scraper.absent_features():
         app.report(notice)
 
     try:

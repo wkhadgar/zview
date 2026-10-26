@@ -14,6 +14,7 @@ from zview.backend.jlink import JLinkScraper
 from zview.backend.nrfutil import NrfutilScraper
 from zview.backend.pyocd import PyOCDScraper
 from zview.backend.replay import ReplayScraper
+from zview.core import Core
 from zview.frontend.zview_tui import tui_run
 from zview.kernel.threads import USAGE_WINDOW_MAX
 from zview.kinds import KINDS
@@ -381,7 +382,9 @@ def _do_live(args) -> int:
         scraper.groups["threads"].usage_window = args.usage_window
         for notice in scraper.absent_features():
             print(notice, file=sys.stderr)
-        curses.wrapper(tui_run, scraper, args.period, selection)
+        core = Core(scraper)
+        core.select(selection)
+        curses.wrapper(tui_run, core, args.period)
     return 0
 
 
@@ -413,7 +416,9 @@ def _do_replay(args) -> int:
         selection = scraper.selection if args.match is None else _selection(args)
         scraper.check_selection(selection)
         # Pacing comes from the recording; the polling-thread sleep is just a floor.
-        curses.wrapper(tui_run, scraper, 0.05, selection)
+        core = Core(scraper)
+        core.select(selection)
+        curses.wrapper(tui_run, core, 0.05)
     return 0
 
 

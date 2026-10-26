@@ -5,19 +5,15 @@
 """Coverage for the message log behind the ``m`` overlay."""
 
 import curses
-import queue
 import re
-from collections import deque
 from unittest.mock import MagicMock
 
 import pytest
 
-from zview.core import Core
 from zview.frames import Frame, Notice
-from zview.frontend.tui.views.base import Keybind, SpecialCode, ZViewState, ZViewTUIAttributes
+from zview.frontend.tui.views.base import Keybind, SpecialCode
 from zview.frontend.tui.widgets import PopupRow, TUIPopup
-from zview.frontend.zview_tui import _MESSAGE_LOG_SIZE, LogEntry, ZView
-from zview.selection import Selection
+from zview.frontend.zview_tui import _MESSAGE_LOG_SIZE, LogEntry
 
 
 class _StrictWin:
@@ -64,29 +60,6 @@ class _RecordingWin:
 
     def getmaxyx(self):
         return 20, 60
-
-
-@pytest.fixture
-def app() -> ZView:
-    """``ZView`` instance without going through curses init."""
-    a = ZView.__new__(ZView)
-    a.min_dimensions = (14, 85)
-    a.status_message = ""
-    a.messages = deque(maxlen=_MESSAGE_LOG_SIZE)
-    a.update_count = 0
-    a.data_queue = queue.Queue()
-    a.scraper = MagicMock()
-    a.scraper.selection = Selection()
-    a.scraper.idle_thread_addresses = (0xDEAD,)
-    a.core = Core(a.scraper)
-    a.state = ZViewState.THREAD_LIST_VIEW
-    a.stdscr = MagicMock()
-    a._theme = ZViewTUIAttributes.create_mono()
-    a._log_popup = TUIPopup(" Messages ", 0, 0, {}, keep_tail=True)
-    a._help_popup = TUIPopup(" Help ", 0, 0, {})
-    a._overlay = None
-    a._prompt = None
-    return a
 
 
 @pytest.fixture
