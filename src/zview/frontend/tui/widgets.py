@@ -8,6 +8,7 @@ import textwrap
 from typing import NamedTuple
 
 from zview.backend.base import ThreadInfo, ThreadRuntime
+from zview.frontend.tui.views.base import SpecialCode
 from zview.kinds.kind import Kind, Level
 
 
@@ -317,6 +318,44 @@ class TUIPopup:
                         row.text[:text_room],
                         self._level_attrs.get(row.level, 0),
                     )
+
+
+class TUILineEdit:
+    """One line of text being typed, with a cursor the arrows move."""
+
+    def __init__(self, text: str):
+        self.text = text
+        self.at = len(text)
+
+    def edit(self, key: int) -> None:
+        """Move the cursor, or insert or delete at it."""
+        match key:
+            case curses.KEY_LEFT:
+                self.at = max(0, self.at - 1)
+            case curses.KEY_RIGHT:
+                self.at = min(len(self.text), self.at + 1)
+            case curses.KEY_HOME:
+                self.at = 0
+            case curses.KEY_END:
+                self.at = len(self.text)
+            case curses.KEY_BACKSPACE | SpecialCode.BACKSPACE | SpecialCode.DELETE if self.at:
+                self.text = self.text[: self.at - 1] + self.text[self.at :]
+                self.at -= 1
+            case curses.KEY_DC:
+                self.text = self.text[: self.at] + self.text[self.at + 1 :]
+            case _ if 32 <= key < 127:
+                self.text = self.text[: self.at] + chr(key) + self.text[self.at :]
+                self.at += 1
+
+    def draw(self, stdscr: curses.window, y: int, width: int, prefix: str) -> None:
+        """The line after ``prefix`` on row ``y``, scrolled to keep its reversed cursor in view."""
+        line = f"{prefix}{self.text} "
+        cursor = len(prefix) + self.at
+        start = max(0, cursor - (width - 2))
+        stdscr.move(y, 0)
+        stdscr.clrtoeol()
+        stdscr.addstr(y, 0, line[start : start + width - 1])
+        stdscr.addstr(y, cursor - start, line[cursor], curses.A_REVERSE)
 
 
 class TUIGraph(TUIBox):

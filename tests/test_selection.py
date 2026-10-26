@@ -37,6 +37,15 @@ def test_a_scoped_include_narrows_only_its_own_group():
     assert not selection.reads("semaphores", "bench_old")
 
 
+def test_a_pattern_line_reads_back_as_the_patterns_it_writes():
+    """Commas split it, since a thread name such as ``Philosopher 5`` holds a space."""
+    selection = Selection().with_pattern_line(" threads:gate*, lock,, !Philosopher 5 ")
+
+    assert selection.include == (("threads", "gate*"), (None, "lock"))
+    assert selection.exclude == ((None, "Philosopher 5"),)
+    assert selection.pattern_line() == "threads:gate*, lock, !Philosopher 5"
+
+
 def test_a_frame_keeps_only_the_selected_groups_and_rows():
     from types import SimpleNamespace as Row
 

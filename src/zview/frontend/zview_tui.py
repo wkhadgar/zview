@@ -34,13 +34,14 @@ from zview.frontend.tui.views.semaphore_detail import SemaphoreDetailView
 from zview.frontend.tui.views.thread_detail import ThreadDetailView
 from zview.frontend.tui.views.thread_list import ThreadListView
 from zview.frontend.tui.views.workq_detail import WorkqDetailView
-from zview.frontend.tui.widgets import PopupRow, TUIPopup
+from zview.frontend.tui.widgets import PopupRow, TUILineEdit, TUIPopup
 from zview.orchestrator import ZScraper
 from zview.selection import Selection
 
 _GLOBAL_KEYBINDINGS: list[Keybind] = [
     Keybind("?", "Help", "Toggle this help overlay"),
     Keybind("m", "Messages", "Toggle the message log"),
+    Keybind("/", "Patterns", "Edit the row patterns: GLOB, GROUP:GLOB, !GLOB, comma separated"),
     Keybind("R", "Reload", "Re-parse the ELF and reattach the probe (full cycle)"),
     Keybind("q", "Quit", "Exit ZView"),
 ]
@@ -125,6 +126,8 @@ class ZView:
         self.waiters_unknown: bool = scraper.waitq_flavor != "simple"
         # Name of the open overlay ("help" or "messages"), or None.
         self._overlay: str | None = None
+        # The pattern line being edited, or None.
+        self._prompt: TUILineEdit | None = None
 
         theme = self._init_curses()
         self._theme = theme
@@ -179,6 +182,8 @@ class ZView:
         curses.curs_set(0)
         curses.noecho()
         curses.cbreak()
+        # How long a lone Esc waits for the rest of a key sequence, in milliseconds.
+        curses.set_escdelay(25)
         self.stdscr.keypad(True)
         self.stdscr.nodelay(True)
 
@@ -331,12 +336,17 @@ class ZView:
                     self.stdscr.addstr(start_y + i, 0, centered_line)
             return
 
-        # Under an overlay the view stages its frame, for one update per frame.
-        target = _StagedWindow(self.stdscr) if self._overlay else self.stdscr
+        # Under an overlay or the pattern line the view stages its frame, for
+        # one update per frame.
+        staged = self._overlay is not None or self._prompt is not None
+        target = _StagedWindow(self.stdscr) if staged else self.stdscr
         self.views[self.state].render(target, height, width)
 
         if self._overlay:
             self._draw_overlay(height, width)
+        if self._prompt is not None:
+            self._prompt.draw(self.stdscr, height - 2, width, "/ ")
+        if staged:
             self.stdscr.refresh()
 
     def _draw_overlay(self, height: int, width: int) -> None:
@@ -376,6 +386,30 @@ class ZView:
         """Mute the row, or unmute it if it is muted."""
         muted = self.selection.muted ^ {(group, name)}
         self.select(dataclasses.replace(self.selection, muted=muted))
+
+    def _edit_prompt(self, key: int) -> None:
+        """Type into the pattern line: Enter selects it, Esc drops it."""
+        match key:
+            case SpecialCode.ESCAPE:
+                self._prompt = None
+            case curses.KEY_ENTER | SpecialCode.NEWLINE | SpecialCode.RETURN:
+                line, self._prompt = self._prompt.text, None
+                self._select_patterns(line)
+            case _:
+                self._prompt.edit(key)
+
+    def _select_patterns(self, line: str) -> None:
+        """Select the patterns of ``line``, unless it names a group the session lacks."""
+        selection = self.selection.with_pattern_line(line)
+        try:
+            self.scraper.check_selection(selection)
+        except ValueError as e:
+            self.report(f"Error: {e}")
+            return
+
+        self.select(selection)
+        for notice in self.scraper.unmatched(selection):
+            self.report(notice)
 
     def has_kernel_objects(self) -> bool:
         """True while a group the objects view and the selection read is available."""
@@ -417,6 +451,10 @@ class ZView:
             self.stdscr.clear()
             return
 
+        if self._prompt is not None:
+            self._edit_prompt(key)
+            return
+
         if self._overlay:
             self._overlay = None
             self.stdscr.clear()
@@ -432,6 +470,10 @@ class ZView:
 
         if key == SpecialCode.RECONNECT:
             self.attempt_reconnect()
+            return
+
+        if key == SpecialCode.PATTERNS:
+            self._prompt = TUILineEdit(self.selection.pattern_line())
             return
 
         new_state = self.views[self.state].handle_input(key)

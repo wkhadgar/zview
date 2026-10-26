@@ -111,10 +111,17 @@ def _add_selection(parser: argparse.ArgumentParser) -> None:
         metavar="GROUPS",
         help="Read only these groups, comma-separated, such as threads,mutexes.",
     )
+    parser.add_argument(
+        "--match",
+        default="",
+        metavar="LINE",
+        help="Read only the rows this line matches, as / edits it: GLOB, GROUP:GLOB within one "
+        "group, or !GLOB to skip, comma-separated.",
+    )
 
 
 def _selection(args: argparse.Namespace) -> Selection:
-    return Selection(groups=args.only)
+    return Selection(groups=args.only).with_pattern_line(args.match)
 
 
 def register_commands(

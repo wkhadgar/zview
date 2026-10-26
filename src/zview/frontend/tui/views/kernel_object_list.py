@@ -119,7 +119,8 @@ class KernelObjectListView(BaseStateView):
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()
-        self._render_frame(stdscr, self._footer_hint(), height, width)
+        hint = self._footer_hint()
+        self._render_frame(stdscr, hint, height, width)
 
         pairs = self._rows()
         muted = self.controller.selection.muted
@@ -175,8 +176,10 @@ class KernelObjectListView(BaseStateView):
 
         start_num = self.top_line + 1 if total else 0
         end_num = min(self.top_line + max_table_rows, total)
-        indicator = f" {self.filter_name} objects: {start_num}-{end_num} of {total} "
-        stdscr.addstr(height - 1, 0, indicator[:width], self._frame_attr)
+        indicator = self._bar_count(
+            f"{self.filter_name} objects: {start_num}-{end_num} of {total}", width - len(hint)
+        )
+        stdscr.addstr(height - 1, 0, indicator, self._frame_attr)
 
         self._render_status(stdscr, width, height - 2)
         stdscr.refresh()

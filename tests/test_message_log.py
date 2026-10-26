@@ -84,6 +84,7 @@ def app() -> ZView:
     a._log_popup = TUIPopup(" Messages ", 0, 0, {}, keep_tail=True)
     a._help_popup = TUIPopup(" Help ", 0, 0, {})
     a._overlay = None
+    a._prompt = None
     return a
 
 
