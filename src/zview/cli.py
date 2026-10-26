@@ -6,13 +6,12 @@ import sys
 from collections.abc import Callable
 
 from pyocd.utility.cmdline import convert_frequency
-from yaml import YAMLError
 
 from zview.frontend.zview_tui import tui_run
 from zview.kernel.threads import USAGE_WINDOW_MAX
 from zview.kinds import KINDS
 from zview.logging_setup import configure as configure_logging
-from zview.runner_config import BuildDirError, RunnerConfig, find_elf, image_dir, runners_yaml_path
+from zview.runner_config import BuildDirError, find_elf, image_dir
 from zview.selection import Selection
 from zview.snapshot import dump_single_frame, record_session, serialize_frame
 from zview.target import AVAILABLE_RUNNERS, CLOCKED_RUNNERS, Target
@@ -233,48 +232,22 @@ def fill_from_build_dir(args: argparse.Namespace, warn: Callable[[str], None]) -
     if not needs_build_dir(args):
         return
 
-    image = image_dir(args.build_dir, args.domain)
-
-    if args.elf_file is None:
-        args.elf_file = str(find_elf(image))
-
     if not _wants_runner(args):
+        if args.elf_file is None:
+            args.elf_file = str(find_elf(image_dir(args.build_dir, args.domain)))
         return
 
-    if args.runner is not None and args.runner_target is not None:
-        return
-
-    yaml_path = runners_yaml_path(image)
-    try:
-        cfg = RunnerConfig(yaml_path)
-    except (OSError, YAMLError) as e:
-        raise BuildDirError(
-            f"Failed to parse '{yaml_path}': {e}. Please specify runner ('-r') and target ('-t')."
-        ) from e
-
-    runner, target_mcu = cfg.get_config(preferred_runner=args.runner)
-    if runner not in AVAILABLE_RUNNERS:
-        warn(
-            f"'{runner}' is not a valid runner for ZView. Try explicitly passing one of "
-            f"the following: {', '.join(AVAILABLE_RUNNERS)}"
-        )
-        warn("Trying to continue with PyOCD as runner...")
-        runner, target_mcu = cfg.get_config(preferred_runner="pyocd")
-
-    if args.runner is None:
-        args.runner = runner
-    if args.runner_target is None and target_mcu is not None:
-        args.runner_target = str(target_mcu)
-    if args.frequency is None and args.runner in CLOCKED_RUNNERS:
-        args.frequency = cfg.frequency(args.runner)
-
-    logger.debug(
-        "Runner '%s', target '%s', frequency %s from '%s'.",
-        args.runner,
-        args.runner_target,
-        args.frequency,
-        yaml_path,
+    probe = Target.from_build_dir(
+        args.build_dir,
+        args.domain,
+        elf=args.elf_file,
+        runner=args.runner,
+        target=args.runner_target,
+        frequency=args.frequency,
+        warn=warn,
     )
+    args.elf_file, args.runner = probe.elf, probe.runner
+    args.runner_target, args.frequency = probe.target, probe.frequency
 
 
 def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
