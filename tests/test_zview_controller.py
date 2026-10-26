@@ -5,7 +5,6 @@
 """Coverage for ``ZView`` controller logic that doesn't require real curses."""
 
 import curses
-import queue
 import sys
 from collections import deque
 from unittest.mock import MagicMock
@@ -15,7 +14,7 @@ import pytest
 from zview.backend.base import HeapInfo, SemaphoreInfo, ThreadInfo, WorkqInfo
 from zview.backend.image import ImageMismatch
 from zview.core import Core
-from zview.frames import Fatal, Frame, FrameHistory, Notice, ReplayEnd
+from zview.frames import Fatal, Frame, Notice, ReplayEnd
 from zview.frontend.tui.views.base import SpecialCode, ZViewState
 from zview.frontend.tui.views.thread_detail import ThreadDetailView
 from zview.frontend.tui.views.thread_list import listed_threads
@@ -27,20 +26,26 @@ from zview.selection import Selection
 def app() -> ZView:
     """``ZView`` instance without going through curses init."""
     a = ZView.__new__(ZView)
-    a.frames = FrameHistory()
-    a.selection = Selection()
     a.status_message = ""
     a.messages = deque(maxlen=64)
     a.update_count = 0
-    a.data_queue = queue.Queue()
     a.scraper = MagicMock()
+    a.scraper.selection = Selection()
     a.scraper.groups = {"threads": MagicMock(idle_addresses=(0xDEAD,))}
     a.core = Core(a.scraper)
+    a.data_queue = a.core.events
     a.state = ZViewState.THREAD_LIST_VIEW
     a.stdscr = MagicMock()
     a._overlay = None
     a._prompt = None
     return a
+
+
+def _feed(app: ZView, frame: Frame) -> None:
+    """Poll ``frame`` through the core, as the TUI's poll does, and hand it to the controller."""
+    app.scraper.read_frame.return_value = frame.groups
+    app.core.poll()
+    app.process_data(app.data_queue.get_nowait())
 
 
 def test_purge_queue_clears_pending_items(app):
@@ -77,7 +82,7 @@ def test_process_data_running_status_increments_with_threads_payload(app):
     threads = [
         ThreadInfo(address=0x1000, stack_start=0, stack_size=512, name="main", runtime=None),
     ]
-    app.process_data(Frame({"threads": threads}))
+    _feed(app, Frame({"threads": threads}))
     assert app.status_message.startswith("Running")
     assert listed_threads(app) == threads
     assert app.update_count == 1
@@ -87,8 +92,8 @@ def test_a_frame_with_work_queues_records_their_backlog(app):
     """A frame without the group keeps the last list and adds no sample."""
     workq = WorkqInfo(name="bench_workq", address=0x6000, flags=0b11, pending=("trail_work",))
 
-    app.process_data(Frame({"threads": [], "workqs": [workq]}))
-    app.process_data(Frame({"threads": []}))
+    _feed(app, Frame({"threads": [], "workqs": [workq]}))
+    _feed(app, Frame({"threads": []}))
 
     assert app.frames.latest("workqs") == [workq]
     assert [q.depth for q in app.frames.of("workqs", 0x6000)] == [1]
@@ -105,7 +110,7 @@ def test_process_data_strips_every_idle_thread(app):
         address=0xBEEF, stack_start=0, stack_size=128, name="idle 01", runtime=None
     )
 
-    app.process_data(Frame({"threads": [main, idle_00, idle_01]}))
+    _feed(app, Frame({"threads": [main, idle_00, idle_01]}))
 
     assert listed_threads(app) == [main]
 
@@ -137,7 +142,7 @@ def test_process_data_heaps_payload_captured(app):
         usage_percent=33.0,
         chunks=None,
     )
-    app.process_data(Frame({"heaps": [heap]}))
+    _feed(app, Frame({"heaps": [heap]}))
     assert app.frames.latest("heaps") == [heap]
 
 
@@ -145,7 +150,7 @@ def test_process_data_empty_payload_does_not_clear_existing(app):
     """A no-op frame must not erase last-known data."""
     main = ThreadInfo(address=0x1000, stack_start=0, stack_size=512, name="main", runtime=None)
     app.frames.add(Frame({"threads": [main]}))
-    app.process_data(Frame({}))
+    _feed(app, Frame({}))
     assert listed_threads(app) == [main]
 
 
@@ -181,7 +186,7 @@ def test_process_data_stores_kernel_objects(app):
     sem = SemaphoreInfo(name="data_ready", address=0x2000, count=1, limit=4, waiters=())
     mutex = MutexInfo(name="spi_bus", address=0x3000, lock_count=0, owner_address=0)
 
-    app.process_data(Frame({"threads": [], "semaphores": [sem], "mutexes": [mutex]}))
+    _feed(app, Frame({"threads": [], "semaphores": [sem], "mutexes": [mutex]}))
 
     assert app.frames.latest("semaphores") == [sem]
     assert app.frames.latest("mutexes") == [mutex]
@@ -192,9 +197,9 @@ def test_process_data_without_kernel_objects_keeps_the_last_frame(app):
     from zview.backend.base import SemaphoreInfo
 
     sem = SemaphoreInfo(name="s", address=0x2000, count=1, limit=1, waiters=())
-    app.process_data(Frame({"threads": [], "semaphores": [sem]}))
+    _feed(app, Frame({"threads": [], "semaphores": [sem]}))
 
-    app.process_data(Frame({"threads": []}))
+    _feed(app, Frame({"threads": []}))
 
     assert app.frames.latest("semaphores") == [sem]
 
@@ -217,7 +222,7 @@ def test_contention_history_samples_once_per_frame(app):
     )
 
     for frame_mutex in (free, contended, held_uncontended):
-        app.process_data(Frame({"threads": [], "mutexes": [frame_mutex]}))
+        _feed(app, Frame({"threads": [], "mutexes": [frame_mutex]}))
 
     assert [m.state for m in app.frames.of("mutexes", 0x3000)] == [
         MutexState.FREE,
@@ -232,7 +237,7 @@ def test_contention_history_is_bounded(app):
 
     mutex = MutexInfo(name="m", address=0x3000, lock_count=0, owner_address=0, waiters=())
     for _ in range(600):
-        app.process_data(Frame({"threads": [], "mutexes": [mutex]}))
+        _feed(app, Frame({"threads": [], "mutexes": [mutex]}))
 
     assert len(app.frames.of("mutexes", 0x3000)) == 256
 
@@ -283,12 +288,12 @@ def test_a_replayed_row_hidden_or_muted_shows_again_after_the_replay_ends(app):
     def frame(size: int) -> Frame:
         return Frame({"threads": [ThreadInfo(a, 0, size, n, None) for a, n in enumerate("abc", 1)]})
 
-    app.process_data(frame(512))
-    app.select(Selection(exclude=((None, "b"),), muted=frozenset({("threads", "c")})))
-    app.process_data(frame(1024))
+    _feed(app, frame(512))
+    app.core.select(Selection(exclude=((None, "b"),), muted=frozenset({("threads", "c")})))
+    _feed(app, frame(1024))
     assert [(t.name, t.stack_size) for t in listed_threads(app)] == [("a", 1024), ("c", 512)]
 
-    app.select(Selection())
+    app.core.select(Selection())
     assert [t.stack_size for t in listed_threads(app)] == [1024, 1024, 1024]
 
 
@@ -296,14 +301,14 @@ def test_the_usage_window_keys_double_and_halve_it_within_its_bounds(app):
     threads = app.scraper.groups["threads"]
     threads.usage_window = 1
 
-    app.scale_usage_window(wider=False)
+    app.core.scale_usage_window(wider=False)
     assert threads.usage_window == 1
 
     for _ in range(8):
-        app.scale_usage_window(wider=True)
+        app.core.scale_usage_window(wider=True)
     assert threads.usage_window == 64
 
-    app.scale_usage_window(wider=False)
+    app.core.scale_usage_window(wider=False)
     assert threads.usage_window == 32
 
 
@@ -312,10 +317,10 @@ def test_a_recording_from_before_the_snapshot_sums_no_window(app):
     app.scraper.groups["threads"].usage_window = 8
 
     app.scraper.parts = set()
-    assert app.usage_window == 1
+    assert app.core.usage_window == 1
 
     app.scraper.parts = {"usage_snapshot"}
-    assert app.usage_window == 8
+    assert app.core.usage_window == 8
 
 
 def test_a_muted_object_opens_on_its_last_read(app):
@@ -323,9 +328,9 @@ def test_a_muted_object_opens_on_its_last_read(app):
     from zview.frontend.tui.views.semaphore_detail import SemaphoreDetailView
 
     sem = SemaphoreInfo("gate", 0x10, 1, 4, ())
-    app.process_data(Frame({"semaphores": [sem]}))
+    _feed(app, Frame({"semaphores": [sem]}))
     app.toggle_mute("semaphores", "gate")
-    app.process_data(Frame({"semaphores": []}))
+    _feed(app, Frame({"semaphores": []}))
     app.detailing = ("semaphores", 0x10)
 
     assert SemaphoreDetailView(app, ZViewTUIAttributes.create_mono())._target() == sem
@@ -342,7 +347,7 @@ def test_a_muted_threads_detail_reads_it_again_once_it_opens(app):
         ZViewState.THREAD_DETAIL_VIEW: ThreadDetailView(app, theme),
     }
     app.scraper.rows = {"threads": {"worker": [1]}}
-    app.select(Selection(muted=frozenset({("threads", "worker"), ("threads", "gone")})))
+    app.core.select(Selection(muted=frozenset({("threads", "worker"), ("threads", "gone")})))
 
     app.detailing_thread = "gone"
     app.transition_to(ZViewState.THREAD_DETAIL_VIEW)

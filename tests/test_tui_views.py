@@ -24,7 +24,7 @@ def theme() -> ZViewTUIAttributes:
 def controller() -> MagicMock:
     c = MagicMock()
     c.scraper.has_heaps = True
-    c.usage_window = 1
+    c.core.usage_window = 1
     return c
 
 
@@ -436,7 +436,7 @@ def test_the_bottom_bar_names_the_polls_the_cpu_shares_are_summed_over(controlle
     view = ThreadListView(controller, theme)
     assert view._bar_count("Threads: 1-2 of 2", 80) == " Threads: 1-2 of 2 "
 
-    controller.usage_window = 4
+    controller.core.usage_window = 4
     assert view._bar_count("Threads: 1-2 of 2", 80) == " Threads: 1-2 of 2 | CPU over 4 polls "
 
 

@@ -116,10 +116,10 @@ def record_session(
     # Built before connect: the header is written there, and the constructor
     # only reads the ELF.
     scraper = ZScraper(recorder, elf_path)
+    core = Core(scraper)
     selection = selection or Selection()
     scraper.check_selection(selection)
-    if backend.is_live:
-        scraper.selection = selection
+    core.select(selection)
     recorder.declare_features(scraper.active_features())
     recorder.declare_selection(scraper.selection)
     recorder.declare_source({**(source or {}), "period": period})
@@ -130,7 +130,6 @@ def record_session(
             print(notice, file=sys.stderr)
         scraper.capture_all()
 
-        core = Core(scraper)
         # The poll stops at the bound itself: it runs a frame ahead of this loop.
         core.start(period, frames)
 

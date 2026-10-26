@@ -34,7 +34,6 @@ from zview.frontend.tui.views.thread_detail import ThreadDetailView
 from zview.frontend.tui.views.thread_list import ThreadListView
 from zview.frontend.tui.views.workq_detail import WorkqDetailView
 from zview.frontend.tui.widgets import PopupRow, TUILineEdit, TUIPopup
-from zview.kernel.threads import USAGE_WINDOW_MAX
 from zview.orchestrator import ZScraper
 from zview.selection import Selection
 
@@ -112,14 +111,13 @@ class ZView:
         self.stdscr: curses.window = stdscr
         self.scraper: ZScraper = scraper
         self.running = True
-        self.frames = FrameHistory()
+        self.core = Core(scraper)
+        self.data_queue = self.core.events
         # What the lists show: the launch's selection, then what the keys change.
-        self.select(selection)
+        self.core.select(selection)
         self.status_message: str = ""
         # One entry per reported message, newest last.
         self.messages: deque[LogEntry] = deque(maxlen=_MESSAGE_LOG_SIZE)
-        self.core = Core(scraper)
-        self.data_queue = self.core.events
         self.update_count = 0
 
         self.state: ZViewState = ZViewState.THREAD_LIST_VIEW
@@ -276,9 +274,9 @@ class ZView:
         self.core.stop()
         self.purge_queue()
         # A rebuilt ELF can reassign the addresses the rows are kept by.
-        self.frames = FrameHistory()
+        self.core.frames = FrameHistory()
         # A muted row has no last info left to show, so it is read again.
-        self.select(dataclasses.replace(self.selection, muted=frozenset()))
+        self.core.select(dataclasses.replace(self.selection, muted=frozenset()))
 
         try:
             self._reload_and_verify()
@@ -374,36 +372,23 @@ class ZView:
 
         return rows
 
-    def select(self, selection: Selection) -> None:
-        """Show what ``selection`` reads, and read only that from a live target."""
-        self.selection = selection
-        if self.scraper.is_live:
-            self.scraper.selection = selection
+    @property
+    def frames(self) -> FrameHistory:
+        return self.core.frames
+
+    @property
+    def selection(self) -> Selection:
+        return self.core.selection
 
     def toggle_mute(self, group: str, name: str) -> None:
         """Mute the row, or unmute it if it is muted."""
         muted = self.selection.muted ^ {(group, name)}
-        self.select(dataclasses.replace(self.selection, muted=muted))
+        self.core.select(dataclasses.replace(self.selection, muted=muted))
 
     def unmute(self, group: str, name: str) -> None:
         """Read the row again, if it is muted, as the detail view opening on it tracks it."""
         if (group, name) in self.selection.muted:
             self.toggle_mute(group, name)
-
-    @property
-    def usage_window(self) -> int:
-        """
-        The polls the CPU and load shares are summed over, 1 on a recording
-        from before the usage snapshot, whose shares are of each poll alone.
-        """
-        summed = "usage_snapshot" in self.scraper.parts
-        return self.scraper.groups["threads"].usage_window if summed else 1
-
-    def scale_usage_window(self, wider: bool) -> None:
-        """Double the polls the CPU and load shares are summed over, or halve them."""
-        threads = self.scraper.groups["threads"]
-        window = threads.usage_window * 2 if wider else threads.usage_window // 2
-        threads.usage_window = max(1, min(USAGE_WINDOW_MAX, window))
 
     def _edit_prompt(self, key: int) -> None:
         """Type into the pattern line: Enter selects it, Esc drops it."""
@@ -428,7 +413,7 @@ class ZView:
             self.report(f"Error: {e}")
             return
 
-        self.select(selection)
+        self.core.select(selection)
         for notice in self.scraper.unmatched(selection):
             self.report(notice)
 
@@ -515,8 +500,6 @@ class ZView:
             case Frame():
                 self.status_message = f"Running{'.' * (self.update_count % 4)}"
                 self.update_count += 1
-                # A replay's frame holds the muted rows too.
-                self.frames.add(data, muted=self.selection.muted)
 
     def run(self, inspection_period):
         """

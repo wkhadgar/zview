@@ -4,6 +4,7 @@
 
 """What the polling thread queues: each frame it reads, and what stops or troubles it."""
 
+import threading
 from collections import deque
 from dataclasses import dataclass
 
@@ -42,9 +43,13 @@ class ReplayEnd:
 
 
 class FrameHistory:
-    """Each group's latest infos, and each object's info in every frame that read it."""
+    """
+    Each group's latest infos, and each object's info in every frame that read
+    it. The poll's thread adds while frontends read.
+    """
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self._latest: dict[str, list] = {}
         self._history: dict[tuple[str, int], deque] = {}
         self._named: dict[tuple[str, str], object] = {}
@@ -54,12 +59,13 @@ class FrameHistory:
         Take a frame's infos. A group the frame leaves out keeps its last ones,
         and a ``muted`` row keeps its last info and history.
         """
-        self._latest.update(frame.groups)
-        for group, infos in frame.groups.items():
-            for info in (i for i in infos if (group, i.name) not in muted):
-                key = (group, info.address)
-                self._history.setdefault(key, deque(maxlen=HISTORY_LENGTH)).append(info)
-                self._named[(group, info.name)] = info
+        with self._lock:
+            self._latest.update(frame.groups)
+            for group, infos in frame.groups.items():
+                for info in (i for i in infos if (group, i.name) not in muted):
+                    key = (group, info.address)
+                    self._history.setdefault(key, deque(maxlen=HISTORY_LENGTH)).append(info)
+                    self._named[(group, info.name)] = info
 
     def latest(self, group: str, selection: Selection | None = None) -> list:
         """
@@ -67,14 +73,16 @@ class FrameHistory:
         reads, then each row it mutes and its patterns match, as last read.
         """
         selection = selection or Selection()
-        infos = [info for info in self._latest.get(group, []) if selection.reads(group, info.name)]
-        muted = (
-            self._named.get(row)
-            for row in sorted(selection.muted)
-            if row[0] == group and selection.matches(*row)
-        )
+        with self._lock:
+            infos = [i for i in self._latest.get(group, []) if selection.reads(group, i.name)]
+            muted = [
+                self._named.get(row)
+                for row in sorted(selection.muted)
+                if row[0] == group and selection.matches(*row)
+            ]
         return infos + [info for info in muted if info is not None]
 
     def of(self, group: str, address: int) -> list:
         """The info of the object at ``address`` in each frame that read it, oldest first."""
-        return list(self._history.get((group, address), ()))
+        with self._lock:
+            return list(self._history.get((group, address), ()))

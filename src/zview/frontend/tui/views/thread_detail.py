@@ -198,7 +198,7 @@ class ThreadDetailView(BaseStateView):
         if key in BACK_CODES:
             return ZViewState.THREAD_LIST_VIEW
         elif key in (SpecialCode.WIDER, SpecialCode.NARROWER):
-            self.controller.scale_usage_window(key == SpecialCode.WIDER)
+            self.controller.core.scale_usage_window(key == SpecialCode.WIDER)
         elif key == SpecialCode.QUIT:
             self.controller.running = False
         return None

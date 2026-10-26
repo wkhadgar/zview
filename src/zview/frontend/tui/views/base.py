@@ -179,7 +179,7 @@ class BaseStateView:
         """
         selection = self.controller.selection
         reads = self.reads()
-        window = self.controller.usage_window
+        window = self.controller.core.usage_window
         off = [
             group
             for group, available in self.controller.scraper.available.items()

@@ -11,9 +11,11 @@ import threading
 import time
 
 from zview.backend.replay import ReplayComplete
-from zview.frames import Fatal, Frame, Notice, ReplayEnd
+from zview.frames import Fatal, Frame, FrameHistory, Notice, ReplayEnd
 from zview.kernel.group import BrokenFrame
+from zview.kernel.threads import USAGE_WINDOW_MAX
 from zview.orchestrator import ZScraper
+from zview.selection import Selection
 
 logger = logging.getLogger("zview.core")
 
@@ -28,6 +30,9 @@ class Core:
         self.scraper = scraper
         # Each event of the poll, for the frontend to take.
         self.events: queue.Queue = queue.Queue()
+        # What the frontend shows: the session's selection, then what it changes.
+        self.selection: Selection = scraper.selection
+        self.frames = FrameHistory()
         # The period of the poll ``start`` runs, kept for the next one, and its thread.
         self.period: float | None = None
         self._poller: threading.Thread | None = None
@@ -36,6 +41,30 @@ class Core:
         self._lifecycle = threading.Lock()
         self._faults = 0
         self._frames_read = 0
+
+    def select(self, selection: Selection) -> None:
+        """Show what ``selection`` reads, and read only that from a live target."""
+        self.selection = selection
+        if self.scraper.is_live:
+            self.scraper.selection = selection
+
+    @property
+    def usage_window(self) -> int:
+        """
+        The polls the CPU and load shares are summed over, 1 on a recording
+        from before the usage snapshot, whose shares are of each poll alone.
+        """
+        summed = "usage_snapshot" in self.scraper.parts
+        return self.scraper.groups["threads"].usage_window if summed else 1
+
+    @usage_window.setter
+    def usage_window(self, polls: int) -> None:
+        self.scraper.groups["threads"].usage_window = max(1, min(USAGE_WINDOW_MAX, polls))
+
+    def scale_usage_window(self, wider: bool) -> None:
+        """Double the polls the CPU and load shares are summed over, or halve them."""
+        polls = self.scraper.groups["threads"].usage_window
+        self.usage_window = polls * 2 if wider else polls // 2
 
     def poll(self, period: float | None = None, frames: int | None = None) -> None:
         """
@@ -102,7 +131,10 @@ class Core:
     def _read(self) -> bool:
         """Read one frame and hand it out. False once the poll must end."""
         try:
-            self._publish(Frame(self.scraper.read_frame()))
+            frame = Frame(self.scraper.read_frame())
+            # A replay's frame holds the muted rows too.
+            self.frames.add(frame, muted=self.selection.muted)
+            self._publish(frame)
             self._frames_read += 1
             self._faults = 0
         except ReplayComplete as e:

@@ -242,7 +242,7 @@ class ThreadListView(BaseStateView):
                 self._invert_sorting = not self._invert_sorting
 
             case SpecialCode.WIDER | SpecialCode.NARROWER:
-                self.controller.scale_usage_window(key == SpecialCode.WIDER)
+                self.controller.core.scale_usage_window(key == SpecialCode.WIDER)
 
             case SpecialCode.REFRESH:
                 if not self.controller.scraper.is_live:

@@ -87,11 +87,12 @@ def _polling_scraper(**rows: dict[str, list[int]]) -> ZScraper:
 
 def _objects_shown(s: ZScraper) -> bool:
     """Whether the TUI's objects view has rows to draw over ``s``."""
+    from zview.core import Core
     from zview.frontend.zview_tui import ZView
 
     view = ZView.__new__(ZView)
     view.scraper = s
-    view.selection = s.selection
+    view.core = Core(s)
     return view.has_kernel_objects()
 
 
