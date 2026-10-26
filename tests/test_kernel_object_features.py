@@ -91,6 +91,7 @@ def _objects_shown(s: ZScraper) -> bool:
 
     view = ZView.__new__(ZView)
     view.scraper = s
+    view.selection = s.selection
     return view.has_kernel_objects()
 
 
@@ -154,6 +155,19 @@ def test_a_group_absent_from_the_elf_stays_off_even_if_recorded():
     assert not s.available["msgqs"]
 
 
+def test_a_replay_reads_the_rows_its_recording_read():
+    """A recording made with a selection holds only its reads, so its replay asks for those."""
+    from zview.selection import Selection
+
+    recorded = Selection(groups=frozenset({"threads", "mutexes"}))
+    s = _scraper(mutexes=True)
+    s._m_scraper = MagicMock(is_live=False, features=("threads", "mutexes"), selection=recorded)
+
+    s._restrict_features_to_recording()
+
+    assert s.selection == recorded
+
+
 def test_a_scraper_reporting_no_features_is_left_alone():
     s = _scraper(msgqs=True)
     s._m_scraper = MagicMock(is_live=False, spec=["is_live"])
@@ -171,6 +185,15 @@ def test_nothing_is_polled_when_no_group_is_enabled():
 
 def test_threads_alone_leave_the_objects_view_empty():
     assert not _objects_shown(_scraper())
+
+
+def test_a_selection_of_threads_only_leaves_the_objects_view_empty():
+    from zview.selection import Selection
+
+    s = _scraper(heaps=True, mutexes=True)
+    s.selection = Selection(groups=frozenset({"threads"}))
+
+    assert not _objects_shown(s)
 
 
 def test_a_build_with_only_heaps_still_has_objects_to_show():
@@ -295,7 +318,9 @@ def test_a_group_walker_gets_only_the_selected_labels():
     from zview.selection import Selection
 
     s = _polling_scraper(semaphores={"sem_a": [0x100], "sem_b": [0x200, 0x300]})
-    s.selection = Selection(exclude=("sem_a",), muted=frozenset({("semaphores", "sem_b@0x300")}))
+    s.selection = Selection(
+        exclude=((None, "sem_a"),), muted=frozenset({("semaphores", "sem_b@0x300")})
+    )
     given: list[dict] = []
     s.groups["semaphores"].walk = lambda session, rows: given.append(rows) or {}
 

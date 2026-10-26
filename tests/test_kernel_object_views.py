@@ -28,6 +28,7 @@ from zview.frontend.tui.views.mutex_detail import MutexDetailView
 from zview.frontend.tui.views.semaphore_detail import SemaphoreDetailView
 from zview.frontend.tui.views.workq_detail import WorkqDetailView
 from zview.kinds import BY_KEY
+from zview.selection import Selection
 
 SEMAPHORE = BY_KEY["semaphores"]
 MUTEX = BY_KEY["mutexes"]
@@ -109,14 +110,9 @@ def _put(controller, **groups) -> None:
     controller.frames.add(Frame(groups))
 
 
-def _filter_to(view: KernelObjectListView, step) -> None:
-    """Press ``f`` until the view sits on one filter step."""
-    for _ in range(len(view._filters)):
-        if view.filter_name == step.label:
-            return
-        view.handle_input(SpecialCode.FILTER)
-
-    raise AssertionError(f"filter {step} is not in the cycle")
+def _read_only(view: KernelObjectListView, kind) -> None:
+    """Read only ``kind``'s group, as the groups popup leaves it."""
+    view.controller.selection = Selection(groups=frozenset({kind.key}))
 
 
 def test_rows_include_every_type(controller, theme):
@@ -127,49 +123,6 @@ def test_rows_include_every_type(controller, theme):
 
     assert kinds == {SEMAPHORE, MUTEX, MSGQ, MEM_SLAB, HEAP}
     assert len(view._rows()) == 7
-
-
-def test_filter_cycles_through_types(controller, theme):
-    view = KernelObjectListView(controller, theme)
-    assert view.filter_name == "ALL"
-
-    view.handle_input(SpecialCode.FILTER)
-    assert view.filter_name == HEAP.label
-    assert view._rows() == []
-
-    view.handle_input(SpecialCode.FILTER)
-    assert view.filter_name == SEMAPHORE.label
-    assert {kind for kind, _ in view._rows()} == {SEMAPHORE}
-
-    view.handle_input(SpecialCode.FILTER)
-    assert view.filter_name == MUTEX.label
-    assert {kind for kind, _ in view._rows()} == {MUTEX}
-
-    view.handle_input(SpecialCode.FILTER)
-    assert view.filter_name == MSGQ.label
-    assert {kind for kind, _ in view._rows()} == {MSGQ}
-
-    view.handle_input(SpecialCode.FILTER)
-    assert view.filter_name == MEM_SLAB.label
-    assert {kind for kind, _ in view._rows()} == {MEM_SLAB}
-
-    view.handle_input(SpecialCode.FILTER)
-    assert view.filter_name == WORKQ.label
-    assert view._rows() == []
-
-    view.handle_input(SpecialCode.FILTER)
-    assert view.filter_name == "ALL"
-
-
-def test_filter_change_resets_the_cursor(controller, theme):
-    """Changing the filter resets cursor and scroll position."""
-    view = KernelObjectListView(controller, theme)
-    view.cursor = 3
-
-    view.handle_input(SpecialCode.FILTER)
-
-    assert view.cursor == 0
-    assert view.top_line == 0
 
 
 def test_semaphore_row_renders_count_and_waiters(controller, theme):
@@ -312,9 +265,11 @@ def test_work_queues_turning_work_away_are_counted_as_refusing(controller, theme
         ],
     )
     view = KernelObjectListView(controller, theme)
-    _filter_to(view, WORKQ)
+    _read_only(view, WORKQ)
 
-    assert "3 objects | 2 refusing | 1 with waiters" in view._summary(view._rows())
+    assert "3 objects | 2 refusing | 1 with waiters" in view._summary(
+        view._rows(), view._only_kind()
+    )
 
 
 def test_a_busy_or_backlogged_work_queue_counts_as_pressure(controller, theme):
@@ -329,9 +284,9 @@ def test_a_busy_or_backlogged_work_queue_counts_as_pressure(controller, theme):
         ],
     )
     view = KernelObjectListView(controller, theme)
-    _filter_to(view, WORKQ)
+    _read_only(view, WORKQ)
 
-    fill, _, _ = view._aggregate(view._rows())
+    fill, _, _ = view._aggregate(view._rows(), view._only_kind())
 
     assert fill == 50.0
 
@@ -363,7 +318,7 @@ def test_enter_on_a_work_queue_opens_its_detail_view(controller, theme):
 def test_summary_counts_contention(controller, theme):
     view = KernelObjectListView(controller, theme)
 
-    summary = view._summary(view._rows())
+    summary = view._summary(view._rows(), view._only_kind())
 
     assert "6 objects" in summary
     assert "1 contended" in summary
@@ -382,7 +337,7 @@ def test_a_full_queue_counts_as_contended(controller, theme):
     )
     view = KernelObjectListView(controller, theme)
 
-    assert "2 contended" in view._summary(view._rows())
+    assert "2 contended" in view._summary(view._rows(), view._only_kind())
 
 
 def test_an_exhausted_slab_counts_as_contended(controller, theme):
@@ -402,30 +357,30 @@ def test_an_exhausted_slab_counts_as_contended(controller, theme):
     )
     view = KernelObjectListView(controller, theme)
 
-    assert "2 contended" in view._summary(view._rows())
+    assert "2 contended" in view._summary(view._rows(), view._only_kind())
 
 
 def test_summary_flags_unobservable_wait_queues(controller, theme):
     controller.waiters_unknown = True
     view = KernelObjectListView(controller, theme)
 
-    assert "not observable" in view._summary(view._rows())
+    assert "not observable" in view._summary(view._rows(), view._only_kind())
 
 
-def test_empty_message_distinguishes_absent_from_filtered(controller, theme):
+def test_empty_message_tells_an_empty_kind_from_groups_turned_off(controller, theme):
     view = KernelObjectListView(controller, theme)
     _put(controller, semaphores=[], mutexes=[], msgqs=[], mem_slabs=[])
 
     controller.has_kernel_objects.return_value = True
-    assert "No ALL objects." in view._empty_message()
+    assert "No ALL objects." in view._empty_message("ALL")
 
     controller.has_kernel_objects.return_value = False
-    assert "No statically declared" in view._empty_message()
+    assert "g picks the groups" in view._empty_message("ALL")
 
 
 def test_enter_on_a_mutex_opens_the_detail_view(controller, theme):
     view = KernelObjectListView(controller, theme)
-    _filter_to(view, MUTEX)
+    _read_only(view, MUTEX)
     view.cursor = 0
 
     target = view._rows()[0][1]
@@ -437,7 +392,7 @@ def test_enter_on_a_mutex_opens_the_detail_view(controller, theme):
 
 def test_enter_on_a_semaphore_opens_its_detail_view(controller, theme):
     view = KernelObjectListView(controller, theme)
-    _filter_to(view, SEMAPHORE)
+    _read_only(view, SEMAPHORE)
     view.cursor = 0
 
     target = view._rows()[0][1]
@@ -999,16 +954,16 @@ def test_wait_queue_truncation_covers_the_row_it_replaces(controller, theme):
         (MUTEX, MUTEX.label, "All Mutexes"),
     ),
 )
-def test_the_aggregate_row_is_labelled_by_the_filter(
+def test_the_aggregate_row_is_labelled_by_the_one_kind_read(
     controller, theme, step, expected_type, expected_label
 ):
-    """The row sums the filtered objects, so it must not claim to sum them all."""
+    """The row sums the objects listed, so it must not claim to sum them all."""
     if not hasattr(curses, "ACS_S3"):
         curses.ACS_S3 = ord("-")
 
     view = KernelObjectListView(controller, theme)
     if step is not None:
-        _filter_to(view, step)
+        _read_only(view, step)
 
     win = _StubWin()
     view.render(win, 24, 209)
@@ -1050,7 +1005,7 @@ def test_a_zero_capacity_queue_row_does_not_divide_by_zero(controller, theme):
 
 def test_enter_on_a_queue_opens_its_detail_view(controller, theme):
     view = KernelObjectListView(controller, theme)
-    _filter_to(view, MSGQ)
+    _read_only(view, MSGQ)
     view.cursor = 0
 
     target = view._rows()[0][1]
@@ -1233,7 +1188,7 @@ def test_an_exhausted_slab_reads_as_contention(controller, distinct_theme):
 
 def test_enter_on_a_slab_opens_its_detail_view(controller, theme):
     view = KernelObjectListView(controller, theme)
-    _filter_to(view, MEM_SLAB)
+    _read_only(view, MEM_SLAB)
     view.cursor = 0
 
     target = view._rows()[0][1]
@@ -1307,9 +1262,9 @@ def _heap(
 def test_an_allocator_filter_counts_exhaustion_not_contention(controller, theme):
     _put(controller, heaps=[_heap(free=0)])
     view = KernelObjectListView(controller, theme)
-    _filter_to(view, HEAP)
+    _read_only(view, HEAP)
 
-    summary = view._summary(view._rows())
+    summary = view._summary(view._rows(), view._only_kind())
 
     assert "1 exhausted" in summary
     assert "contended" not in summary
@@ -1361,7 +1316,7 @@ def test_a_heap_carries_no_peak_mark(controller, theme):
 def test_enter_on_a_heap_opens_its_own_view(controller, theme):
     _put(controller, heaps=[_heap()])
     view = KernelObjectListView(controller, theme)
-    _filter_to(view, HEAP)
+    _read_only(view, HEAP)
 
     state = view.handle_input(SpecialCode.NEWLINE)
 

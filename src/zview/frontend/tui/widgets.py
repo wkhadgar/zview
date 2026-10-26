@@ -8,6 +8,7 @@ import textwrap
 from typing import NamedTuple
 
 from zview.backend.base import ThreadInfo, ThreadRuntime
+from zview.frontend.tui.views.base import SpecialCode
 from zview.kinds.kind import Kind, Level
 
 
@@ -236,12 +237,14 @@ class TUIPopup:
         label_attr: int,
         level_attrs: dict[str, int],
         keep_tail: bool = False,
+        hint: str = " Press any key to dismiss ",
     ):
         self._title = title
         self._frame_attr = frame_attr
         self._label_attr = label_attr
         self._level_attrs = level_attrs
         self._keep_tail = keep_tail
+        self._hint = hint
 
     def _wrap(self, rows: list[PopupRow], text_room: int) -> list[PopupRow]:
         """
@@ -294,9 +297,7 @@ class TUIPopup:
             with contextlib.suppress(curses.error):
                 stdscr.addstr(y0 + row_offset, x0, blank)
 
-        TUIBox(self._title, " Press any key to dismiss ", self._frame_attr).draw(
-            stdscr, y0, x0, box_h, box_w
-        )
+        TUIBox(self._title, self._hint, self._frame_attr).draw(stdscr, y0, x0, box_h, box_w)
 
         inner_w = box_w - self._PADDING_COLS
         for i, row in enumerate(rows):
@@ -317,6 +318,44 @@ class TUIPopup:
                         row.text[:text_room],
                         self._level_attrs.get(row.level, 0),
                     )
+
+
+class TUILineEdit:
+    """One line of text being typed, with a cursor the arrows move."""
+
+    def __init__(self, text: str):
+        self.text = text
+        self.at = len(text)
+
+    def edit(self, key: int) -> None:
+        """Move the cursor, or insert or delete at it."""
+        match key:
+            case curses.KEY_LEFT:
+                self.at = max(0, self.at - 1)
+            case curses.KEY_RIGHT:
+                self.at = min(len(self.text), self.at + 1)
+            case curses.KEY_HOME:
+                self.at = 0
+            case curses.KEY_END:
+                self.at = len(self.text)
+            case curses.KEY_BACKSPACE | SpecialCode.BACKSPACE | SpecialCode.DELETE if self.at:
+                self.text = self.text[: self.at - 1] + self.text[self.at :]
+                self.at -= 1
+            case curses.KEY_DC:
+                self.text = self.text[: self.at] + self.text[self.at + 1 :]
+            case _ if 32 <= key < 127:
+                self.text = self.text[: self.at] + chr(key) + self.text[self.at :]
+                self.at += 1
+
+    def draw(self, stdscr: curses.window, y: int, width: int, prefix: str) -> None:
+        """The line after ``prefix`` on row ``y``, scrolled to keep its reversed cursor in view."""
+        line = f"{prefix}{self.text} "
+        cursor = len(prefix) + self.at
+        start = max(0, cursor - (width - 2))
+        stdscr.move(y, 0)
+        stdscr.clrtoeol()
+        stdscr.addstr(y, 0, line[start : start + width - 1])
+        stdscr.addstr(y, cursor - start, line[cursor], curses.A_REVERSE)
 
 
 class TUIGraph(TUIBox):
@@ -426,7 +465,13 @@ class TUIThreadInfo:
         self.watermark_bar.width = stack_bar
 
     def draw(
-        self, stdscr: curses.window, y: int, x: int, thread_info: ThreadInfo, selected: bool = False
+        self,
+        stdscr: curses.window,
+        y: int,
+        x: int,
+        thread_info: ThreadInfo,
+        selected: bool = False,
+        muted: bool = False,
     ):
         col_pos = x
         _, screen_w = stdscr.getmaxyx()
@@ -481,6 +526,11 @@ class TUIThreadInfo:
             self._stack_bytes_width,
         )
         _addstr_clipped(stdscr, y, col_pos, watermark_bytes_display, screen_w)
+
+        if muted:
+            # The cursor keeps the name cell.
+            start = x + self._thread_name_width + 1 if selected else x
+            stdscr.chgat(y, start, -1, curses.A_DIM)
 
 
 class TUIWaitQueue:
@@ -620,7 +670,14 @@ class TUIKernelObjectInfo:
         return state.fill, state.text, self.waiters_cell(obj.waiters, self._waiters_width), attr
 
     def draw(
-        self, stdscr: curses.window, y: int, x: int, kind: Kind, obj, selected: bool = False
+        self,
+        stdscr: curses.window,
+        y: int,
+        x: int,
+        kind: Kind,
+        obj,
+        selected: bool = False,
+        muted: bool = False,
     ) -> None:
         fill, label, waiters, attr = self.row_values(kind, obj)
         # Only a slab carries a peak, and only where the build tracks it. A
@@ -631,6 +688,11 @@ class TUIKernelObjectInfo:
         self.draw_cells(
             stdscr, y, x, kind.label, obj.name, fill, label, waiters, attr, selected, mark
         )
+
+        if muted:
+            # The cursor keeps the type and name cells.
+            start = x + self._type_width + self._name_width + 2 if selected else x
+            stdscr.chgat(y, start, -1, curses.A_DIM)
 
     def draw_cells(
         self,

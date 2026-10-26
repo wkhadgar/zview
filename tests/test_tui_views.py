@@ -293,6 +293,7 @@ class _StubWin:
     def hline(self, y, x, ch, n): ...
     def attron(self, attr): ...
     def attroff(self, attr): ...
+    def chgat(self, y, x, n, attr): ...
 
     def getbkgd(self):
         return 0
@@ -376,6 +377,56 @@ def test_a_build_without_stack_info_draws_no_stack_size(controller, theme):
 
     assert not [text for text in win.drawn if "None" in text]
     assert sum("- / -" in text for text in win.drawn) == 2
+
+
+def test_the_bottom_bar_names_the_patterns_and_the_rows_muted_in_its_view(controller, theme):
+    """A muted semaphore narrows nothing in the thread list."""
+    from zview.selection import Selection
+
+    controller.selection = Selection(
+        exclude=((None, "main"),),
+        muted=frozenset({("threads", "logging"), ("semaphores", "gate")}),
+    )
+    view = ThreadListView(controller, theme)
+
+    assert view._bar_count("Threads: 1-2 of 2", 80) == (
+        " Threads: 1-2 of 2 | Patterns: !main | 1 muted "
+    )
+    assert view._bar_count("Threads: 1-2 of 2", 30) == " Threads: 1-2 of 2 | Pattern… "
+    controller.selection = Selection()
+    assert view._bar_count("Threads: 1-2 of 2", 80) == " Threads: 1-2 of 2 "
+
+    controller.scraper.available = {"threads": True, "semaphores": True}
+    controller.selection = Selection(groups=frozenset())
+    assert view._bar_count("Threads: 0-0 of 0", 80) == " Threads: 0-0 of 0 | Off: threads "
+
+
+def test_the_all_threads_row_sums_only_the_threads_read(controller, theme):
+    """A muted thread's last load would add a stale number to the total."""
+    from zview.backend.base import ThreadRuntime
+    from zview.selection import Selection
+
+    def thread(name: str, address: int, load: float) -> ThreadInfo:
+        runtime = ThreadRuntime(
+            cpu=load,
+            cpu_normalized=1.0,
+            active=True,
+            stack_watermark=64,
+            stack_watermark_percent=25.0,
+        )
+        return ThreadInfo(address, 0x2000, 512, name, runtime)
+
+    controller.frames = _frames(
+        threads=[thread("main", 0x1000, 30.0), thread("worker", 0x2000, 70.0)]
+    )
+    controller.selection = Selection(muted=frozenset({("threads", "worker")}))
+    controller.min_dimensions = (14, 85)
+    win = _TextWin()
+
+    ThreadListView(controller, theme).render(win, 24, 209)
+
+    assert sum("30.0%" in text for text in win.drawn) == 2
+    assert not [text for text in win.drawn if "100.0%" in text]
 
 
 def test_unmeasured_values_sort_with_the_unpolled_threads(controller, theme):

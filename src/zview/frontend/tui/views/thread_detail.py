@@ -73,7 +73,8 @@ class ThreadDetailView(BaseStateView):
     def reads(self) -> Selection:
         # Every thread's cycles are still read, so the view names only the stack to scan.
         return Selection(
-            groups=frozenset({"threads"}), include=(glob.escape(self.controller.detailing_thread),)
+            groups=frozenset({"threads"}),
+            include=(("threads", glob.escape(self.controller.detailing_thread)),),
         )
 
     def _entry_cell(self, thread: ThreadInfo) -> str | SiteValue:

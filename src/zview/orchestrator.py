@@ -123,7 +123,8 @@ class ZScraper:
 
     def _restrict_features_to_recording(self) -> None:
         """
-        Limit a replayed session to the features its recording captured.
+        Limit a replayed session to the features and the selection its recording
+        captured.
 
         Replay matches a strict read sequence. A recording with no feature list
         predates the primitives and is treated as threads and heaps only.
@@ -131,6 +132,7 @@ class ZScraper:
         if self._m_scraper.is_live:
             return
 
+        self.selection = getattr(self._m_scraper, "selection", None) or Selection()
         features = getattr(self._m_scraper, "features", None)
         if features is None:
             return
@@ -160,6 +162,26 @@ class ZScraper:
     def function_site(self, address: int) -> tuple[str, int] | None:
         """``(path, line)`` where the function at ``address`` is defined, if known."""
         return self._elf_inspector.function_site(address)
+
+    def check_selection(self, selection: Selection) -> None:
+        """Raises ``ValueError`` when ``selection`` names a group no frame holds."""
+        mentioned = {
+            *(selection.groups or ()),
+            *(scope for scope, _ in (*selection.include, *selection.exclude) if scope is not None),
+        }
+        if unknown := mentioned - set(self.groups):
+            named, known = ", ".join(sorted(unknown)), ", ".join(self.groups)
+            raise ValueError(f"Unknown group {named}; choose from {known}.")
+
+    def unmatched(self, selection: Selection) -> tuple[str, ...]:
+        """One notice per pattern of ``selection`` that names no discovered row."""
+        return selection.unmatched(
+            {
+                key: [label for label, _ in label_instances(self.rows[key])]
+                for key in self.groups
+                if self.available[key]
+            }
+        )
 
     def _reads_group(self, group: str) -> bool:
         """Both the session's selection and the view's read ``group``."""

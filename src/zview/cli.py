@@ -19,6 +19,7 @@ from zview.kinds import KINDS
 from zview.logging_setup import configure as configure_logging
 from zview.orchestrator import ZScraper
 from zview.runner_config import BuildDirError, RunnerConfig, find_elf, image_dir, runners_yaml_path
+from zview.selection import Selection
 from zview.snapshot import dump_single_frame, record_session, serialize_frame
 
 logger = logging.getLogger("zview.cli")
@@ -97,6 +98,32 @@ def _add_period(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _groups(value: str) -> frozenset[str]:
+    """``--only``'s comma-separated groups. The session checks them against its own."""
+    return frozenset(group.strip() for group in value.split(",") if group.strip())
+
+
+def _add_selection(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--only",
+        type=_groups,
+        default=None,
+        metavar="GROUPS",
+        help="Read only these groups, comma-separated, such as threads,mutexes.",
+    )
+    parser.add_argument(
+        "--match",
+        default="",
+        metavar="LINE",
+        help="Read only the rows this line matches, as / edits it: GLOB, GROUP:GLOB within one "
+        "group, or !GLOB to skip, comma-separated.",
+    )
+
+
+def _selection(args: argparse.Namespace) -> Selection:
+    return Selection(groups=args.only).with_pattern_line(args.match)
+
+
 def register_commands(
     sub: argparse._SubParsersAction,
     *,
@@ -120,6 +147,7 @@ def register_commands(
     _add_elf(p_live)
     _add_live_target(p_live)
     _add_period(p_live)
+    _add_selection(p_live)
 
     p_record = _sub("record", "Capture a live session to a .ndjson.gz recording file.")
     _add_elf(p_record)
@@ -135,6 +163,7 @@ def register_commands(
     bound.add_argument("--duration", type=float, help="Recording bound, in seconds.")
     bound.add_argument("--frames", type=int, help="Recording bound, in data frames.")
     _add_period(p_record)
+    _add_selection(p_record)
 
     p_replay = _sub("replay", "Render the TUI from a recording file.")
     _add_elf(p_replay)
@@ -172,6 +201,7 @@ def register_commands(
         help="Emit the frame as JSON on stdout.",
     )
     _add_period(p_dump)
+    _add_selection(p_dump)
 
 
 def _wants_runner(args: argparse.Namespace) -> bool:
@@ -325,6 +355,9 @@ def _do_live(args) -> int:
     with _build_live_backend(args) as backend:
         verify_target_image(backend, args.elf_file)
         scraper = ZScraper(backend, args.elf_file)
+        selection = _selection(args)
+        scraper.check_selection(selection)
+        scraper.selection = selection
         for notice in scraper.absent_features():
             print(notice, file=sys.stderr)
         curses.wrapper(tui_run, scraper, args.period)
@@ -340,6 +373,7 @@ def _do_record(args) -> int:
         duration=args.duration,
         frames=args.frames,
         period=args.period,
+        selection=_selection(args),
     )
     print(f"Recorded {captured} frames to {args.output}")
     return 0
@@ -365,6 +399,7 @@ def _do_dump(args) -> int:
         args.elf_file,
         period=args.period,
         frame=args.frame,
+        selection=_selection(args),
     )
     if args.json:
         print(json.dumps(serialize_frame(frame)))
