@@ -245,7 +245,7 @@ class ThreadListView(BaseStateView):
                 self.controller.scale_usage_window(key == SpecialCode.WIDER)
 
             case SpecialCode.REFRESH:
-                if not self.controller.scraper._m_scraper.is_live:
+                if not self.controller.scraper.is_live:
                     self.controller.report("Refresh is not available in replay mode.")
                     return None
 

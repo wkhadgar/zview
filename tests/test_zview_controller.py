@@ -15,7 +15,6 @@ import pytest
 from zview.backend.base import HeapInfo, SemaphoreInfo, ThreadInfo, WorkqInfo
 from zview.backend.image import ImageMismatch
 from zview.frames import Fatal, Frame, FrameHistory, Notice, ReplayEnd
-from zview.frontend import zview_tui
 from zview.frontend.tui.views.base import SpecialCode, ZViewState
 from zview.frontend.tui.views.thread_detail import ThreadDetailView
 from zview.frontend.tui.views.thread_list import listed_threads
@@ -117,7 +116,7 @@ def test_a_thread_detail_scans_only_the_detailed_threads_stack(app):
     }
     app.detailing_thread = "main[0]"
     app.scraper.rows = {"threads": {"main[0]": [0x1000]}}
-    app.scraper._m_scraper.is_live = True
+    app.scraper.is_live = True
 
     app.transition_to(ZViewState.THREAD_DETAIL_VIEW)
 
@@ -241,19 +240,18 @@ def reloading_app(app):
     """``app`` ready for ``R``: a live scraper, no drawing, every history present."""
     app.stop_event = MagicMock()
     app.frames.add(Frame({"semaphores": [SemaphoreInfo("s", 0x10, 1, 4, ())]}))
-    app.scraper._m_scraper.is_live = True
+    app.scraper.is_live = True
     app.scraper.absent_features.return_value = ()
     app.draw_frame = MagicMock()
     app.transition_to = MagicMock()
     return app
 
 
-def test_reload_reports_its_stderr_and_restarts_polling(reloading_app, monkeypatch):
-    def reload_elf():
+def test_reload_reports_its_stderr_and_restarts_polling(reloading_app):
+    def reattach():
         print("Loaded cached ELF @ cache.bin", file=sys.stderr)
 
-    reloading_app.scraper.reload_elf.side_effect = reload_elf
-    monkeypatch.setattr(zview_tui, "verify_target_image", lambda scraper, elf_path: None)
+    reloading_app.scraper.reattach.side_effect = reattach
 
     reloading_app.attempt_reconnect()
 
@@ -264,9 +262,8 @@ def test_reload_reports_its_stderr_and_restarts_polling(reloading_app, monkeypat
     assert reloading_app._overlay is None
 
 
-def test_a_reload_reads_the_muted_rows_again(reloading_app, monkeypatch):
+def test_a_reload_reads_the_muted_rows_again(reloading_app):
     """The history starts over, and a muted row would never be read into it."""
-    monkeypatch.setattr(zview_tui, "verify_target_image", lambda scraper, elf_path: None)
     reloading_app.toggle_mute("semaphores", "s")
 
     reloading_app.attempt_reconnect()
@@ -277,7 +274,7 @@ def test_a_reload_reads_the_muted_rows_again(reloading_app, monkeypatch):
 
 def test_a_replayed_row_hidden_or_muted_shows_again_after_the_replay_ends(app):
     """Until then a muted row stays at its last read."""
-    app.scraper._m_scraper.is_live = False
+    app.scraper.is_live = False
 
     def frame(size: int) -> Frame:
         return Frame({"threads": [ThreadInfo(a, 0, size, n, None) for a, n in enumerate("abc", 1)]})
@@ -354,11 +351,8 @@ def test_a_muted_threads_detail_reads_it_again_once_it_opens(app):
     assert app.selection.muted == frozenset({("threads", "gone")})
 
 
-def test_reload_onto_a_target_running_another_image_is_fatal(reloading_app, monkeypatch):
-    def mismatch(scraper, elf_path):
-        raise ImageMismatch("the target is not running this ELF")
-
-    monkeypatch.setattr(zview_tui, "verify_target_image", mismatch)
+def test_reload_onto_a_target_running_another_image_is_fatal(reloading_app):
+    reloading_app.scraper.reattach.side_effect = ImageMismatch("the target is not running this ELF")
 
     reloading_app.attempt_reconnect()
 

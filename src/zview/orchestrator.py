@@ -14,6 +14,7 @@ from typing import Literal
 
 from zview.backend.base import AbstractScraper
 from zview.backend.elf_inspector import ElfInspector
+from zview.backend.image import verify_target_image
 from zview.backend.replay import ReplayComplete
 from zview.frames import Fatal, Frame, Notice, ReplayEnd
 from zview.kernel import compat
@@ -45,6 +46,18 @@ class ZScraper:
     def reload_elf(self) -> None:
         """Re-parse the ELF at the same path and rebuild everything derived from it."""
         self._load_elf(self.elf_path)
+
+    @property
+    def is_live(self) -> bool:
+        """Whether the session reads a target rather than a recording."""
+        return self._m_scraper.is_live
+
+    def reattach(self) -> None:
+        """Disconnect, re-parse the ELF, reconnect, and check the target runs it."""
+        self._m_scraper.disconnect()
+        self.reload_elf()
+        self._m_scraper.connect()
+        verify_target_image(self._m_scraper, self.elf_path)
 
     def _load_elf(self, elf_path) -> None:
         """Parse ``elf_path`` and resolve the layout and the groups it provides."""
@@ -226,8 +239,7 @@ class ZScraper:
         self._m_scraper.__exit__(exc_type, exc_val, exc_tb)
 
     def read_variable(self, var_name: str) -> list:
-        if not self._m_scraper.is_connected:
-            self._m_scraper.connect()
+        self.connect()
 
         var_addresses = self._elf_inspector.get_symbol_info(var_name, "address")
         var_sizes = self._elf_inspector.get_symbol_info(var_name, "size")

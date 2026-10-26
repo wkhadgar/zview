@@ -13,7 +13,6 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 
-from zview.backend.image import verify_target_image
 from zview.frames import Fatal, Frame, FrameHistory, Notice, ReplayEnd
 from zview.frontend.tui.views.base import (
     Any,
@@ -178,7 +177,7 @@ class ZView:
 
         # The opening view is the thread list. A replay keeps polling whatever
         # its recording holds.
-        if self.scraper._m_scraper.is_live:
+        if self.scraper.is_live:
             self.scraper.view = self.views[self.state].reads()
 
     def _init_curses(self) -> ZViewTUIAttributes:
@@ -269,13 +268,12 @@ class ZView:
 
     def attempt_reconnect(self):
         """Reload the ELF, reattach the probe and restart the data pipeline."""
-        if not self.scraper._m_scraper.is_live:
+        if not self.scraper.is_live:
             self.report("Reconnect is not available in replay mode.")
             return
 
         self.report("Reloading the ELF and reconnecting...")
         self.scraper.finish_polling_thread()
-        self.scraper._m_scraper.disconnect()
         self.purge_queue()
         # A rebuilt ELF can reassign the addresses the rows are kept by.
         self.frames = FrameHistory()
@@ -297,7 +295,7 @@ class ZView:
             self.process_data(Fatal(f"Reconnection failed: {e}"))
 
     def _reload_and_verify(self) -> None:
-        """Re-parse the ELF, reconnect, and check the target runs it; its stderr goes to the log."""
+        """Reattach the target, with its stderr going to the log."""
         overlay = self._overlay
         self._overlay = "messages"
         self.draw_frame()
@@ -305,9 +303,7 @@ class ZView:
         captured = io.StringIO()
         try:
             with contextlib.redirect_stderr(captured):
-                self.scraper.reload_elf()
-                self.scraper._m_scraper.connect()
-                verify_target_image(self.scraper._m_scraper, self.scraper.elf_path)
+                self.scraper.reattach()
         finally:
             for line in captured.getvalue().splitlines():
                 self.report(line)
@@ -385,7 +381,7 @@ class ZView:
     def select(self, selection: Selection) -> None:
         """Show what ``selection`` reads, and read only that from a live target."""
         self.selection = selection
-        if self.scraper._m_scraper.is_live:
+        if self.scraper.is_live:
             self.scraper.selection = selection
 
     def toggle_mute(self, group: str, name: str) -> None:
@@ -464,7 +460,7 @@ class ZView:
         # Replay backends cannot absorb polling-shape mutations without drifting
         # against the recording. Views still transition; the display filters
         # from the full frame on its own.
-        if self.scraper._m_scraper.is_live:
+        if self.scraper.is_live:
             self.views[self.state].closed()
             self.scraper.view = view.reads()
             view.opened()
