@@ -252,8 +252,7 @@ class ThreadListView(BaseStateView):
                 self.controller.report("Refreshing thread list...")
 
                 try:
-                    self.controller.scraper.discover()
-                    self.controller.scraper.reset_runtime_state()
+                    self.controller.core.refresh()
                     self.controller.purge_queue()
                 except Exception as e:
                     self.controller.report(f"Error refreshing threads: {e}")

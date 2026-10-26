@@ -5,6 +5,7 @@
 """One target or recording, polled for the frontend attached to it."""
 
 import contextlib
+import dataclasses
 import logging
 import queue
 import threading
@@ -39,6 +40,8 @@ class Core:
         self._stop = threading.Event()
         # Held while a start or a stop changes the poller.
         self._lifecycle = threading.Lock()
+        # Held over each frame's reads, so a refresh never reads beside the poll.
+        self._reading = threading.Lock()
         self._faults = 0
         self._frames_read = 0
 
@@ -128,6 +131,24 @@ class Core:
             if self._poller is poller:
                 self._poller = None
 
+    def refresh(self) -> None:
+        """Find the target's rows again, and clear the baselines the next frame seeds."""
+        with self._reading:
+            self.scraper.discover()
+            self.scraper.reset_runtime_state()
+
+    def reattach(self) -> None:
+        """
+        With the poll stopped, reattach the target and find its rows again.
+        The history starts over, since a rebuilt ELF can reassign the
+        addresses rows are kept by, and so every row is unmuted, having no
+        last info left to show.
+        """
+        self.frames = FrameHistory()
+        self.select(dataclasses.replace(self.selection, muted=frozenset()))
+        self.scraper.reattach()
+        self.refresh()
+
     def view(self, reads: Selection) -> None:
         """
         Read from a live target only what the frontend's open view needs. A
@@ -139,7 +160,8 @@ class Core:
     def _read(self) -> bool:
         """Read one frame and hand it out. False once the poll must end."""
         try:
-            frame = Frame(self.scraper.read_frame())
+            with self._reading:
+                frame = Frame(self.scraper.read_frame())
             # A replay's frame holds the muted rows too.
             self.frames.add(frame, muted=self.selection.muted)
             self._publish(frame)
@@ -150,7 +172,8 @@ class Core:
             return False
         except BrokenFrame as e:
             logger.warning("Broken frame captured (%s); resyncing baselines.", e)
-            self.scraper.reset_runtime_state()
+            with self._reading:
+                self.scraper.reset_runtime_state()
         except Exception as e:
             self._faults += 1
             if self._faults >= MAX_TOLERATED_ERRORS:

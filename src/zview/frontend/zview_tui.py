@@ -271,15 +271,9 @@ class ZView:
         self.report("Reloading the ELF and reconnecting...")
         self.core.stop()
         self.purge_queue()
-        # A rebuilt ELF can reassign the addresses the rows are kept by.
-        self.core.frames = FrameHistory()
-        # A muted row has no last info left to show, so it is read again.
-        self.core.select(dataclasses.replace(self.selection, muted=frozenset()))
 
         try:
             self._reload_and_verify()
-            self.scraper.discover()
-            self.scraper.reset_runtime_state()
             self.core.start(self.core.period)
             self.transition_to(ZViewState.THREAD_LIST_VIEW)
             self.stdscr.clear()
@@ -295,7 +289,7 @@ class ZView:
         captured = io.StringIO()
         try:
             with contextlib.redirect_stderr(captured):
-                self.scraper.reattach()
+                self.core.reattach()
         finally:
             for line in captured.getvalue().splitlines():
                 self.report(line)
