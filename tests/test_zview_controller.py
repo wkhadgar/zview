@@ -14,6 +14,7 @@ import pytest
 
 from zview.backend.base import HeapInfo, SemaphoreInfo, ThreadInfo, WorkqInfo
 from zview.backend.image import ImageMismatch
+from zview.core import Core
 from zview.frames import Fatal, Frame, FrameHistory, Notice, ReplayEnd
 from zview.frontend.tui.views.base import SpecialCode, ZViewState
 from zview.frontend.tui.views.thread_detail import ThreadDetailView
@@ -34,6 +35,7 @@ def app() -> ZView:
     a.data_queue = queue.Queue()
     a.scraper = MagicMock()
     a.scraper.groups = {"threads": MagicMock(idle_addresses=(0xDEAD,))}
+    a.core = Core(a.scraper)
     a.state = ZViewState.THREAD_LIST_VIEW
     a.stdscr = MagicMock()
     a._overlay = None
@@ -238,7 +240,9 @@ def test_contention_history_is_bounded(app):
 @pytest.fixture
 def reloading_app(app):
     """``app`` ready for ``R``: a live scraper, no drawing, every history present."""
-    app.stop_event = MagicMock()
+    app.core.start = MagicMock()
+    app.core.stop = MagicMock()
+    app.core.period = 0.1
     app.frames.add(Frame({"semaphores": [SemaphoreInfo("s", 0x10, 1, 4, ())]}))
     app.scraper.is_live = True
     app.scraper.absent_features.return_value = ()
@@ -256,7 +260,7 @@ def test_reload_reports_its_stderr_and_restarts_polling(reloading_app):
     reloading_app.attempt_reconnect()
 
     assert any(entry.text == "Loaded cached ELF @ cache.bin" for entry in reloading_app.messages)
-    reloading_app.scraper.start_polling_thread.assert_called_once()
+    reloading_app.core.start.assert_called_once_with(0.1)
     assert reloading_app.frames.latest("semaphores") == []
     assert reloading_app.frames.of("semaphores", 0x10) == []
     assert reloading_app._overlay is None
@@ -358,7 +362,7 @@ def test_reload_onto_a_target_running_another_image_is_fatal(reloading_app):
 
     assert reloading_app.state is ZViewState.FATAL_ERROR
     assert "the target is not running this ELF" in reloading_app.status_message
-    reloading_app.scraper.start_polling_thread.assert_not_called()
+    reloading_app.core.start.assert_not_called()
 
 
 def test_escape_drops_the_pattern_line_and_enter_selects_it(app):

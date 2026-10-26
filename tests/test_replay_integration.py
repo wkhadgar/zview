@@ -5,8 +5,6 @@
 """End-to-end replay integration against a recorded fixture and its golden JSON."""
 
 import json
-import queue
-import threading
 import time
 from pathlib import Path
 
@@ -14,6 +12,7 @@ import pytest
 
 from zview.backend.base import HeapInfo, ThreadInfo
 from zview.backend.replay import ReplayScraper
+from zview.core import Core
 from zview.frames import Frame, Notice
 from zview.orchestrator import ZScraper
 
@@ -35,19 +34,18 @@ def _discover_fixtures() -> list[tuple[Path, Path]]:
 
 
 def _drive_replay(recording: Path) -> list:
-    """Replay a fixture through a full ZScraper polling loop; return captured frames."""
+    """Replay a fixture through a full polling loop; return captured frames."""
     replay = ReplayScraper(recording, honor_timing=False)
     with replay:
         scraper = ZScraper(replay, str(_ELF_PATH))
         scraper.discover()
 
-        data_queue: queue.Queue = queue.Queue()
-        stop_event = threading.Event()
-        scraper.start_polling_thread(data_queue, stop_event, 0.001)
+        core = Core(scraper)
+        data_queue = core.events
+        core.start(0.001)
 
         time.sleep(_REPLAY_BUDGET_SECS)
-        stop_event.set()
-        scraper.finish_polling_thread()
+        core.stop()
 
         frames = []
         while not data_queue.empty():

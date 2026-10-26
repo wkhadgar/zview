@@ -2,30 +2,21 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""ZScraper: backend + ELF + kernel groups + polling thread."""
+"""ZScraper: backend + ELF + kernel groups, read one frame at a time."""
 
 import contextlib
-import logging
-import queue
-import threading
-import time
-from threading import Event
 from typing import Literal
 
 from zview.backend.base import AbstractScraper
 from zview.backend.elf_inspector import ElfInspector
 from zview.backend.image import verify_target_image
-from zview.backend.replay import ReplayComplete
-from zview.frames import Fatal, Frame, Notice, ReplayEnd
 from zview.kernel import compat
-from zview.kernel.group import BrokenFrame, Group
+from zview.kernel.group import Group
 from zview.kernel.groups import GROUPS
 from zview.kernel.layout import KernelLayout
 from zview.kernel.object_names import label_instances
 from zview.kernel.session import Session
 from zview.selection import Selection
-
-logger = logging.getLogger("zview.scraper")
 
 
 class ZScraper:
@@ -37,9 +28,6 @@ class ZScraper:
 
     def __init__(self, meta_scraper: AbstractScraper, elf_path):
         self._m_scraper: AbstractScraper = meta_scraper
-        self._polling_thread: threading.Thread | None = None
-        self._stop_event: Event | None = None
-        self.inspection_period = 0.2
 
         self._load_elf(elf_path)
 
@@ -51,6 +39,11 @@ class ZScraper:
     def is_live(self) -> bool:
         """Whether the session reads a target rather than a recording."""
         return self._m_scraper.is_live
+
+    def connect(self) -> None:
+        """Connect to the target, unless connected."""
+        if not self._m_scraper.is_connected:
+            self._m_scraper.connect()
 
     def reattach(self) -> None:
         """Disconnect, re-parse the ELF, reconnect, and check the target runs it."""
@@ -232,6 +225,15 @@ class ZScraper:
 
         return frame
 
+    def read_frame(self) -> dict:
+        """The groups of one frame, read in one batch of the backend."""
+        self._m_scraper.begin_batch()
+        try:
+            return self._poll_groups()
+        finally:
+            with contextlib.suppress(Exception):
+                self._m_scraper.end_batch()
+
     def __enter__(self):
         self._m_scraper.__enter__()
 
@@ -254,97 +256,3 @@ class ZScraper:
         self._m_scraper.watermark_cache.clear()
         for group in self.groups.values():
             group.reset()
-
-    def start_polling_thread(
-        self,
-        data_queue: queue.Queue,
-        stop_event: threading.Event,
-        inspection_period: float,
-        frames: int | None = None,
-    ):
-        """
-        Start the polling daemon thread, which ends after ``frames`` frames when
-        given. No-op if one is already running.
-        """
-        if self._polling_thread is not None:
-            data_queue.put(Notice("Already started..."))
-            return
-
-        self.inspection_period = inspection_period
-        self._polling_thread = threading.Thread(
-            target=self._poll_thread_worker,
-            args=(data_queue, stop_event, inspection_period, frames),
-            daemon=True,
-        )
-        self._stop_event = stop_event
-        self._polling_thread.start()
-
-    def finish_polling_thread(self):
-        if self._polling_thread is None or self._stop_event is None:
-            return
-
-        self._stop_event.set()
-        # The poll stops after the frame in flight, which a slow probe takes
-        # over a second to read. The probe stays open until then.
-        self._polling_thread.join()
-
-        self._polling_thread = None
-
-    _MAX_TOLERATED_ERRORS = 3
-
-    def _poll_thread_worker(
-        self,
-        data_queue: queue.Queue,
-        stop_event: threading.Event,
-        inspection_period: float,
-        frames: int | None = None,
-    ):
-        """Polling thread entry point. Tolerates ``_MAX_TOLERATED_ERRORS`` transient faults."""
-        try:
-            if not self._m_scraper.is_connected:
-                self._m_scraper.connect()
-        except Exception as e:
-            data_queue.put(Fatal(f"Failed to connect to target: {e}"))
-            return
-
-        consecutive_errors = 0
-        polled = 0
-        while not stop_event.is_set() and (frames is None or polled < frames):
-            cycle_start = time.perf_counter()
-            in_batch = False
-            try:
-                self._m_scraper.begin_batch()
-                in_batch = True
-
-                data_queue.put(Frame(self._poll_groups()), block=False)
-                polled += 1
-
-                consecutive_errors = 0
-            except queue.Full:
-                pass
-            except ReplayComplete as e:
-                data_queue.put(ReplayEnd(str(e)))
-                break
-            except BrokenFrame as e:
-                logger.warning("Broken frame captured (%s); resyncing baselines.", e)
-                self.reset_runtime_state()
-            except Exception as e:
-                consecutive_errors += 1
-                if consecutive_errors >= self._MAX_TOLERATED_ERRORS:
-                    data_queue.put(
-                        Fatal(f"Target lost after {self._MAX_TOLERATED_ERRORS} retries: {e}")
-                    )
-                    break
-                # One message per fault, not one per attempt: the message log
-                # counts the repeats, which is the retry number.
-                data_queue.put(Notice(f"Transient read fault: {e}"), block=False)
-            finally:
-                if in_batch:
-                    with contextlib.suppress(Exception):
-                        self._m_scraper.end_batch()
-
-            # Sleep only the remainder of the period, so the poll cadence tracks
-            # the requested period instead of period-plus-read-time. When the
-            # reads already exceed the period, poll back-to-back (no sleep).
-            elapsed = time.perf_counter() - cycle_start
-            time.sleep(max(0.0, inspection_period - elapsed))

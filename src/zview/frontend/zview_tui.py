@@ -7,12 +7,12 @@ import curses
 import dataclasses
 import io
 import queue
-import threading
 import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 
+from zview.core import Core
 from zview.frames import Fatal, Frame, FrameHistory, Notice, ReplayEnd
 from zview.frontend.tui.views.base import (
     Any,
@@ -96,8 +96,8 @@ class ZView:
     """
     A curses-based application for viewing Zephyr RTOS thread runtime information.
 
-    This class manages the curses UI, starts a background thread for data polling,
-    and updates the display with real-time thread statistics from a connected MCU.
+    This class manages the curses UI, and draws the frames and events of the
+    core it is attached to.
     """
 
     def __init__(self, scraper: ZScraper, stdscr, selection: Selection):
@@ -118,8 +118,8 @@ class ZView:
         self.status_message: str = ""
         # One entry per reported message, newest last.
         self.messages: deque[LogEntry] = deque(maxlen=_MESSAGE_LOG_SIZE)
-        self.data_queue = queue.Queue()
-        self.stop_event = threading.Event()
+        self.core = Core(scraper)
+        self.data_queue = self.core.events
         self.update_count = 0
 
         self.state: ZViewState = ZViewState.THREAD_LIST_VIEW
@@ -273,22 +273,18 @@ class ZView:
             return
 
         self.report("Reloading the ELF and reconnecting...")
-        self.scraper.finish_polling_thread()
+        self.core.stop()
         self.purge_queue()
         # A rebuilt ELF can reassign the addresses the rows are kept by.
         self.frames = FrameHistory()
         # A muted row has no last info left to show, so it is read again.
         self.select(dataclasses.replace(self.selection, muted=frozenset()))
 
-        self.stop_event.clear()
-
         try:
             self._reload_and_verify()
             self.scraper.discover()
             self.scraper.reset_runtime_state()
-            self.scraper.start_polling_thread(
-                self.data_queue, self.stop_event, self.scraper.inspection_period
-            )
+            self.core.start(self.core.period)
             self.transition_to(ZViewState.THREAD_LIST_VIEW)
             self.stdscr.clear()
         except Exception as e:
@@ -526,8 +522,8 @@ class ZView:
         """
         The main application loop.
 
-        This loop continuously checks for new data from the polling thread,
-        updates the UI, and processes user input (e.g., 'q' to quit).
+        This loop starts the core's poll, takes its events, updates the UI,
+        and processes user input (e.g., 'q' to quit).
         """
         self.report("Initializing...")
 
@@ -538,7 +534,7 @@ class ZView:
         for notice in self.scraper.unmatched(self.selection):
             self.report(notice)
 
-        self.scraper.start_polling_thread(self.data_queue, self.stop_event, inspection_period)
+        self.core.start(inspection_period)
 
         while self.running:
             # Drain the queue completely on every frame
@@ -574,4 +570,4 @@ def tui_run(stdscr, scraper: ZScraper, inspection_period, selection: Selection):
     try:
         app.run(inspection_period)
     finally:
-        app.scraper.finish_polling_thread()
+        app.core.stop()

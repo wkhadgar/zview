@@ -1,0 +1,127 @@
+# Copyright (c) 2026 Paulo Santos (@wkhadgar)
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""One target or recording, polled for the frontend attached to it."""
+
+import contextlib
+import logging
+import queue
+import threading
+import time
+
+from zview.backend.replay import ReplayComplete
+from zview.frames import Fatal, Frame, Notice, ReplayEnd
+from zview.kernel.group import BrokenFrame
+from zview.orchestrator import ZScraper
+
+logger = logging.getLogger("zview.core")
+
+# Faults in a row a poll goes on after.
+MAX_TOLERATED_ERRORS = 3
+
+
+class Core:
+    """The poll of one target or recording, and the events it hands the frontend."""
+
+    def __init__(self, scraper: ZScraper):
+        self.scraper = scraper
+        # Each event of the poll, for the frontend to take.
+        self.events: queue.Queue = queue.Queue()
+        # The period of the poll ``start`` runs, kept for the next one, and its thread.
+        self.period: float | None = None
+        self._poller: threading.Thread | None = None
+        self._stop = threading.Event()
+        # Held while a start or a stop changes the poller.
+        self._lifecycle = threading.Lock()
+        self._faults = 0
+        self._frames_read = 0
+
+    def poll(self, period: float | None = None, frames: int | None = None) -> None:
+        """
+        Read one frame and put it on ``events``. With ``period``, read one
+        every ``period`` seconds until ``stop``, ``frames`` frames when given,
+        the end of a recording, or ``MAX_TOLERATED_ERRORS`` faults in a row.
+        """
+        self._faults = 0
+        self._frames_read = 0
+        try:
+            self.scraper.connect()
+        except Exception as e:
+            self._publish(Fatal(f"Failed to connect to target: {e}"))
+            return
+
+        if period is None:
+            self._read()
+            return
+
+        while not self._stop.is_set() and (frames is None or self._frames_read < frames):
+            started = time.perf_counter()
+            if not self._read():
+                break
+            # Sleep only the remainder of the period, so the poll cadence tracks
+            # the requested period instead of period-plus-read-time. When the
+            # reads already exceed the period, poll back-to-back (no sleep).
+            elapsed = time.perf_counter() - started
+            time.sleep(max(0.0, period - elapsed))
+
+    @property
+    def is_polling(self) -> bool:
+        """A poll ``start`` began is still running."""
+        return self._poller is not None and self._poller.is_alive()
+
+    def start(self, period: float, frames: int | None = None) -> None:
+        """
+        Poll with ``period`` on a thread of its own, unless a poll is running.
+        A stop from before this call is for no poll, and one after it ends this one.
+        """
+        with self._lifecycle:
+            if self.is_polling:
+                return
+            self._stop.clear()
+            self.period = period
+            self._poller = threading.Thread(target=self.poll, args=(period, frames), daemon=True)
+            self._poller.start()
+
+    def stop(self) -> None:
+        """
+        End a poll running with a period after its current frame, and wait
+        for it: a slow probe takes over a second to read one, and stays open
+        until then. The poll's own thread stops it without waiting.
+        """
+        with self._lifecycle:
+            self._stop.set()
+            poller = self._poller
+        if poller is None or poller is threading.current_thread():
+            return
+        poller.join()
+        with self._lifecycle:
+            if self._poller is poller:
+                self._poller = None
+
+    def _read(self) -> bool:
+        """Read one frame and hand it out. False once the poll must end."""
+        try:
+            self._publish(Frame(self.scraper.read_frame()))
+            self._frames_read += 1
+            self._faults = 0
+        except ReplayComplete as e:
+            self._publish(ReplayEnd(str(e)))
+            return False
+        except BrokenFrame as e:
+            logger.warning("Broken frame captured (%s); resyncing baselines.", e)
+            self.scraper.reset_runtime_state()
+        except Exception as e:
+            self._faults += 1
+            if self._faults >= MAX_TOLERATED_ERRORS:
+                self._publish(Fatal(f"Target lost after {MAX_TOLERATED_ERRORS} retries: {e}"))
+                return False
+            # One message per fault, not one per attempt: the message log
+            # counts the repeats, which is the retry number.
+            self._publish(Notice(f"Transient read fault: {e}"))
+        return True
+
+    def _publish(self, item: Frame | Notice | Fatal | ReplayEnd) -> None:
+        """Put ``item`` on ``events``, unless the frontend left a bounded queue full."""
+        with contextlib.suppress(queue.Full):
+            self.events.put_nowait(item)

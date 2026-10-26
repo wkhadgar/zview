@@ -5,6 +5,7 @@
 """Coverage for the headless snapshot module."""
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -154,6 +155,28 @@ def test_record_session_respects_frames_bound(tmp_path):
     assert captured == 2
 
 
+def test_record_ends_with_a_poll_whose_frame_was_dropped(tmp_path, monkeypatch):
+    """A frame a full queue dropped would leave the record waiting for it."""
+    from zview.core import Core
+    from zview.frames import Frame
+
+    publish = Core._publish
+    dropped: list = []
+
+    def drop_the_first_frame(self, item):
+        if isinstance(item, Frame) and not dropped:
+            dropped.append(item)
+            return
+        publish(self, item)
+
+    monkeypatch.setattr(Core, "_publish", drop_the_first_frame)
+    source = ReplayScraper(_FIXTURE, honor_timing=False)
+
+    captured = record_session(source, str(_ELF), tmp_path / "r.ndjson.gz", frames=3, period=0.001)
+
+    assert captured == 2
+
+
 def test_record_session_requires_a_bound(tmp_path):
     source = ReplayScraper(_FIXTURE, honor_timing=False)
     with pytest.raises(ValueError, match="duration or frames"):
@@ -187,10 +210,10 @@ def test_record_session_dual_bound_first_to_hit_wins(tmp_path):
 def test_dump_single_frame_propagates_fatal_error(monkeypatch):
     """``fatal_error`` from the polling thread surfaces as ``RuntimeError``."""
 
-    def fake_start(self, data_queue, stop_event, period):
-        data_queue.put(Fatal("synthetic backend loss"))
+    def fake_poll(self, period=None, frames=None):
+        self._publish(Fatal("synthetic backend loss"))
 
-    monkeypatch.setattr("zview.orchestrator.ZScraper.start_polling_thread", fake_start)
+    monkeypatch.setattr("zview.core.Core.poll", fake_poll)
 
     backend = ReplayScraper(_FIXTURE, honor_timing=False)
     with pytest.raises(RuntimeError, match="synthetic backend loss"):
@@ -215,6 +238,40 @@ def test_dump_single_frame_skips_to_requested_frame():
     cpu_f1 = sorted(t.runtime.cpu_normalized for t in f1["threads"])
     cpu_f3 = sorted(t.runtime.cpu_normalized for t in f3["threads"])
     assert cpu_f1 != cpu_f3
+
+
+class _SlowFrames(ReplayScraper):
+    """A replay whose frames take over a second, as pyOCD's through a J-Link OB."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.calls: list[str] = []
+        self._batches = 0
+
+    def begin_batch(self):
+        self._batches += 1
+        # The walk at discovery comes quick.
+        if self._batches > 1:
+            time.sleep(1.5)
+        super().begin_batch()
+
+    def end_batch(self):
+        super().end_batch()
+        self.calls.append("end_batch")
+
+    def disconnect(self):
+        self.calls.append("disconnect")
+        super().disconnect()
+
+
+def test_dump_closes_the_probe_after_the_frame_in_flight():
+    backend = _SlowFrames(_FIXTURE, honor_timing=False)
+
+    with pytest.raises(TimeoutError):
+        dump_single_frame(backend, str(_ELF), period=0.001, frame=1, timeout=0.2)
+
+    # The walk at discovery, then the frame in flight, then the probe.
+    assert backend.calls == ["end_batch", "end_batch", "disconnect"]
 
 
 def test_dump_single_frame_raises_when_recording_too_short():
