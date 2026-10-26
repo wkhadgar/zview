@@ -5,8 +5,9 @@
 """What the polling thread queues: each frame it reads, and what stops or troubles it."""
 
 import threading
+import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from zview.selection import Selection
 
@@ -16,9 +17,10 @@ HISTORY_LENGTH = 256
 
 @dataclass(frozen=True)
 class Frame:
-    """One poll: the rows of each group read, by group key."""
+    """One poll: the rows of each group read, by group key, and when, in epoch seconds."""
 
     groups: dict[str, list]
+    at: float = field(default_factory=time.time)
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,7 @@ class FrameHistory:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._latest: dict[str, list] = {}
+        self._latest_at: dict[str, float] = {}
         self._history: dict[tuple[str, int], deque] = {}
         self._named: dict[tuple[str, str], object] = {}
 
@@ -61,6 +64,7 @@ class FrameHistory:
         """
         with self._lock:
             self._latest.update(frame.groups)
+            self._latest_at.update(dict.fromkeys(frame.groups, frame.at))
             for group, infos in frame.groups.items():
                 for info in (i for i in infos if (group, i.name) not in muted):
                     key = (group, info.address)
@@ -81,6 +85,11 @@ class FrameHistory:
                 if row[0] == group and selection.matches(*row)
             ]
         return infos + [info for info in muted if info is not None]
+
+    def latest_at(self, group: str) -> float | None:
+        """When the last frame that read the group was read, or ``None`` if none has."""
+        with self._lock:
+            return self._latest_at.get(group)
 
     def of(self, group: str, address: int) -> list:
         """The info of the object at ``address`` in each frame that read it, oldest first."""

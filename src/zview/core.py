@@ -6,6 +6,7 @@
 
 import contextlib
 import dataclasses
+import enum
 import logging
 import queue
 import threading
@@ -22,15 +23,32 @@ logger = logging.getLogger("zview.core")
 
 # Faults in a row a poll goes on after.
 MAX_TOLERATED_ERRORS = 3
+# Events kept for a frontend that only reads the core's state.
+EVENTS_KEPT = 256
+
+
+class Status(enum.Enum):
+    """What the core's poll is doing."""
+
+    # Not polling: before the first poll, after a stop, or between one-frame polls.
+    IDLE = "idle"
+    POLLING = "polling"
+    # The target never connected, or it was lost.
+    LOST = "lost"
+    # The recording being replayed ended.
+    ENDED = "ended"
 
 
 class Core:
-    """The poll of one target or recording, and the events it hands the frontend."""
+    """The poll of one target or recording, its state, and the events it hands the frontend."""
 
     def __init__(self, scraper: ZScraper):
         self.scraper = scraper
+        self.status = Status.IDLE
+        # The text of the poll's latest fault, transient or fatal.
+        self.last_fault: str | None = None
         # Each event of the poll, for the frontend to take.
-        self.events: queue.Queue = queue.Queue()
+        self.events: queue.Queue = queue.Queue(maxsize=EVENTS_KEPT)
         # What the frontend shows: the session's selection, then what it changes.
         self.selection: Selection = scraper.selection
         self.frames = FrameHistory()
@@ -87,6 +105,7 @@ class Core:
             self._read()
             return
 
+        self.status = Status.POLLING
         while not self._stop.is_set() and (frames is None or self._frames_read < frames):
             started = time.perf_counter()
             if not self._read():
@@ -96,6 +115,8 @@ class Core:
             # reads already exceed the period, poll back-to-back (no sleep).
             elapsed = time.perf_counter() - started
             time.sleep(max(0.0, period - elapsed))
+        if self.status is Status.POLLING:
+            self.status = Status.IDLE
 
     @property
     def is_polling(self) -> bool:
@@ -142,12 +163,14 @@ class Core:
         With the poll stopped, reattach the target and find its rows again.
         The history starts over, since a rebuilt ELF can reassign the
         addresses rows are kept by, and so every row is unmuted, having no
-        last info left to show.
+        last info left to show. The fault of the lost target is cleared once
+        it is reattached.
         """
         self.frames = FrameHistory()
         self.select(dataclasses.replace(self.selection, muted=frozenset()))
         self.scraper.reattach()
         self.refresh()
+        self.status, self.last_fault = Status.IDLE, None
 
     def view(self, reads: Selection) -> None:
         """
@@ -185,6 +208,24 @@ class Core:
         return True
 
     def _publish(self, item: Frame | Notice | Fatal | ReplayEnd) -> None:
-        """Put ``item`` on ``events``, unless the frontend left a bounded queue full."""
-        with contextlib.suppress(queue.Full):
-            self.events.put_nowait(item)
+        """
+        Keep what ``item`` says of the poll, then put it on ``events``. Full,
+        they drop a frame or a notice, and an end of the poll takes the place
+        of the oldest event.
+        """
+        match item:
+            case Fatal(text):
+                self.status, self.last_fault = Status.LOST, text
+            case Notice(text):
+                self.last_fault = text
+            case ReplayEnd():
+                self.status = Status.ENDED
+        while True:
+            try:
+                self.events.put_nowait(item)
+                return
+            except queue.Full:
+                if not isinstance(item, Fatal | ReplayEnd):
+                    return
+                with contextlib.suppress(queue.Empty):
+                    self.events.get_nowait()

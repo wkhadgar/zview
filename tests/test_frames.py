@@ -94,3 +94,13 @@ def test_a_muted_row_the_patterns_leave_out_is_not_listed():
 
     assert frames.latest("threads", Selection(include=((None, "main"),), muted=muted)) == []
     assert frames.latest("threads", Selection(groups=frozenset({"heaps"}), muted=muted)) == []
+
+
+def test_a_group_a_frame_leaves_out_keeps_the_time_it_was_last_read():
+    """The objects view reads no threads, so their rows grow old while the mutexes stay new."""
+    frames = FrameHistory()
+    frames.add(Frame({"threads": [], "mutexes": []}, at=100.0))
+    frames.add(Frame({"mutexes": []}, at=101.0))
+
+    assert (frames.latest_at("threads"), frames.latest_at("mutexes")) == (100.0, 101.0)
+    assert frames.latest_at("heaps") is None
