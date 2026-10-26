@@ -347,15 +347,17 @@ def test_record_dispatches_with_frames_bound(monkeypatch, capsys, tmp_path):
 
 def test_replay_no_pacing_passes_to_scraper(monkeypatch, capsys):
     """--no-pacing -> ReplayScraper(honor_timing=False)."""
+    from zview import target
+
     captured: dict = {}
-    real_cls = cli.ReplayScraper
+    real_cls = target.ReplayScraper
 
     class SpyReplay(real_cls):
         def __init__(self, *args, **kwargs):
             captured["honor_timing"] = kwargs.get("honor_timing", True)
             super().__init__(*args, **kwargs)
 
-    monkeypatch.setattr(cli, "ReplayScraper", SpyReplay)
+    monkeypatch.setattr(target, "ReplayScraper", SpyReplay)
     monkeypatch.setattr(cli, "tui_run", lambda *a, **kw: None)
     monkeypatch.setattr(cli.curses, "wrapper", lambda fn, *a, **kw: fn(None, *a, **kw))
 

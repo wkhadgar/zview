@@ -13,10 +13,11 @@ from zview.backend.base import AbstractScraper
 from zview.backend.image import verify_target_image
 from zview.backend.recording import RecordingScraper
 from zview.core import Core
-from zview.frames import Fatal, Frame, ReplayEnd
+from zview.frames import Fatal, Frame, Notice, ReplayEnd
 from zview.kernel.groups import GROUPS
 from zview.orchestrator import ZScraper
 from zview.selection import Selection
+from zview.target import Target
 
 
 def serialize_frame(frame: dict) -> dict:
@@ -29,8 +30,7 @@ def serialize_frame(frame: dict) -> dict:
 
 
 def dump_single_frame(
-    backend: AbstractScraper,
-    elf_path,
+    target: Target,
     period: float = 0.1,
     frame: int = 1,
     timeout: float | None = None,
@@ -50,17 +50,9 @@ def dump_single_frame(
     if timeout is None:
         timeout = max(5.0, frame * max(period, 0.1) * 5.0)
 
-    with backend:
-        if backend.is_live:
-            verify_target_image(backend, elf_path)
-        scraper = ZScraper(backend, elf_path)
-        scraper.check_selection(selection)
-        if backend.is_live:
-            scraper.selection = selection
-        scraper.discover()
-        for notice in scraper.unmatched(selection):
+    with target.open(selection) as core:
+        for notice in core.scraper.unmatched(selection):
             print(notice, file=sys.stderr)
-        core = Core(scraper)
         core.start(period)
         deadline = time.monotonic() + timeout
         seen = 0
@@ -73,6 +65,8 @@ def dump_single_frame(
                 match frame_data:
                     case Fatal(text):
                         raise RuntimeError(text)
+                    case Notice(text):
+                        print(text, file=sys.stderr)
                     case ReplayEnd():
                         raise RuntimeError(
                             f"Recording has only {seen} frames; --frame {frame} out of range."

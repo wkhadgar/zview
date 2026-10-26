@@ -152,6 +152,13 @@ class Core:
             if self._poller is poller:
                 self._poller = None
 
+    def discover(self) -> None:
+        """Find the target's rows. A failure is a notice on ``events``."""
+        try:
+            self.scraper.discover()
+        except RuntimeError as e:
+            self._publish(Notice(f"Unable to update available threads [{e}]"))
+
     def refresh(self) -> None:
         """Find the target's rows again, and clear the baselines the next frame seeds."""
         with self._reading:

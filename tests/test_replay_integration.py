@@ -11,10 +11,8 @@ from pathlib import Path
 import pytest
 
 from zview.backend.base import HeapInfo, ThreadInfo
-from zview.backend.replay import ReplayScraper
-from zview.core import Core
 from zview.frames import Frame, Notice
-from zview.orchestrator import ZScraper
+from zview.target import Target
 
 _FIXTURES_DIR = Path(__file__).parent / "fixtures" / "recordings"
 _ELF_PATH = Path(__file__).parent / "fixtures" / "zephyr.elf"
@@ -35,21 +33,14 @@ def _discover_fixtures() -> list[tuple[Path, Path]]:
 
 def _drive_replay(recording: Path) -> list:
     """Replay a fixture through a full polling loop; return captured frames."""
-    replay = ReplayScraper(recording, honor_timing=False)
-    with replay:
-        scraper = ZScraper(replay, str(_ELF_PATH))
-        scraper.discover()
-
-        core = Core(scraper)
-        data_queue = core.events
+    with Target(str(_ELF_PATH), recording=str(recording), pacing=False).open() as core:
         core.start(0.001)
-
         time.sleep(_REPLAY_BUDGET_SECS)
         core.stop()
 
         frames = []
-        while not data_queue.empty():
-            frames.append(data_queue.get_nowait())
+        while not core.events.empty():
+            frames.append(core.events.get_nowait())
     return frames
 
 

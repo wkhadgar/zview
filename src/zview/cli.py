@@ -8,30 +8,20 @@ from collections.abc import Callable
 from pyocd.utility.cmdline import convert_frequency
 from yaml import YAMLError
 
-from zview.backend.gdb import GDBScraper
-from zview.backend.image import verify_target_image
-from zview.backend.jlink import JLinkScraper
-from zview.backend.nrfutil import NrfutilScraper
-from zview.backend.pyocd import PyOCDScraper
-from zview.backend.replay import ReplayScraper
-from zview.core import Core
 from zview.frontend.zview_tui import tui_run
 from zview.kernel.threads import USAGE_WINDOW_MAX
 from zview.kinds import KINDS
 from zview.logging_setup import configure as configure_logging
-from zview.orchestrator import ZScraper
 from zview.runner_config import BuildDirError, RunnerConfig, find_elf, image_dir, runners_yaml_path
 from zview.selection import Selection
 from zview.snapshot import dump_single_frame, record_session, serialize_frame
+from zview.target import AVAILABLE_RUNNERS, CLOCKED_RUNNERS, Target
 
 logger = logging.getLogger("zview.cli")
 
-AVAILABLE_RUNNERS = ("gdb", "jlink", "nrfutil", "pyocd")
 KNOWN_COMMANDS = ("live", "record", "replay", "dump")
 PROBE_COMMANDS = ("live", "record")
 RUNNERS_NEEDING_TARGET = ("gdb", "jlink")
-# Runners whose probe clock --frequency sets.
-CLOCKED_RUNNERS = ("pyocd", "jlink")
 
 
 def _normalize_argv(argv: list[str]) -> list[str]:
@@ -360,36 +350,24 @@ def _warn(message: str) -> None:
     print(f"zview: warning: {message}", file=sys.stderr)
 
 
-def _build_live_backend(args):
-    scraper_map = {
-        "gdb": GDBScraper,
-        "jlink": JLinkScraper,
-        "nrfutil": NrfutilScraper,
-        "pyocd": PyOCDScraper,
-    }
-    cls = scraper_map.get(args.runner, PyOCDScraper)
-    if cls in (PyOCDScraper, JLinkScraper):
-        return cls(args.runner_target, args.frequency)
-    return cls(args.runner_target)
+def _probe(args) -> Target:
+    """The probe ``args`` name, with the ELF it is checked against."""
+    return Target(
+        args.elf_file, runner=args.runner, target=args.runner_target, frequency=args.frequency
+    )
 
 
 def _do_live(args) -> int:
-    with _build_live_backend(args) as backend:
-        verify_target_image(backend, args.elf_file)
-        scraper = ZScraper(backend, args.elf_file)
-        selection = _selection(args)
-        scraper.check_selection(selection)
-        scraper.groups["threads"].usage_window = args.usage_window
-        for notice in scraper.absent_features():
+    with _probe(args).open(_selection(args)) as core:
+        core.usage_window = args.usage_window
+        for notice in core.scraper.absent_features():
             print(notice, file=sys.stderr)
-        core = Core(scraper)
-        core.select(selection)
         curses.wrapper(tui_run, core, args.period)
     return 0
 
 
 def _do_record(args) -> int:
-    backend = _build_live_backend(args)
+    backend = _probe(args).backend()
     captured = record_session(
         backend,
         args.elf_file,
@@ -409,28 +387,24 @@ def _do_record(args) -> int:
 
 
 def _do_replay(args) -> int:
-    backend = ReplayScraper(args.input, honor_timing=not args.no_pacing)
-    with backend:
-        scraper = ZScraper(backend, args.elf_file)
-        scraper.groups["threads"].usage_window = args.usage_window
-        selection = scraper.selection if args.match is None else _selection(args)
-        scraper.check_selection(selection)
+    replay = Target(args.elf_file, recording=args.input, pacing=not args.no_pacing)
+    # Without --match, the replay shows the recording's own line.
+    shown = None if args.match is None else _selection(args)
+    with replay.open(shown) as core:
+        core.usage_window = args.usage_window
         # Pacing comes from the recording; the polling-thread sleep is just a floor.
-        core = Core(scraper)
-        core.select(selection)
         curses.wrapper(tui_run, core, 0.05)
     return 0
 
 
 def _do_dump(args) -> int:
     if args.input:
-        backend = ReplayScraper(args.input, honor_timing=False)
+        target = Target(args.elf_file, recording=args.input, pacing=False)
     else:
-        backend = _build_live_backend(args)
+        target = _probe(args)
 
     frame = dump_single_frame(
-        backend,
-        args.elf_file,
+        target,
         period=args.period,
         frame=args.frame,
         selection=_selection(args),

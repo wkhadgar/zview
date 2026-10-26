@@ -507,10 +507,6 @@ class ZView:
         """
         self.report("Initializing...")
 
-        try:
-            self.scraper.discover()
-        except RuntimeError as e:
-            self.report(f"Unable to update available threads [{e}]")
         for notice in self.scraper.unmatched(self.selection):
             self.report(notice)
 
