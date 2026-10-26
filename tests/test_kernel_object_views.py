@@ -6,7 +6,7 @@
 
 import curses
 from dataclasses import replace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -27,6 +27,7 @@ from zview.frontend.tui.views.msgq_detail import MsgqDetailView
 from zview.frontend.tui.views.mutex_detail import MutexDetailView
 from zview.frontend.tui.views.semaphore_detail import SemaphoreDetailView
 from zview.frontend.tui.views.workq_detail import WorkqDetailView
+from zview.frontend.zview_tui import ZView
 from zview.kinds import BY_KEY
 from zview.selection import Selection
 
@@ -50,8 +51,8 @@ def distinct_theme() -> ZViewTUIAttributes:
 
 
 @pytest.fixture
-def controller() -> MagicMock:
-    c = MagicMock()
+def controller(app: ZView) -> ZView:
+    c = app
     # The ELF answers for a site; these objects come from nowhere on disk.
     c.scraper.decl_site.return_value = None
     c.scraper.function_site.return_value = None
@@ -61,7 +62,7 @@ def controller() -> MagicMock:
     c.scraper.has_mem_slabs = True
     c.waiters_unknown = False
     c.status_message = "Running"
-    c.frames = FrameHistory()
+    c.core.frames = FrameHistory()
     _put(
         c,
         semaphores=[
@@ -112,7 +113,7 @@ def _put(controller, **groups) -> None:
 
 def _read_only(view: KernelObjectListView, kind) -> None:
     """Read only ``kind``'s group, as a line such as ``semaphores:*`` leaves it."""
-    view.controller.selection = Selection(groups=frozenset({kind.key}))
+    view.controller.core.selection = Selection(groups=frozenset({kind.key}))
 
 
 def test_rows_include_every_type(controller, theme):
@@ -371,10 +372,10 @@ def test_empty_message_tells_an_empty_kind_from_groups_turned_off(controller, th
     view = KernelObjectListView(controller, theme)
     _put(controller, semaphores=[], mutexes=[], msgqs=[], mem_slabs=[])
 
-    controller.has_kernel_objects.return_value = True
+    controller.scraper.available = {"threads": True, "semaphores": True}
     assert "No ALL objects." in view._empty_message("ALL")
 
-    controller.has_kernel_objects.return_value = False
+    controller.scraper.available = {"threads": True, "semaphores": False}
     assert "/ edits the patterns" in view._empty_message("ALL")
 
 
@@ -760,7 +761,7 @@ def test_detail_layout_holds_as_the_wait_queue_grows(controller, theme):
 
     rows_by_size = []
     for size in (0, 1, 5):
-        controller.frames = FrameHistory()
+        controller.core.frames = FrameHistory()
         for state in (MutexState.CONTENDED, MutexState.FREE):
             _put(controller, mutexes=[_mutex_in(state)])
         _put(controller, mutexes=[_lock_with(tuple(f"waiter_{i}" for i in range(size)))])
@@ -778,7 +779,7 @@ def test_contention_strip_colors_contended_frames(controller, distinct_theme):
         curses.ACS_S3 = ord("-")
 
     controller.detailing = ("mutexes", 0x3000)
-    controller.frames = FrameHistory()
+    controller.core.frames = FrameHistory()
     for state in (
         MutexState.FREE,
         MutexState.FREE,

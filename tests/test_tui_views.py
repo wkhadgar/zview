@@ -13,6 +13,8 @@ from zview.frontend.tui.views.fatal_error import FatalErrorView
 from zview.frontend.tui.views.heap_detail import HeapDetailView
 from zview.frontend.tui.views.thread_detail import ThreadDetailView
 from zview.frontend.tui.views.thread_list import ThreadListView
+from zview.frontend.zview_tui import ZView
+from zview.selection import Selection
 
 
 @pytest.fixture
@@ -21,11 +23,10 @@ def theme() -> ZViewTUIAttributes:
 
 
 @pytest.fixture
-def controller() -> MagicMock:
-    c = MagicMock()
-    c.scraper.has_heaps = True
-    c.core.usage_window = 1
-    return c
+def controller(app: ZView) -> ZView:
+    app.scraper.has_heaps = True
+    app.scraper.available = {"threads": True, "heaps": True}
+    return app
 
 
 def test_thread_list_footer_truncates_at_max_with_ellipsis(controller, theme):
@@ -208,13 +209,13 @@ def test_thread_list_handle_input_invert_flips_order(controller, theme):
 
 def test_thread_list_handle_input_enter_with_no_threads_stays_put(controller, theme):
     """ENTER on an empty list must not crash or transition."""
-    controller.frames = _frames(threads=[])
+    controller.core.frames = _frames(threads=[])
     view = ThreadListView(controller, theme)
     assert view.handle_input(SpecialCode.NEWLINE) is None
 
 
 def test_thread_list_handle_input_enter_selects_and_transitions(controller, theme):
-    controller.frames = _frames(threads=[_make_thread("main"), _make_thread("idle")])
+    controller.core.frames = _frames(threads=[_make_thread("main"), _make_thread("idle")])
     view = ThreadListView(controller, theme)
     view.cursor = 1
     state = view.handle_input(SpecialCode.NEWLINE)
@@ -315,9 +316,9 @@ def test_thread_detail_history_never_exceeds_the_graph_columns(controller, theme
     thread = ThreadInfo(
         address=0x1000, stack_start=0x2000, stack_size=512, name="worker", runtime=runtime
     )
-    controller.frames = FrameHistory()
+    controller.core.frames = FrameHistory()
     for _ in range(80):
-        controller.frames.add(Frame({"threads": [thread]}))
+        controller.core.frames.add(Frame({"threads": [thread]}))
     controller.detailing_thread = "worker"
     controller.min_dimensions = (14, 85)
 
@@ -340,7 +341,7 @@ def test_thread_detail_graphs_take_one_sample_per_frame(controller, theme):
 
     runtime = ThreadRuntime(10.0, 5.0, True, 64, 25.0)
     thread = ThreadInfo(0x1000, 0x2000, 512, "worker", runtime)
-    controller.frames = _frames(threads=[thread])
+    controller.core.frames = _frames(threads=[thread])
     controller.detailing_thread = "worker"
     controller.min_dimensions = (14, 85)
     view = ThreadDetailView(controller, theme)
@@ -381,7 +382,7 @@ def _unmeasured_thread() -> ThreadInfo:
 
 def test_an_unmeasured_thread_row_draws_dashes(controller, theme):
     """The row and the all-threads sum show no number the build did not measure."""
-    controller.frames = _frames(threads=[_unmeasured_thread(), _make_thread("idle")])
+    controller.core.frames = _frames(threads=[_unmeasured_thread(), _make_thread("idle")])
     controller.min_dimensions = (14, 85)
     win = _TextWin()
 
@@ -395,7 +396,7 @@ def test_a_build_without_stack_info_draws_no_stack_size(controller, theme):
     from dataclasses import replace
 
     unsized = replace(_unmeasured_thread(), stack_start=None, stack_size=None)
-    controller.frames = _frames(threads=[unsized])
+    controller.core.frames = _frames(threads=[unsized])
     controller.min_dimensions = (14, 85)
     win = _TextWin()
 
@@ -407,9 +408,8 @@ def test_a_build_without_stack_info_draws_no_stack_size(controller, theme):
 
 def test_the_bottom_bar_names_the_patterns_and_the_rows_muted_in_its_view(controller, theme):
     """A muted semaphore narrows nothing in the thread list."""
-    from zview.selection import Selection
 
-    controller.selection = Selection(
+    controller.core.selection = Selection(
         exclude=((None, "main"),),
         muted=frozenset({("threads", "logging"), ("semaphores", "gate")}),
     )
@@ -419,11 +419,11 @@ def test_the_bottom_bar_names_the_patterns_and_the_rows_muted_in_its_view(contro
         " Threads: 1-2 of 2 | Patterns: *, !main | 1 muted "
     )
     assert view._bar_count("Threads: 1-2 of 2", 30) == " Threads: 1-2 of 2 | Pattern… "
-    controller.selection = Selection()
+    controller.core.selection = Selection()
     assert view._bar_count("Threads: 1-2 of 2", 80) == " Threads: 1-2 of 2 "
 
     controller.scraper.available = {"threads": True, "semaphores": True}
-    controller.selection = Selection(groups=frozenset())
+    controller.core.selection = Selection(groups=frozenset())
     assert view._bar_count("Threads: 0-0 of 0", 80) == " Threads: 0-0 of 0 | Off: threads "
 
 
@@ -431,19 +431,21 @@ def test_the_bottom_bar_names_the_polls_the_cpu_shares_are_summed_over(controlle
     """One poll alone is the default, and says nothing."""
     from zview.selection import Selection
 
-    controller.selection = Selection()
+    controller.core.selection = Selection()
     controller.scraper.available = {}
+    controller.scraper.parts = {"usage_snapshot"}
+    threads = controller.scraper.groups["threads"]
+    threads.usage_window = 1
     view = ThreadListView(controller, theme)
     assert view._bar_count("Threads: 1-2 of 2", 80) == " Threads: 1-2 of 2 "
 
-    controller.core.usage_window = 4
+    threads.usage_window = 4
     assert view._bar_count("Threads: 1-2 of 2", 80) == " Threads: 1-2 of 2 | CPU over 4 polls "
 
 
 def test_the_all_threads_row_sums_only_the_threads_read(controller, theme):
     """A muted thread's last load would add a stale number to the total."""
     from zview.backend.base import ThreadRuntime
-    from zview.selection import Selection
 
     def thread(name: str, address: int, load: float) -> ThreadInfo:
         runtime = ThreadRuntime(
@@ -455,10 +457,10 @@ def test_the_all_threads_row_sums_only_the_threads_read(controller, theme):
         )
         return ThreadInfo(address, 0x2000, 512, name, runtime)
 
-    controller.frames = _frames(
+    controller.core.frames = _frames(
         threads=[thread("main", 0x1000, 30.0), thread("worker", 0x2000, 70.0)]
     )
-    controller.selection = Selection(muted=frozenset({("threads", "worker")}))
+    controller.core.selection = Selection(muted=frozenset({("threads", "worker")}))
     controller.min_dimensions = (14, 85)
     win = _TextWin()
 
@@ -477,7 +479,7 @@ def test_unmeasured_values_sort_with_the_unpolled_threads(controller, theme):
 
 def test_the_detail_view_keeps_no_history_without_runtime_stats(controller, theme):
     """Plotting a 0 would draw the thread idle."""
-    controller.frames = _frames(threads=[_unmeasured_thread()])
+    controller.core.frames = _frames(threads=[_unmeasured_thread()])
     controller.detailing_thread = "worker"
     controller.min_dimensions = (14, 85)
     view = ThreadDetailView(controller, theme)
