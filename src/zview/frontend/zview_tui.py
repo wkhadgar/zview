@@ -173,10 +173,8 @@ class ZView:
             ),
         }
 
-        # The opening view is the thread list. A replay keeps polling whatever
-        # its recording holds.
-        if self.scraper.is_live:
-            self.scraper.view = self.views[self.state].reads()
+        # The opening view is the thread list.
+        self.core.view(self.views[self.state].reads())
 
     def _init_curses(self) -> ZViewTUIAttributes:
         """
@@ -443,7 +441,7 @@ class ZView:
         # from the full frame on its own.
         if self.scraper.is_live:
             self.views[self.state].closed()
-            self.scraper.view = view.reads()
+            self.core.view(view.reads())
             view.opened()
         self.purge_queue()
 

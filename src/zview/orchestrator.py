@@ -21,7 +21,7 @@ from zview.selection import Selection
 
 class ZScraper:
     # What the session reads, and what the view on screen needs: a frame reads
-    # what both allow. The TUI sets ``view`` on a live target only, dump and
+    # what both allow. The core sets ``view`` on a live target only, dump and
     # record leave it reading everything.
     selection: Selection = Selection()
     view: Selection = Selection()

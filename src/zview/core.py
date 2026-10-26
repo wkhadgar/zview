@@ -128,6 +128,14 @@ class Core:
             if self._poller is poller:
                 self._poller = None
 
+    def view(self, reads: Selection) -> None:
+        """
+        Read from a live target only what the frontend's open view needs. A
+        replay keeps reading all its recording holds.
+        """
+        if self.scraper.is_live:
+            self.scraper.view = reads
+
     def _read(self) -> bool:
         """Read one frame and hand it out. False once the poll must end."""
         try:
