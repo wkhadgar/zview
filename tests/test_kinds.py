@@ -35,3 +35,17 @@ def test_a_thread_reads_at_a_glance_from_its_measured_share():
     assert threads.state(thread(12.5, True)) == State(12.5, "running", Level.BUSY)
     assert threads.state(thread(0.0, False)) == State(0.0, "waiting", Level.QUIET)
     assert threads.state(thread(None, False)) is None
+
+
+def test_a_row_in_json_keeps_every_field_beside_its_line_and_glance():
+    """A thread's scheduler ``state`` field must survive its glance."""
+    runtime = ThreadRuntime(40.0, 25.0, True, 64, 12.5)
+    info = ThreadInfo(0x1000, 0, 512, "main", runtime, state=4)
+
+    row = BY_KEY["threads"].to_json(info)
+
+    assert row["state"] == 4
+    assert row["runtime"]["cpu"] == 40.0
+    assert row["line"] == BY_KEY["threads"].dump(info)
+    assert row["glance"] == {"fill": 25.0, "text": "running", "level": "busy"}
+    assert "glance" not in BY_KEY["threads"].to_json(ThreadInfo(0x1000, 0, 512, "main", None))

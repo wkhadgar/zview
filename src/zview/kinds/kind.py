@@ -4,6 +4,7 @@
 
 """What each group's infos mean to whoever shows them, declared once per group."""
 
+import dataclasses
 import enum
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -72,6 +73,21 @@ class Kind(ABC):
 
     def listed(self, info) -> bool:
         return True
+
+    def to_json(self, info) -> dict:
+        """
+        The info's fields, then its dump line as ``line`` and its state, where
+        it has one, as ``glance``: a thread already has a ``state`` field.
+        """
+        row = dataclasses.asdict(info)
+        row["line"] = self.dump(info)
+        if (state := self.state(info)) is not None:
+            row["glance"] = {
+                "fill": state.fill,
+                "text": state.text,
+                "level": state.level.name.lower(),
+            }
+        return row
 
     def in_use(self, info) -> bool:
         """Held or working, with or without threads queued on it."""

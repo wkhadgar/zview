@@ -4,7 +4,6 @@
 
 """Headless recording, replay, and single-frame helpers used by the CLI commands."""
 
-import dataclasses
 import queue
 import sys
 import time
@@ -14,19 +13,19 @@ from zview.backend.image import verify_target_image
 from zview.backend.recording import RecordingScraper
 from zview.core import Core
 from zview.frames import Fatal, Frame, Notice, ReplayEnd
-from zview.kernel.groups import GROUPS
+from zview.kinds import KINDS
 from zview.orchestrator import ZScraper
 from zview.selection import Selection
 from zview.target import Target
 
 
 def serialize_frame(frame: dict) -> dict:
-    """Convert a polling frame's dataclasses into a JSON-serializable dict."""
-    out: dict = {}
-    for key in (group.key for group in GROUPS):
-        if key in frame:
-            out[key] = [dataclasses.asdict(entry) for entry in frame[key]]
-    return out
+    """A polling frame's rows, each as its kind writes it to JSON."""
+    return {
+        kind.key: [kind.to_json(info) for info in frame[kind.key]]
+        for kind in KINDS
+        if kind.key in frame
+    }
 
 
 def dump_single_frame(
