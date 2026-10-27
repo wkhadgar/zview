@@ -23,11 +23,18 @@ WORK_FIELDS: FieldTable = {
     "work_flags": ((("k_work", "flags"),),),
 }
 
-# thread_id, not the embedded thread: k_work_q.thread is deprecated.
 WORKQ_FIELDS: FieldTable = {
-    "workq_thread_id": ((("k_work_q", "thread_id"),),),
     "workq_pending": ((("k_work_q", "pending"),),),
     "workq_flags": ((("k_work_q", "flags"),),),
+}
+
+# The queue's own thread: thread_id from v4.2.0, which deprecates the k_thread
+# embedded in the queue that older releases name it by.
+WORKQ_THREAD_ID_FIELDS: FieldTable = {
+    "workq_thread_id": ((("k_work_q", "thread_id"),),),
+}
+WORKQ_THREAD_FIELDS: FieldTable = {
+    "workq_thread": ((("k_work_q", "thread"),),),
 }
 
 # Threads blocked in k_work_queue_drain. notifyq holds the queue's own thread.
@@ -79,7 +86,7 @@ class Workqs(Group):
     struct = "k_work_q"
     # A queue's pending items are k_work nodes, so both must resolve.
     required = (WORKQ_FIELDS, WORK_FIELDS)
-    optional = (WORKQ_OPTIONAL_FIELDS,)
+    optional = (WORKQ_OPTIONAL_FIELDS, WORKQ_THREAD_ID_FIELDS, WORKQ_THREAD_FIELDS)
 
     def walk(
         self,
@@ -99,9 +106,8 @@ class Workqs(Group):
         """
         scraper, elf, layout = session.scraper, session.elf, session.layout
         walk_waiters, thread_names = session.walks_waiters, session.thread_names
-        offsets = [layout.workq_thread_id, layout.workq_pending, layout.workq_flags]
-        if layout.workq_drainq is not None:
-            offsets.append(layout.workq_drainq)
+        offsets = [layout.workq_pending, layout.workq_flags]
+        offsets += [o for o in (layout.workq_thread_id, layout.workq_drainq) if o is not None]
 
         base = min(offsets)
         span = (max(offsets) + 4 - base) // 4
@@ -133,13 +139,19 @@ class Workqs(Group):
                     thread_names,
                 )
 
+            thread = None
+            if layout.workq_thread_id is not None:
+                thread = word(words, layout.workq_thread_id)
+            elif layout.workq_thread is not None:
+                thread = address + layout.workq_thread
+
             workqs[label] = WorkqInfo(
                 name=label,
                 address=address,
                 flags=word(words, layout.workq_flags),
                 pending=pending,
                 pending_truncated=truncated,
-                thread_name=(thread_names or {}).get(word(words, layout.workq_thread_id)),
+                thread_name=(thread_names or {}).get(thread),
                 waiters=waiters,
             )
 
