@@ -14,6 +14,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import IO
 
+from zview import __version__
 from zview.backend.base import AbstractScraper, Read, ReplayError
 from zview.selection import Selection
 
@@ -27,8 +28,8 @@ SCHEMA_VERSION = "zview-recording/5"
 class RecordingScraper(AbstractScraper):
     """
     AbstractScraper wrapper that emits each call as one NDJSON line.
-    First line is a header ({schema, endianess, created_at, features,
-    selection}); ``read_bytes`` payloads are hex-encoded.
+    First line is a header ({schema, zview, endianess, created_at, features,
+    selection, source}); ``read_bytes`` payloads are hex-encoded.
     """
 
     def __init__(self, wrapped: AbstractScraper, out_path: Path | str):
@@ -40,6 +41,7 @@ class RecordingScraper(AbstractScraper):
         self.endianess = wrapped.endianess
         self._features: tuple[str, ...] = ()
         self._selection = Selection()
+        self._source: dict = {}
         # A recording of a replay keeps the read shape of the one it replays.
         self.is_live = wrapped.is_live
 
@@ -79,6 +81,20 @@ class RecordingScraper(AbstractScraper):
 
         self._selection = selection
 
+    def declare_source(self, source: dict) -> None:
+        """
+        Declare what this session reads through and how often: the runner, its
+        target and clock, and the period.
+
+        Must be called before ``connect``, which writes the header; a later
+        call is ignored with a warning.
+        """
+        if self._fp is not None:
+            logger.warning("Recording header already written; source declaration ignored.")
+            return
+
+        self._source = dict(source)
+
     def _open(self) -> None:
         """Open the gzip stream and write the header. Idempotent."""
         if self._fp is not None:
@@ -90,10 +106,12 @@ class RecordingScraper(AbstractScraper):
         )
         header = {
             "schema": SCHEMA_VERSION,
+            "zview": __version__,
             "endianess": self.endianess,
             "created_at": time.time(),
             "features": list(self._features),
             "selection": self._selection.to_header(),
+            "source": self._source,
         }
         self._fp.write(json.dumps(header) + "\n")
 

@@ -102,3 +102,13 @@ def test_independent_threads_track_separate_caches():
     assert scraper.calculate_dynamic_watermark(0x1000, 16, thread_id=1) == 12
     assert scraper.calculate_dynamic_watermark(0x2000, 16, thread_id=2) == 16
     assert scraper.watermark_cache == {1: 12, 2: 16}
+
+
+def test_a_sentinel_word_is_used_and_the_scan_starts_above_it():
+    """Zephyr writes 0xF0F0F0F0 at the stack's low end, which would read as all used."""
+    scraper = WatermarkScraper([[FILL] * 7, [FILL, FILL, FILL, FILL, USED]])
+
+    assert scraper.calculate_dynamic_watermark(0x1000, 32, thread_id=1, reserved_words=1) == 4
+    # The cached scan still covers every word it left as fill: 16 of 32 bytes unused.
+    assert scraper.calculate_dynamic_watermark(0x1000, 32, thread_id=1, reserved_words=1) == 16
+    assert scraper.calls == [(0x1004, 7), (0x1004, 7)]

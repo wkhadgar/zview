@@ -244,8 +244,12 @@ class ZScraper:
         data_queue: queue.Queue,
         stop_event: threading.Event,
         inspection_period: float,
+        frames: int | None = None,
     ):
-        """Start the polling daemon thread. No-op if one is already running."""
+        """
+        Start the polling daemon thread, which ends after ``frames`` frames when
+        given. No-op if one is already running.
+        """
         if self._polling_thread is not None:
             data_queue.put(Notice("Already started..."))
             return
@@ -253,7 +257,7 @@ class ZScraper:
         self.inspection_period = inspection_period
         self._polling_thread = threading.Thread(
             target=self._poll_thread_worker,
-            args=(data_queue, stop_event, inspection_period),
+            args=(data_queue, stop_event, inspection_period, frames),
             daemon=True,
         )
         self._stop_event = stop_event
@@ -264,10 +268,9 @@ class ZScraper:
             return
 
         self._stop_event.set()
-        if self._polling_thread.is_alive():
-            self._polling_thread.join(timeout=1.0)
-            if self._polling_thread.is_alive():
-                logger.warning("Polling thread did not terminate gracefully.")
+        # The poll stops after the frame in flight, which a slow probe takes
+        # over a second to read. The probe stays open until then.
+        self._polling_thread.join()
 
         self._polling_thread = None
 
@@ -278,6 +281,7 @@ class ZScraper:
         data_queue: queue.Queue,
         stop_event: threading.Event,
         inspection_period: float,
+        frames: int | None = None,
     ):
         """Polling thread entry point. Tolerates ``_MAX_TOLERATED_ERRORS`` transient faults."""
         try:
@@ -288,7 +292,8 @@ class ZScraper:
             return
 
         consecutive_errors = 0
-        while not stop_event.is_set():
+        polled = 0
+        while not stop_event.is_set() and (frames is None or polled < frames):
             cycle_start = time.perf_counter()
             in_batch = False
             try:
@@ -296,6 +301,7 @@ class ZScraper:
                 in_batch = True
 
                 data_queue.put(Frame(self._poll_groups()), block=False)
+                polled += 1
 
                 consecutive_errors = 0
             except queue.Full:

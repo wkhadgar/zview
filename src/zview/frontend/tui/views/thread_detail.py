@@ -63,7 +63,7 @@ class ThreadDetailView(BaseStateView):
             ThreadListView.COLLUM_WIDTHS[3],
             ThreadListView.COLLUM_WIDTHS[4],
         )
-        self._current_thread_name: str | None = None
+        # The graphs' series, one sample per frame that read the thread.
         self._usages: dict[str, list[int]] = {"cpu": [], "load": []}
 
     def can_open(self) -> bool:
@@ -133,20 +133,10 @@ class ThreadDetailView(BaseStateView):
             stdscr.refresh()
             return
 
-        # Reset history if switching to a new thread
-        if self._current_thread_name != thread.name:
-            self._current_thread_name = thread.name
-            self._usages = {"cpu": [], "load": []}
-
         self._tui_thread_info.draw(stdscr, 2, 0, thread)
 
         info_top = 3
         self._draw_info_boxes(stdscr, info_top, width, thread)
-
-        # Both shares are unknown together, on a build without runtime stats.
-        if thread.runtime.cpu is not None:
-            self._usages["cpu"].append(int(thread.runtime.cpu_normalized))
-            self._usages["load"].append(int(thread.runtime.cpu))
 
         graph_top = info_top + self._INFO_BOX_HEIGHT
         graph_height = max(
@@ -157,11 +147,18 @@ class ThreadDetailView(BaseStateView):
         # Trim to the column count in one step. Dropping a single sample per
         # frame would leave more points than columns for many frames after a
         # resize to a narrower terminal, and the graph averages a surplus into
-        # buckets whose boundaries move, reshaping parts already drawn.
+        # buckets whose boundaries move, reshaping parts already drawn. Both
+        # shares are unknown together, on a build without runtime stats.
         budget = max(1, graph_width - 2)
-        if len(self._usages["load"]) > budget:
-            del self._usages["load"][:-budget]
-            del self._usages["cpu"][:-budget]
+        measured = [
+            t.runtime
+            for t in self.controller.frames.of("threads", thread.address)
+            if t.runtime is not None and t.runtime.cpu is not None
+        ][-budget:]
+        self._usages = {
+            "cpu": [int(r.cpu_normalized) for r in measured],
+            "load": [int(r.cpu) for r in measured],
+        }
 
         self._cpu_graph.draw(
             stdscr,

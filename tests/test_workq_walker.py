@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+
 from zview.backend.base import WorkqInfo
 from zview.kernel.layout import KernelLayout
 from zview.kernel.session import Session
@@ -195,6 +197,19 @@ def test_the_animating_thread_is_named():
     )["q"]
 
     assert queue.thread_name == "bench_workq_thread"
+
+
+def test_a_release_before_thread_id_names_the_thread_embedded_in_the_queue():
+    """k_work_q.thread_id arrived in v4.2.0, and the thread itself is still not read."""
+    scraper = FakeScraper(_queue_words(head=0, flags=STARTED))
+    layout = dataclasses.replace(LAYOUT, workq_thread_id=None, workq_thread=0)
+
+    queue = Workqs().walk(
+        _session(scraper, FakeElf(), layout, {QUEUE: "sysworkq"}), {"q": [QUEUE]}
+    )["q"]
+
+    assert queue.thread_name == "sysworkq"
+    assert min(at for at, _ in scraper.reads) == QUEUE + 212
 
 
 def test_draining_threads_are_reported_as_waiters():

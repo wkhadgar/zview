@@ -35,6 +35,7 @@ FieldTable = dict[str, tuple[MemberPath, ...]]
 CONFIG_WAITQ_SIMPLE = "CONFIG_WAITQ_SIMPLE"
 CONFIG_WAITQ_SCALABLE = "CONFIG_WAITQ_SCALABLE"
 CONFIG_INIT_STACKS = "CONFIG_INIT_STACKS"
+CONFIG_STACK_SENTINEL = "CONFIG_STACK_SENTINEL"
 
 WaitQFlavor = Literal["simple", "scalable", "unknown"]
 
@@ -59,6 +60,24 @@ def resolve_offset(elf: ElfInspector, candidates: Sequence[MemberPath]) -> int |
                 break
         else:
             return offset
+
+    return None
+
+
+def resolve_size(elf: ElfInspector, candidates: Sequence[MemberPath]) -> int | None:
+    """
+    Return the byte size of the member the first resolving candidate path ends at.
+
+    Returns ``None`` when no candidate resolves, or its member has no known size.
+    """
+    for path in candidates:
+        if resolve_offset(elf, (path,)) is None:
+            continue
+        struct_name, member = path[-1]
+        try:
+            return elf.get_struct_member_size(struct_name, member)
+        except LookupError:
+            return None
 
     return None
 

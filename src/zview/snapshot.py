@@ -96,13 +96,15 @@ def record_session(
     frames: int | None = None,
     period: float = 0.1,
     selection: Selection | None = None,
+    source: dict | None = None,
 ) -> int:
     """
     Record a polling session to ``out_path``. Requires one of ``duration``
     (seconds) or ``frames`` (count). Captures fragmentation maps for every
     heap so replay can navigate to any heap detail without drift. A live
     target reads only the rows ``selection`` reads, and the header says so;
-    a replay keeps its recording's. Returns frame count.
+    a replay keeps its recording's. The header holds ``source``, the runner,
+    target and clock read through, beside ``period``. Returns frame count.
     """
     if duration is None and frames is None:
         raise ValueError("record_session requires either duration or frames bound")
@@ -122,6 +124,7 @@ def record_session(
         scraper.selection = selection
     recorder.declare_features(scraper.active_features())
     recorder.declare_selection(scraper.selection)
+    recorder.declare_source({**(source or {}), "period": period})
 
     with recorder:
         scraper.discover()
@@ -131,7 +134,8 @@ def record_session(
 
         data_queue: queue.Queue = queue.Queue()
         stop = threading.Event()
-        scraper.start_polling_thread(data_queue, stop, period)
+        # The poller stops at the bound itself: it runs a frame ahead of this loop.
+        scraper.start_polling_thread(data_queue, stop, period, frames)
 
         captured = 0
         start = time.monotonic()
@@ -142,10 +146,15 @@ def record_session(
                 except queue.Empty:
                     pass
                 else:
-                    if isinstance(frame, Frame):
-                        captured += 1
-                        if frames is not None and captured >= frames:
+                    match frame:
+                        case Fatal(text):
+                            raise RuntimeError(text)
+                        case ReplayEnd():
                             break
+                        case Frame():
+                            captured += 1
+                            if frames is not None and captured >= frames:
+                                break
                 if duration is not None and (time.monotonic() - start) >= duration:
                     break
         finally:

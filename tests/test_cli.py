@@ -253,6 +253,26 @@ def test_dump_rejects_zero_or_negative_frame(monkeypatch, capsys):
     assert "--frame" in err
 
 
+@pytest.mark.parametrize(
+    ("flags", "named"),
+    [(["--period", "-1"], "--period"), (["--frequency", "4M"], "--frequency")],
+)
+def test_dump_from_a_recording_refuses_what_it_cannot_honor(monkeypatch, capsys, flags, named):
+    """A replay has no runner whose clock to set."""
+    argv = ["dump", "-e", str(_ELF), "-i", str(_FIXTURE), *flags]
+    rc, _, err = _invoke(monkeypatch, capsys, argv)
+    assert rc == 2
+    assert named in err
+
+
+def test_record_rejects_a_bound_of_no_frames(monkeypatch, capsys, tmp_path):
+    out = tmp_path / "none.ndjson.gz"
+    argv = ["record", "-e", str(_ELF), "-r", "gdb", "-t", "localhost:1234", "-o", str(out)]
+    rc, _, err = _invoke(monkeypatch, capsys, [*argv, "--frames", "0"])
+    assert rc == 2
+    assert "--frames" in err
+
+
 def test_dump_requires_input_or_runner_target(monkeypatch, capsys):
     rc, _, err = _invoke(monkeypatch, capsys, ["dump", "-e", str(_ELF)])
     assert rc == 2

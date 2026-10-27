@@ -64,6 +64,7 @@ class KernelLayout:
     mem_slab_max_used: int | None = None
 
     workq_thread_id: int | None = None
+    workq_thread: int | None = None
     workq_pending: int | None = None
     workq_flags: int | None = None
     workq_drainq: int | None = None

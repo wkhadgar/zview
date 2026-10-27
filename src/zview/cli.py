@@ -192,8 +192,11 @@ def register_commands(
     p_dump.add_argument(
         "--frame",
         type=int,
-        default=1,
-        help="Which polling frame to dump (1-indexed). Default: 1.",
+        default=2,
+        help=(
+            "Which polling frame to dump (1-indexed). Default: 2, the first with CPU shares, "
+            "as frame 1 has no earlier frame to count cycles from."
+        ),
     )
     p_dump.add_argument(
         "--json",
@@ -288,8 +291,15 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     if target_needed and args.runner_target is None:
         parser.error(f"{args.cmd}: runner '{args.runner}' requires --runner-target.")
 
-    if getattr(args, "frequency", None) is not None and args.runner not in (None, *CLOCKED_RUNNERS):
+    # A replay has no runner, and no clock either.
+    if getattr(args, "frequency", None) is not None and args.runner not in CLOCKED_RUNNERS:
         parser.error(f"{args.cmd}: --frequency sets the pyocd and jlink runners' clock only.")
+
+    if getattr(args, "period", 0) < 0:
+        parser.error(f"{args.cmd}: --period must be >= 0.")
+
+    if getattr(args, "frames", None) is not None and args.frames < 1:
+        parser.error(f"{args.cmd}: --frames must be >= 1.")
 
     if args.cmd == "dump":
         if args.input and (args.runner or args.runner_target):
@@ -374,6 +384,11 @@ def _do_record(args) -> int:
         frames=args.frames,
         period=args.period,
         selection=_selection(args),
+        source={
+            "runner": args.runner,
+            "runner_target": args.runner_target,
+            "frequency": args.frequency,
+        },
     )
     print(f"Recorded {captured} frames to {args.output}")
     return 0

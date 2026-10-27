@@ -11,6 +11,7 @@ import pytest
 
 from zview.backend.base import (
     AbstractScraper,
+    ProbeConnectFailure,
     ProbeReadError,
     ProbeReadMalformed,
     ProbeReadTimeout,
@@ -273,6 +274,44 @@ def test_single_strike_emits_transient_error(elf_path):
     assert "read fail" in msg.text
 
 
+def test_the_poller_ends_after_its_frames(elf_path):
+    """A recording bounded in frames gets no frame the poller would run ahead to."""
+    scraper, mock = _make_strike_scraper(elf_path)
+    mock.calculate_dynamic_watermark.return_value = 100
+
+    q: queue.Queue = queue.Queue()
+    with patch("time.sleep"):
+        scraper._poll_thread_worker(q, threading.Event(), 0, frames=3)
+
+    assert [type(q.get_nowait()) for _ in range(q.qsize())] == [Frame] * 3
+    assert mock.begin_batch.call_count == 3
+
+
+def test_finishing_the_poll_waits_for_the_frame_in_flight(elf_path):
+    """A pyOCD frame through a J-Link OB takes 1.4 s, and the probe closes after it."""
+    scraper, mock = _make_strike_scraper(elf_path)
+    in_frame, release = threading.Event(), threading.Event()
+
+    def slow_scan(*args, **kwargs):
+        in_frame.set()
+        release.wait()
+        return 100
+
+    mock.calculate_dynamic_watermark.side_effect = slow_scan
+    scraper.start_polling_thread(queue.Queue(), threading.Event(), 0)
+    assert in_frame.wait(timeout=1)
+
+    finisher = threading.Thread(target=scraper.finish_polling_thread)
+    finisher.start()
+    finisher.join(timeout=1.2)
+    waited = finisher.is_alive()
+    release.set()
+    finisher.join(timeout=1)
+
+    assert waited
+    assert not finisher.is_alive()
+
+
 def test_three_strikes_emit_fatal_and_break(elf_path):
     """Three consecutive failures emit ``fatal_error`` and terminate the loop."""
     scraper, mock = _make_strike_scraper(elf_path)
@@ -452,7 +491,7 @@ def test_gdb_failed_connect_leaves_no_socket_to_resume_on():
 
     with (
         patch("zview.backend.gdb.socket.socket", return_value=refused),
-        pytest.raises(ConnectionError, match="Is QEMU running"),
+        pytest.raises(ProbeConnectFailure, match="Is QEMU running"),
     ):
         scraper.connect()
 
@@ -460,6 +499,55 @@ def test_gdb_failed_connect_leaves_no_socket_to_resume_on():
 
     assert scraper.sock is None
     refused.sendall.assert_not_called()
+
+
+def _gdb_over(replies: list[bytes]) -> tuple[GDBScraper, MagicMock]:
+    """A ``GDBScraper`` connected over a socket stand-in that answers ``replies``, in order."""
+    sock = MagicMock()
+    # An empty first chunk ends the banner drain.
+    sock.recv.side_effect = [b"", *replies]
+    scraper = GDBScraper("localhost:1234")
+    with patch("zview.backend.gdb.socket.socket", return_value=sock):
+        scraper.connect()
+    return scraper, sock
+
+
+def test_gdb_connect_reads_the_no_ack_reply():
+    """Left unread, the OK would answer the first read."""
+    scraper, _ = _gdb_over([b"+$OK#9a", b"$deadbeef#00"])
+
+    assert scraper.read_bytes(0x1000, 4) == b"\xde\xad\xbe\xef"
+
+
+def test_gdb_stub_without_no_ack_mode_has_its_replies_acked():
+    """QEMU answers QStartNoAckMode empty."""
+    scraper, sock = _gdb_over([b"+$#00", b"+$deadbeef#00"])
+
+    assert scraper.read_bytes(0x1000, 4) == b"\xde\xad\xbe\xef"
+    assert sock.sendall.call_args_list[-1].args == (b"+",)
+
+
+def test_gdb_connects_once():
+    """``record`` connects the backend to check the image, then the recorder connects it."""
+    scraper, _ = _gdb_over([b"+$OK#9a"])
+
+    with patch("zview.backend.gdb.socket.socket") as opened:
+        scraper.connect()
+
+    opened.assert_not_called()
+
+
+def test_gdb_interrupts_only_a_running_target():
+    """A stub ignores the interrupt byte unless a 'c' is pending, as it is not on attach."""
+    scraper, sock = _gdb_over([b"+$OK#9a", b"$T05#b9"])
+
+    scraper.begin_batch()
+    scraper.end_batch()
+    scraper.begin_batch()
+
+    sent = [c.args[0] for c in sock.sendall.call_args_list]
+    assert sent[-2:] == [b"$c#63", b"\x03"]
+    assert sent.count(b"\x03") == 1
 
 
 def test_reload_elf_rebuilds_features_and_keeps_tui_settings(elf_path):
@@ -645,6 +733,19 @@ def test_thread_metadata_bytes_come_in_one_read(elf_path):
 
     assert [r for r in reads if r[0] == "read8"] == [("read8", 0x2000 + 12, 5)]
     assert (meta["user_options"], meta["priority"], meta["state"]) == (0x7F, 0x7F, 0x7F)
+
+
+def test_user_options_is_read_at_its_width(elf_path):
+    """user_options is a uint16_t from v4.4.0, and K_SSE_REGS is its bit 15."""
+    scraper, _ = _meta_scraper(elf_path)
+    thread = ThreadInfo(address=0x2000, stack_start=0, stack_size=0, name="t", runtime=None)
+    with patch("zview.kernel.threads.walk_thread_list", return_value={"t": thread}):
+        scraper.discover()
+    scraper._m_scraper.read8 = lambda at, amount=1: [0x01, 0x80, 0xFF, 0x00, 0x02][:amount]
+
+    meta = scraper.groups["threads"]._read_meta(scraper._session(), thread)
+
+    assert (meta["user_options"], meta["priority"], meta["state"]) == (0x8001, -1, 0x02)
 
 
 def test_the_entry_pointer_is_read_once_per_thread(elf_path):

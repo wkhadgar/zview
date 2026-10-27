@@ -101,6 +101,9 @@ def test_active_features_lists_only_what_is_polled():
     assert s.active_features() == (
         "threads",
         "merged_thread_meta",
+        "distinct_names",
+        "thread_usage_alone",
+        "single_usage_pass",
         "heaps",
         "heap_waiters",
         "semaphores",
@@ -121,7 +124,27 @@ def test_a_recording_without_the_heap_wait_queue_reads_does_not_replay_them():
 
 
 def test_threads_are_always_a_feature():
-    assert _scraper().active_features() == ("threads", "merged_thread_meta")
+    assert _scraper().active_features() == (
+        "threads",
+        "merged_thread_meta",
+        "distinct_names",
+        "thread_usage_alone",
+        "single_usage_pass",
+    )
+
+
+def test_a_recording_from_before_reading_the_counters_alone_counts_no_usage():
+    """Without the kernel-wide counter, that zview read no usage, so its replay does not."""
+    from zview.kernel.session import Session
+    from zview.kernel.threads import Threads
+
+    def session(parts: frozenset[str], cpu_usage: int | None = None) -> Session:
+        layout = KernelLayout(thread_usage=48, cpu_usage=cpu_usage)
+        return Session(MagicMock(), MagicMock(), layout, "simple", {}, parts)
+
+    assert Threads._counts_usage(session(frozenset({"thread_usage_alone"})))
+    assert not Threads._counts_usage(session(frozenset()))
+    assert Threads._counts_usage(session(frozenset(), cpu_usage=16))
 
 
 def test_a_live_session_is_not_restricted():

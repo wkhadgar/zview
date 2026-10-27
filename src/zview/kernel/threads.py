@@ -9,7 +9,13 @@ from typing import Literal
 from zview.backend.base import AbstractScraper, ThreadInfo, ThreadRuntime
 from zview.backend.elf_inspector import ElfInspector
 from zview.backend.replay import ReplayMismatch
-from zview.kernel.compat import CONFIG_INIT_STACKS, FieldTable, has_kconfig
+from zview.kernel.compat import (
+    CONFIG_INIT_STACKS,
+    CONFIG_STACK_SENTINEL,
+    FieldTable,
+    has_kconfig,
+    resolve_size,
+)
 from zview.kernel.group import BrokenFrame, Group
 from zview.kernel.layout import KernelLayout
 from zview.kernel.object_names import label_instances
@@ -41,13 +47,17 @@ THREAD_NAME_FIELDS: FieldTable = {
     "thread_name": ((("k_thread", "name"),),),
 }
 
-# CONFIG_THREAD_RUNTIME_STATS. z_kernel.usage exists from v3.5.0; on v3.0 and
-# v3.3 this group does not resolve.
+# CONFIG_THREAD_RUNTIME_STATS. Each thread's cycle counter, from v3.3.0.
 USAGE_FIELDS: FieldTable = {
-    "cpu_usage": ((("z_kernel", "usage"),),),
     "thread_usage": (
         (("k_thread", "base"), ("_thread_base", "usage"), ("k_cycle_stats", "total")),
     ),
+}
+
+# CONFIG_SCHED_THREAD_USAGE_ALL. The kernel-wide counter, from v3.5.0, which a
+# recording from before the usage snapshot read first.
+KERNEL_USAGE_FIELDS: FieldTable = {
+    "cpu_usage": ((("z_kernel", "usage"),),),
 }
 
 # CONFIG_SCHED_THREAD_USAGE. Each CPU's switch stamp, rewritten whenever the
@@ -109,11 +119,17 @@ def walk_thread_list(
     endianess: Literal["little", "big"],
     has_names: bool,
     max_threads: int = 64,
+    *,
+    distinct: bool = True,
 ) -> dict[str, ThreadInfo]:
     """
     Walk the kernel thread linked list and return ``{name: ThreadInfo}``.
-    Wrapped in a single ``begin_batch``/``end_batch``. Raises ``RuntimeError``
-    when the head pointer cannot be read.
+    Wrapped in a single ``begin_batch``/``end_batch``. Raises ``RuntimeError``,
+    after the batch ends, when a read fails.
+
+    With ``distinct``, a thread with no name, or with one already taken, is
+    named after its address. Without it, the later thread replaces the
+    earlier, as a recording made before the ``distinct_names`` part reads.
     """
     try:
         if not scraper.is_connected:
@@ -137,12 +153,17 @@ def walk_thread_list(
         try:
             thread_struct_words = scraper.read32(thread_ptr, words_to_read)
         except Exception as e:
-            raise Exception(f"Error reading thread struct at 0x{thread_ptr:X}") from e
+            scraper.end_batch()
+            raise RuntimeError(f"Error reading thread struct at 0x{thread_ptr:X}") from e
 
         if has_names:
             thread_name = _name_at(thread_struct_words, layout.thread_name, endianess)
         else:
             thread_name = f"thread @ 0x{thread_ptr:X}"
+        if distinct:
+            thread_name = thread_name or f"thread @ 0x{thread_ptr:X}"
+            if thread_name in threads:
+                thread_name = f"{thread_name} @ 0x{thread_ptr:X}"
 
         threads[thread_name] = ThreadInfo(
             thread_ptr,
@@ -171,6 +192,7 @@ def walk_static_threads(
     Read the statically allocated ``k_thread`` objects, ``{path: addresses}``, and
     return the live ones as ``{name: ThreadInfo}``, for a build without the
     kernel's thread list. Wrapped in a single ``begin_batch``/``end_batch``.
+    Raises ``RuntimeError``, after the batch ends, when a read fails.
 
     An object still all zero was never created. A thread the build does not name
     is named after its object.
@@ -188,7 +210,8 @@ def walk_static_threads(
         try:
             words = scraper.read32(address, words_to_read)
         except Exception as e:
-            raise Exception(f"Error reading thread struct at 0x{address:X}") from e
+            scraper.end_batch()
+            raise RuntimeError(f"Error reading thread struct at 0x{address:X}") from e
 
         state = (
             0 if layout.thread_state is None else _byte_at(words, layout.thread_state, endianess)
@@ -221,6 +244,7 @@ class Threads(Group):
         THREAD_STACK_FIELDS,
         THREAD_NAME_FIELDS,
         USAGE_FIELDS,
+        KERNEL_USAGE_FIELDS,
         USAGE_STAMP_FIELDS,
         THREAD_PRIORITY_FIELDS,
         THREAD_STATE_FIELDS,
@@ -229,10 +253,21 @@ class Threads(Group):
         THREAD_QNODE_FIELDS,
     )
     # The metadata bytes in one read and the entry pointer once per thread,
-    # the stack scan skipped on a build that leaves its stacks unfilled, and
-    # every thread's usage counter read first, as of one instant. A recording
+    # the stack scan skipped on a build that leaves its stacks unfilled,
+    # every thread's usage counter read first, as of one instant, the scan
+    # started above the stack sentinel, threads that share a name kept apart,
+    # the threads' counters read on a build without the kernel-wide one, and
+    # those counters read in one pass however the stamps moved. A recording
     # taken before each holds those reads the way they were made then.
-    parts = ("merged_thread_meta", "unfilled_stacks", "usage_snapshot")
+    parts = (
+        "merged_thread_meta",
+        "unfilled_stacks",
+        "usage_snapshot",
+        "stack_sentinel",
+        "distinct_names",
+        "thread_usage_alone",
+        "single_usage_pass",
+    )
     max_threads = 64
 
     # The metadata bytes, by their offset in the layout.
@@ -252,6 +287,20 @@ class Threads(Group):
         self._symbols: dict[int, str | None] = {}
         self._cpu_usage_address = 0
         self._usage_stamps: tuple[int, ...] = ()
+        # The metadata members wider than a byte, and the byte order they are in.
+        self._meta_sizes: dict[str, int] = {}
+        self._byteorder: Literal["little", "big"] = "little"
+
+    @staticmethod
+    def _counts_usage(session: Session) -> bool:
+        """
+        The threads' cycle counters are read: the build has them and, unless
+        the session reads them alone, the kernel-wide counter beside them.
+        """
+        layout = session.layout
+        return layout.thread_usage is not None and (
+            layout.cpu_usage is not None or session.has_part("thread_usage_alone")
+        )
 
     def discover(self, session: Session) -> dict[str, list[int]]:
         """
@@ -266,8 +315,9 @@ class Threads(Group):
         cpus = max(1, elf.get_symbol_info("z_idle_threads", "size")[0] // thread_size)
         self.idle_addresses = tuple(idle + i * thread_size for i in range(cpus))
 
-        if layout.thread_usage is not None:
-            self._cpu_usage_address = kernel + layout.cpu_usage
+        if self._counts_usage(session):
+            if layout.cpu_usage is not None:
+                self._cpu_usage_address = kernel + layout.cpu_usage
             if layout.cpu_usage0 is not None:
                 cpu_size = elf.get_struct_size("_cpu")
                 self._usage_stamps = tuple(
@@ -276,6 +326,11 @@ class Threads(Group):
                 )
 
         endianess: Literal["little", "big"] = "little" if elf._little_endian else "big"
+        # user_options is a uint8_t through v4.3.0 and a uint16_t from v4.4.0.
+        options_size = resolve_size(elf, THREAD_OPTIONS_FIELDS["thread_user_options"])
+        self._meta_sizes = {"user_options": options_size or 1}
+        self._byteorder = endianess
+
         has_names = layout.thread_name is not None
         if layout.threads_head is not None:
             threads = walk_thread_list(
@@ -286,6 +341,7 @@ class Threads(Group):
                 endianess,
                 has_names,
                 self.max_threads,
+                distinct=session.has_part("distinct_names"),
             )
         else:
             # Without the kernel's list, the threads are the ones allocated statically.
@@ -306,12 +362,14 @@ class Threads(Group):
 
     def live_parts(self, session: Session) -> frozenset[str]:
         """
-        Every part, but the scan skip on a build that fills its stacks and the
-        usage snapshot on one that counts no usage.
+        Every part, but the scan skip on a build that fills its stacks, the
+        usage snapshot on one that counts no usage, and the sentinel on one
+        that places none.
         """
         off = {
             "unfilled_stacks": has_kconfig(session.elf, CONFIG_INIT_STACKS),
             "usage_snapshot": session.layout.thread_usage is None,
+            "stack_sentinel": not has_kconfig(session.elf, CONFIG_STACK_SENTINEL),
         }
         return frozenset(part for part in self.parts if not off.get(part, False))
 
@@ -322,7 +380,7 @@ class Threads(Group):
             for enabled, notice in (
                 (layout.thread_name is not None, "Warning: no thread names (CONFIG_THREAD_NAME=n)"),
                 (
-                    layout.thread_usage is not None,
+                    self._counts_usage(session),
                     "Warning: no cpu stats (CONFIG_THREAD_RUNTIME_STATS=n)",
                 ),
                 (
@@ -353,12 +411,13 @@ class Threads(Group):
         thread's cycles and load% of every busy thread's: read as one snapshot
         or not, the shares add up to 100% and none passes it.
         """
-        deltas = self._usage_deltas(session)
+        deltas, coherent = self._usage_deltas(session)
         polled = [
             self._poll(session, self.infos[address], deltas)
             for _, address in label_instances(addresses)
         ]
-        return {thread.name: thread for thread in self._finalize(session, polled, deltas)}
+        finalized = self._finalize(session, polled, deltas, coherent)
+        return {thread.name: thread for thread in finalized}
 
     def _usage_delta(self, address: int, cycles: int) -> int:
         """A thread's cycles since the last frame, 0 on its first. A regression breaks the frame."""
@@ -370,39 +429,48 @@ class Threads(Group):
             raise BrokenFrame(f"usage counter of the thread at 0x{address:X} regressed")
         return cycles - prev
 
-    def _usage_deltas(self, session: Session) -> dict[int, int]:
+    def _usage_deltas(self, session: Session) -> tuple[dict[int, int], bool | None]:
         """
-        Every discovered thread's cycles since the last frame, ``{address: cycles}``.
+        Every discovered thread's cycles since the last frame, ``{address: cycles}``,
+        and whether the counters hold as of one instant, None when that is unknown.
 
-        Empty when the build counts no usage, and on a recording from before the
-        snapshot, whose counters sit beside each thread's stack.
+        Empty and unknown when the build counts no usage, and on a recording from
+        before the snapshot, whose counters sit beside each thread's stack.
         """
         scraper, layout = session.scraper, session.layout
-        if layout.thread_usage is None:
-            return {}
+        if not self._counts_usage(session):
+            return {}, None
 
         if not session.has_part("usage_snapshot"):
             # The kernel-wide counter that recording read first. Its value is unused.
             scraper.read32(self._cpu_usage_address)
-            return {}
+            return {}, None
 
         if not self.infos:
-            return {}
+            return {}, None
 
         try:
-            counters = read_usage_snapshot(
-                scraper, list(self.infos), layout.thread_usage, self._usage_stamps
+            counters, coherent = read_usage_snapshot(
+                scraper,
+                list(self.infos),
+                layout.thread_usage,
+                self._usage_stamps,
+                # A recording from before the single pass read a moved pass again.
+                attempts=1 if session.has_part("single_usage_pass") else 2,
             )
         except Exception as e:
             raise RuntimeError(f"Error polling thread usage: {e}") from e
 
-        return {address: self._usage_delta(address, cycles) for address, cycles in counters.items()}
+        deltas = {
+            address: self._usage_delta(address, cycles) for address, cycles in counters.items()
+        }
+        return deltas, coherent
 
     def _poll(self, session: Session, thread: ThreadInfo, deltas: dict[int, int]) -> dict:
         """Read a thread's watermark and metadata, beside its share of ``deltas``."""
         scraper, layout = session.scraper, session.layout
         usage_delta = deltas.get(thread.address, 0)
-        if layout.thread_usage is not None and not session.has_part("usage_snapshot"):
+        if self._counts_usage(session) and not session.has_part("usage_snapshot"):
             try:
                 cycles = scraper.read64(thread.address + layout.thread_usage)[0]
             except Exception as e:
@@ -416,6 +484,7 @@ class Threads(Group):
                     thread.stack_start,
                     thread.stack_size,
                     thread_id=thread.address,
+                    reserved_words=int(session.has_part("stack_sentinel")),
                 )
             except Exception as e:
                 raise RuntimeError(f"Error polling stack watermark for {thread.name}: {e}") from e
@@ -461,7 +530,7 @@ class Threads(Group):
         return meta
 
     def _read_meta_span(self, session: Session, thread: ThreadInfo) -> dict:
-        """The metadata bytes in one read: they sit within a few bytes of each other."""
+        """The metadata members in one read: they sit within a few bytes of each other."""
         offsets = {
             name: offset
             for name, attribute in self._META_BYTES
@@ -470,10 +539,15 @@ class Threads(Group):
         if not offsets:
             return {}
 
+        sizes = {name: self._meta_sizes.get(name, 1) for name in offsets}
         base = min(offsets.values())
-        raw = session.scraper.read8(thread.address + base, max(offsets.values()) - base + 1)
+        end = max(offsets[name] + sizes[name] for name in offsets)
+        raw = bytes(session.scraper.read8(thread.address + base, end - base))
 
-        values = {name: raw[offset - base] for name, offset in offsets.items()}
+        values = {
+            name: int.from_bytes(raw[offset - base : offset - base + sizes[name]], self._byteorder)
+            for name, offset in offsets.items()
+        }
         if "priority" in values:
             values["priority"] = _signed_priority(values["priority"])
         return values
@@ -515,10 +589,17 @@ class Threads(Group):
         return sym
 
     def _finalize(
-        self, session: Session, polled: list[dict], deltas: dict[int, int]
+        self,
+        session: Session,
+        polled: list[dict],
+        deltas: dict[int, int],
+        coherent: bool | None = None,
     ) -> list[ThreadInfo]:
-        """Build ``ThreadInfo`` objects from raw polling state, computing CPU% and load%."""
-        has_usage = session.layout.thread_usage is not None
+        """
+        Build ``ThreadInfo`` objects from raw polling state, computing CPU% and
+        load%, marked ``coherent`` when the counters hold as of one instant.
+        """
+        has_usage = self._counts_usage(session)
         # A recording from before the snapshot has counters for the polled threads only.
         deltas = deltas or {d["info"].address: d["usage_delta"] for d in polled}
         total = sum(deltas.values())
@@ -541,6 +622,7 @@ class Threads(Group):
                 active=data["is_active"],
                 stack_watermark=data["watermark"],
                 stack_watermark_percent=data["stack_usage_pct"],
+                cpu_coherent=coherent if has_usage else None,
             )
             meta = data.get("meta") or {}
             final.append(

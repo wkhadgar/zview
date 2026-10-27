@@ -15,6 +15,7 @@ class FakeScraper:
         self.endianess = endianess
         self._is_connected = True
         self.batch_count = 0
+        self.ended_count = 0
 
     @property
     def is_connected(self):
@@ -27,7 +28,7 @@ class FakeScraper:
         self.batch_count += 1
 
     def end_batch(self):
-        pass
+        self.ended_count += 1
 
     def read32(self, addr: int, amount: int = 1):
         if addr not in self._memory:
@@ -134,6 +135,24 @@ def test_linked_list_multiple_threads():
     assert threads["worker"].stack_size == 768
 
 
+def test_threads_that_share_a_name_or_have_none_are_kept_apart():
+    """A recording from before the part read the later thread over the earlier."""
+    t1, t2, t3 = 0x1000, 0x1020, 0x1040
+    memory = {
+        HEAD_ADDR: (t1,),
+        t1: _make_thread(0x2000, 512, t2, "wrk"),
+        t2: _make_thread(0x3000, 1024, t3, "wrk"),
+        t3: _make_thread(0x4000, 768, 0, ""),
+    }
+
+    def walk(**kwargs):
+        scraper = FakeScraper(memory)
+        return walk_thread_list(scraper, FakeElf(), HEAD_ADDR, LAYOUT, "little", True, **kwargs)
+
+    assert set(walk()) == {"wrk", "wrk @ 0x1020", "thread @ 0x1040"}
+    assert set(walk(distinct=False)) == {"wrk", ""}
+
+
 def test_a_build_without_stack_info_walks_threads_with_no_geometry():
     """The struct words that would hold the geometry are something else there."""
     from dataclasses import replace
@@ -185,12 +204,15 @@ def test_head_read_failure_raises_runtime_error():
         walk_thread_list(scraper, FakeElf(), HEAD_ADDR, LAYOUT, "little", has_names=True)
 
 
-def test_mid_walk_read_failure_raises():
+def test_mid_walk_read_failure_ends_the_batch_and_raises():
+    """A GDB target stays halted until its batch ends."""
     # Head resolves to a thread address that is not present in memory.
     t1 = 0x1000
     scraper = FakeScraper({HEAD_ADDR: (t1,)})
-    with pytest.raises(Exception, match="Error reading thread struct at 0x1000"):
+    with pytest.raises(RuntimeError, match="Error reading thread struct at 0x1000"):
         walk_thread_list(scraper, FakeElf(), HEAD_ADDR, LAYOUT, "little", has_names=True)
+
+    assert scraper.ended_count == scraper.batch_count == 1
 
 
 def test_big_endian_name_decoding():

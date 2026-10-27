@@ -13,6 +13,7 @@ from collections.abc import Sequence
 
 from zview.backend.base import (
     AbstractScraper,
+    ProbeConnectFailure,
     ProbeReadError,
     ProbeReadMalformed,
     ProbeReadTimeout,
@@ -35,6 +36,10 @@ class GDBScraper(AbstractScraper):
         self.port: int = int(port)
         self.timeout: float = timeout
         self.sock: socket.SocketType | None = None
+        # A 'c' is pending, the only state a stub takes the interrupt byte in.
+        self._running = False
+        # The stub expects a '+' for each reply.
+        self._acks = True
 
     def begin_batch(self):
         self._halt()
@@ -46,25 +51,42 @@ class GDBScraper(AbstractScraper):
         """
         Connect to a GDB RSP stub and perform the initial handshake.
 
-        Switches to no-ack mode for faster transfers. Target is left running;
-        halt/resume is managed per read in _read_mem_raw.
+        Switches to no-ack mode for faster transfers. The stub holds the target
+        stopped on attach; halt/resume is managed per batch.
         """
+        if self._is_connected:
+            return
+
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # An ack and the next packet go out apiece, not held for a TCP ACK.
+            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self.sock.settimeout(self.timeout)
             self.sock.connect((self.host, self.port))
         except OSError as e:
             self.sock.close()
             self.sock = None
-            raise ConnectionError(
+            raise ProbeConnectFailure(
                 f"Could not connect to {self.host}:{self.port}. Is QEMU running with -s?"
             ) from e
 
         self._drain()
 
+        self._acks = True
         self.sock.sendall(b'+')
         self._send_packet(b'QStartNoAckMode')
+        try:
+            # A stub without no-ack mode, such as QEMU's, answers empty and has
+            # each of its replies acked.
+            self._acks = self._read_response() != b'OK'
+        except OSError as e:
+            self.sock.close()
+            self.sock = None
+            raise ProbeConnectFailure(
+                f"GDB server at {self.host}:{self.port} did not answer."
+            ) from e
 
+        self._running = False
         self._is_connected = True
         print(f"Connected to GDB server at {self.host}:{self.port}", file=sys.stderr)
         logger.info("Connected to GDB server at %s:%d", self.host, self.port)
@@ -96,16 +118,18 @@ class GDBScraper(AbstractScraper):
 
     def _halt(self):
         """
-        Interrupt the target via the out-of-band SIGINT byte (0x03).
+        Interrupt the running target via the out-of-band SIGINT byte (0x03).
 
         Sent raw outside RSP packet framing per the GDB remote serial protocol
-        spec. Consumes the resulting stop-reply (T05/S05); tolerates stubs that
+        spec, and only while a 'c' is pending: a stopped target's stub ignores
+        it. Consumes the resulting stop-reply (T05/S05); tolerates stubs that
         omit it.
         """
-        if self.sock is None:
+        if self.sock is None or not self._running:
             return
 
         self.sock.sendall(b'\x03')
+        self._running = False
         with contextlib.suppress(socket.timeout):
             self._read_response()
 
@@ -114,6 +138,7 @@ class GDBScraper(AbstractScraper):
         if self.sock is None:
             return
         self._send_packet(b'c')
+        self._running = True
 
     def _send_packet(self, data: bytes):
         """Transmit one RSP packet: ``$<data>#<checksum>``."""
@@ -124,7 +149,8 @@ class GDBScraper(AbstractScraper):
 
     def _read_response(self) -> bytes:
         """
-        Receive one RSP response packet and return its payload.
+        Receive one RSP response packet and return its payload, acked when the
+        stub expects it.
 
         Strips leading ``+`` ack bytes and the ``$...#cc`` framing. Raises
         ``socket.timeout`` on receive deadline; callers that treat a missing
@@ -153,6 +179,8 @@ class GDBScraper(AbstractScraper):
             if len(buffer) < end + 3:
                 continue
 
+            if self._acks:
+                self.sock.sendall(b'+')
             return buffer[start + 1 : end]
 
     # Largest read per packet: its hex reply fits the 4 KB buffer of QEMU's
