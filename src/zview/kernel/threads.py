@@ -256,9 +256,9 @@ class Threads(Group):
     # the stack scan skipped on a build that leaves its stacks unfilled,
     # every thread's usage counter read first, as of one instant, the scan
     # started above the stack sentinel, threads that share a name kept apart,
-    # and the threads' counters read on a build without the kernel-wide one.
-    # A recording taken before each holds those reads the way they were made
-    # then.
+    # the threads' counters read on a build without the kernel-wide one, and
+    # those counters read in one pass however the stamps moved. A recording
+    # taken before each holds those reads the way they were made then.
     parts = (
         "merged_thread_meta",
         "unfilled_stacks",
@@ -266,6 +266,7 @@ class Threads(Group):
         "stack_sentinel",
         "distinct_names",
         "thread_usage_alone",
+        "single_usage_pass",
     )
     max_threads = 64
 
@@ -410,12 +411,13 @@ class Threads(Group):
         thread's cycles and load% of every busy thread's: read as one snapshot
         or not, the shares add up to 100% and none passes it.
         """
-        deltas = self._usage_deltas(session)
+        deltas, coherent = self._usage_deltas(session)
         polled = [
             self._poll(session, self.infos[address], deltas)
             for _, address in label_instances(addresses)
         ]
-        return {thread.name: thread for thread in self._finalize(session, polled, deltas)}
+        finalized = self._finalize(session, polled, deltas, coherent)
+        return {thread.name: thread for thread in finalized}
 
     def _usage_delta(self, address: int, cycles: int) -> int:
         """A thread's cycles since the last frame, 0 on its first. A regression breaks the frame."""
@@ -427,33 +429,42 @@ class Threads(Group):
             raise BrokenFrame(f"usage counter of the thread at 0x{address:X} regressed")
         return cycles - prev
 
-    def _usage_deltas(self, session: Session) -> dict[int, int]:
+    def _usage_deltas(self, session: Session) -> tuple[dict[int, int], bool | None]:
         """
-        Every discovered thread's cycles since the last frame, ``{address: cycles}``.
+        Every discovered thread's cycles since the last frame, ``{address: cycles}``,
+        and whether the counters hold as of one instant, None when that is unknown.
 
-        Empty when the build counts no usage, and on a recording from before the
-        snapshot, whose counters sit beside each thread's stack.
+        Empty and unknown when the build counts no usage, and on a recording from
+        before the snapshot, whose counters sit beside each thread's stack.
         """
         scraper, layout = session.scraper, session.layout
         if not self._counts_usage(session):
-            return {}
+            return {}, None
 
         if not session.has_part("usage_snapshot"):
             # The kernel-wide counter that recording read first. Its value is unused.
             scraper.read32(self._cpu_usage_address)
-            return {}
+            return {}, None
 
         if not self.infos:
-            return {}
+            return {}, None
 
         try:
-            counters = read_usage_snapshot(
-                scraper, list(self.infos), layout.thread_usage, self._usage_stamps
+            counters, coherent = read_usage_snapshot(
+                scraper,
+                list(self.infos),
+                layout.thread_usage,
+                self._usage_stamps,
+                # A recording from before the single pass read a moved pass again.
+                attempts=1 if session.has_part("single_usage_pass") else 2,
             )
         except Exception as e:
             raise RuntimeError(f"Error polling thread usage: {e}") from e
 
-        return {address: self._usage_delta(address, cycles) for address, cycles in counters.items()}
+        deltas = {
+            address: self._usage_delta(address, cycles) for address, cycles in counters.items()
+        }
+        return deltas, coherent
 
     def _poll(self, session: Session, thread: ThreadInfo, deltas: dict[int, int]) -> dict:
         """Read a thread's watermark and metadata, beside its share of ``deltas``."""
@@ -578,9 +589,16 @@ class Threads(Group):
         return sym
 
     def _finalize(
-        self, session: Session, polled: list[dict], deltas: dict[int, int]
+        self,
+        session: Session,
+        polled: list[dict],
+        deltas: dict[int, int],
+        coherent: bool | None = None,
     ) -> list[ThreadInfo]:
-        """Build ``ThreadInfo`` objects from raw polling state, computing CPU% and load%."""
+        """
+        Build ``ThreadInfo`` objects from raw polling state, computing CPU% and
+        load%, marked ``coherent`` when the counters hold as of one instant.
+        """
         has_usage = self._counts_usage(session)
         # A recording from before the snapshot has counters for the polled threads only.
         deltas = deltas or {d["info"].address: d["usage_delta"] for d in polled}
@@ -604,6 +622,7 @@ class Threads(Group):
                 active=data["is_active"],
                 stack_watermark=data["watermark"],
                 stack_watermark_percent=data["stack_usage_pct"],
+                cpu_coherent=coherent if has_usage else None,
             )
             meta = data.get("meta") or {}
             final.append(

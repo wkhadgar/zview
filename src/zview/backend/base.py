@@ -58,6 +58,9 @@ class ThreadRuntime:
     # None on a build that does not fill its stacks.
     stack_watermark: int | None
     stack_watermark_percent: float | None
+    # The counters behind cpu were read with no thread switch between them.
+    # None where that is not known.
+    cpu_coherent: bool | None = None
 
 
 @dataclass(frozen=True)

@@ -103,6 +103,7 @@ def test_active_features_lists_only_what_is_polled():
         "merged_thread_meta",
         "distinct_names",
         "thread_usage_alone",
+        "single_usage_pass",
         "heaps",
         "heap_waiters",
         "semaphores",
@@ -128,6 +129,7 @@ def test_threads_are_always_a_feature():
         "merged_thread_meta",
         "distinct_names",
         "thread_usage_alone",
+        "single_usage_pass",
     )
 
 
