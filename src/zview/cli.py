@@ -384,6 +384,11 @@ def _do_record(args) -> int:
         frames=args.frames,
         period=args.period,
         selection=_selection(args),
+        source={
+            "runner": args.runner,
+            "runner_target": args.runner_target,
+            "frequency": args.frequency,
+        },
     )
     print(f"Recorded {captured} frames to {args.output}")
     return 0
