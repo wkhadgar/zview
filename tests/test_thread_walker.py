@@ -15,6 +15,7 @@ class FakeScraper:
         self.endianess = endianess
         self._is_connected = True
         self.batch_count = 0
+        self.ended_count = 0
 
     @property
     def is_connected(self):
@@ -27,7 +28,7 @@ class FakeScraper:
         self.batch_count += 1
 
     def end_batch(self):
-        pass
+        self.ended_count += 1
 
     def read32(self, addr: int, amount: int = 1):
         if addr not in self._memory:
@@ -203,12 +204,15 @@ def test_head_read_failure_raises_runtime_error():
         walk_thread_list(scraper, FakeElf(), HEAD_ADDR, LAYOUT, "little", has_names=True)
 
 
-def test_mid_walk_read_failure_raises():
+def test_mid_walk_read_failure_ends_the_batch_and_raises():
+    """A GDB target stays halted until its batch ends."""
     # Head resolves to a thread address that is not present in memory.
     t1 = 0x1000
     scraper = FakeScraper({HEAD_ADDR: (t1,)})
-    with pytest.raises(Exception, match="Error reading thread struct at 0x1000"):
+    with pytest.raises(RuntimeError, match="Error reading thread struct at 0x1000"):
         walk_thread_list(scraper, FakeElf(), HEAD_ADDR, LAYOUT, "little", has_names=True)
+
+    assert scraper.ended_count == scraper.batch_count == 1
 
 
 def test_big_endian_name_decoding():

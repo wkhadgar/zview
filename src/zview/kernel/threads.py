@@ -124,8 +124,8 @@ def walk_thread_list(
 ) -> dict[str, ThreadInfo]:
     """
     Walk the kernel thread linked list and return ``{name: ThreadInfo}``.
-    Wrapped in a single ``begin_batch``/``end_batch``. Raises ``RuntimeError``
-    when the head pointer cannot be read.
+    Wrapped in a single ``begin_batch``/``end_batch``. Raises ``RuntimeError``,
+    after the batch ends, when a read fails.
 
     With ``distinct``, a thread with no name, or with one already taken, is
     named after its address. Without it, the later thread replaces the
@@ -153,7 +153,8 @@ def walk_thread_list(
         try:
             thread_struct_words = scraper.read32(thread_ptr, words_to_read)
         except Exception as e:
-            raise Exception(f"Error reading thread struct at 0x{thread_ptr:X}") from e
+            scraper.end_batch()
+            raise RuntimeError(f"Error reading thread struct at 0x{thread_ptr:X}") from e
 
         if has_names:
             thread_name = _name_at(thread_struct_words, layout.thread_name, endianess)
@@ -191,6 +192,7 @@ def walk_static_threads(
     Read the statically allocated ``k_thread`` objects, ``{path: addresses}``, and
     return the live ones as ``{name: ThreadInfo}``, for a build without the
     kernel's thread list. Wrapped in a single ``begin_batch``/``end_batch``.
+    Raises ``RuntimeError``, after the batch ends, when a read fails.
 
     An object still all zero was never created. A thread the build does not name
     is named after its object.
@@ -208,7 +210,8 @@ def walk_static_threads(
         try:
             words = scraper.read32(address, words_to_read)
         except Exception as e:
-            raise Exception(f"Error reading thread struct at 0x{address:X}") from e
+            scraper.end_batch()
+            raise RuntimeError(f"Error reading thread struct at 0x{address:X}") from e
 
         state = (
             0 if layout.thread_state is None else _byte_at(words, layout.thread_state, endianess)
