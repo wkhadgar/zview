@@ -134,6 +134,24 @@ def test_linked_list_multiple_threads():
     assert threads["worker"].stack_size == 768
 
 
+def test_threads_that_share_a_name_or_have_none_are_kept_apart():
+    """A recording from before the part read the later thread over the earlier."""
+    t1, t2, t3 = 0x1000, 0x1020, 0x1040
+    memory = {
+        HEAD_ADDR: (t1,),
+        t1: _make_thread(0x2000, 512, t2, "wrk"),
+        t2: _make_thread(0x3000, 1024, t3, "wrk"),
+        t3: _make_thread(0x4000, 768, 0, ""),
+    }
+
+    def walk(**kwargs):
+        scraper = FakeScraper(memory)
+        return walk_thread_list(scraper, FakeElf(), HEAD_ADDR, LAYOUT, "little", True, **kwargs)
+
+    assert set(walk()) == {"wrk", "wrk @ 0x1020", "thread @ 0x1040"}
+    assert set(walk(distinct=False)) == {"wrk", ""}
+
+
 def test_a_build_without_stack_info_walks_threads_with_no_geometry():
     """The struct words that would hold the geometry are something else there."""
     from dataclasses import replace

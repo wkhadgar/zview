@@ -101,6 +101,7 @@ def test_active_features_lists_only_what_is_polled():
     assert s.active_features() == (
         "threads",
         "merged_thread_meta",
+        "distinct_names",
         "heaps",
         "heap_waiters",
         "semaphores",
@@ -121,7 +122,7 @@ def test_a_recording_without_the_heap_wait_queue_reads_does_not_replay_them():
 
 
 def test_threads_are_always_a_feature():
-    assert _scraper().active_features() == ("threads", "merged_thread_meta")
+    assert _scraper().active_features() == ("threads", "merged_thread_meta", "distinct_names")
 
 
 def test_a_live_session_is_not_restricted():

@@ -114,11 +114,17 @@ def walk_thread_list(
     endianess: Literal["little", "big"],
     has_names: bool,
     max_threads: int = 64,
+    *,
+    distinct: bool = True,
 ) -> dict[str, ThreadInfo]:
     """
     Walk the kernel thread linked list and return ``{name: ThreadInfo}``.
     Wrapped in a single ``begin_batch``/``end_batch``. Raises ``RuntimeError``
     when the head pointer cannot be read.
+
+    With ``distinct``, a thread with no name, or with one already taken, is
+    named after its address. Without it, the later thread replaces the
+    earlier, as a recording made before the ``distinct_names`` part reads.
     """
     try:
         if not scraper.is_connected:
@@ -148,6 +154,10 @@ def walk_thread_list(
             thread_name = _name_at(thread_struct_words, layout.thread_name, endianess)
         else:
             thread_name = f"thread @ 0x{thread_ptr:X}"
+        if distinct:
+            thread_name = thread_name or f"thread @ 0x{thread_ptr:X}"
+            if thread_name in threads:
+                thread_name = f"{thread_name} @ 0x{thread_ptr:X}"
 
         threads[thread_name] = ThreadInfo(
             thread_ptr,
@@ -235,10 +245,17 @@ class Threads(Group):
     )
     # The metadata bytes in one read and the entry pointer once per thread,
     # the stack scan skipped on a build that leaves its stacks unfilled,
-    # every thread's usage counter read first, as of one instant, and the
-    # scan started above the stack sentinel. A recording taken before each
-    # holds those reads the way they were made then.
-    parts = ("merged_thread_meta", "unfilled_stacks", "usage_snapshot", "stack_sentinel")
+    # every thread's usage counter read first, as of one instant, the scan
+    # started above the stack sentinel, and threads that share a name kept
+    # apart. A recording taken before each holds those reads the way they
+    # were made then.
+    parts = (
+        "merged_thread_meta",
+        "unfilled_stacks",
+        "usage_snapshot",
+        "stack_sentinel",
+        "distinct_names",
+    )
     max_threads = 64
 
     # The metadata bytes, by their offset in the layout.
@@ -292,6 +309,7 @@ class Threads(Group):
                 endianess,
                 has_names,
                 self.max_threads,
+                distinct=session.has_part("distinct_names"),
             )
         else:
             # Without the kernel's list, the threads are the ones allocated statically.
