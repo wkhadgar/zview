@@ -9,7 +9,12 @@ from typing import Literal
 from zview.backend.base import AbstractScraper, ThreadInfo, ThreadRuntime
 from zview.backend.elf_inspector import ElfInspector
 from zview.backend.replay import ReplayMismatch
-from zview.kernel.compat import CONFIG_INIT_STACKS, FieldTable, has_kconfig
+from zview.kernel.compat import (
+    CONFIG_INIT_STACKS,
+    CONFIG_STACK_SENTINEL,
+    FieldTable,
+    has_kconfig,
+)
 from zview.kernel.group import BrokenFrame, Group
 from zview.kernel.layout import KernelLayout
 from zview.kernel.object_names import label_instances
@@ -229,10 +234,11 @@ class Threads(Group):
         THREAD_QNODE_FIELDS,
     )
     # The metadata bytes in one read and the entry pointer once per thread,
-    # the stack scan skipped on a build that leaves its stacks unfilled, and
-    # every thread's usage counter read first, as of one instant. A recording
-    # taken before each holds those reads the way they were made then.
-    parts = ("merged_thread_meta", "unfilled_stacks", "usage_snapshot")
+    # the stack scan skipped on a build that leaves its stacks unfilled,
+    # every thread's usage counter read first, as of one instant, and the
+    # scan started above the stack sentinel. A recording taken before each
+    # holds those reads the way they were made then.
+    parts = ("merged_thread_meta", "unfilled_stacks", "usage_snapshot", "stack_sentinel")
     max_threads = 64
 
     # The metadata bytes, by their offset in the layout.
@@ -306,12 +312,14 @@ class Threads(Group):
 
     def live_parts(self, session: Session) -> frozenset[str]:
         """
-        Every part, but the scan skip on a build that fills its stacks and the
-        usage snapshot on one that counts no usage.
+        Every part, but the scan skip on a build that fills its stacks, the
+        usage snapshot on one that counts no usage, and the sentinel on one
+        that places none.
         """
         off = {
             "unfilled_stacks": has_kconfig(session.elf, CONFIG_INIT_STACKS),
             "usage_snapshot": session.layout.thread_usage is None,
+            "stack_sentinel": not has_kconfig(session.elf, CONFIG_STACK_SENTINEL),
         }
         return frozenset(part for part in self.parts if not off.get(part, False))
 
@@ -416,6 +424,7 @@ class Threads(Group):
                     thread.stack_start,
                     thread.stack_size,
                     thread_id=thread.address,
+                    reserved_words=int(session.has_part("stack_sentinel")),
                 )
             except Exception as e:
                 raise RuntimeError(f"Error polling stack watermark for {thread.name}: {e}") from e

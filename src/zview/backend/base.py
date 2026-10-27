@@ -346,6 +346,7 @@ class AbstractScraper(ABC):
         unused_pattern: int = 0xAA_AA_AA_AA,
         *,
         thread_id,
+        reserved_words: int = 0,
     ) -> int:
         """
         Reads a stack memory and scans for the unused_pattern fill pattern
@@ -356,6 +357,8 @@ class AbstractScraper(ABC):
             :param stack_size: The total size of the thread's stack in bytes.
             :param unused_pattern: Unused stack fill word.
             :param id: Unique identification for the given thread.
+            :param reserved_words: Words at the low end that hold no fill, such
+                as Zephyr's stack sentinel. They are not scanned, and count as used.
 
         Returns:
             The calculated stack watermark in bytes, indicating the maximum
@@ -364,10 +367,12 @@ class AbstractScraper(ABC):
         if stack_size == 0:
             return 0
 
+        reserved = 4 * reserved_words
+        size = stack_size - reserved
         cache_watermark = self.watermark_cache.get(thread_id, 0)
-        watermark = stack_size - cache_watermark
+        watermark = size - cache_watermark
 
-        stack_words = self.read32(stack_start, (stack_size // 4) - (cache_watermark // 4))
+        stack_words = self.read32(stack_start + reserved, (size // 4) - (cache_watermark // 4))
 
         for word in stack_words:
             if word == unused_pattern:
@@ -377,4 +382,4 @@ class AbstractScraper(ABC):
 
         self.watermark_cache[thread_id] = watermark + cache_watermark
 
-        return self.watermark_cache[thread_id]
+        return self.watermark_cache[thread_id] + reserved
