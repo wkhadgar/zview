@@ -10,6 +10,7 @@ from zview.kernel.heaps import HEAP_FIELDS
 from zview.kernel.mem_slabs import MEM_SLAB_FIELDS
 from zview.kernel.semaphores import SEMAPHORE_FIELDS
 from zview.kernel.threads import (
+    KERNEL_USAGE_FIELDS,
     THREAD_ENTRY_FIELDS,
     THREAD_FIELDS,
     THREAD_PRIORITY_FIELDS,
@@ -204,8 +205,8 @@ def test_mem_slab_falls_back_to_the_flat_layout():
     }
 
 
-def test_usage_group_needs_the_kernel_wide_counter():
-    """z_kernel.usage only exists from v3.5.0, so older trees get no CPU stats."""
+def test_the_threads_counters_resolve_without_the_kernel_wide_one():
+    """z_kernel.usage needs CONFIG_SCHED_THREAD_USAGE_ALL, and only exists from v3.5.0."""
     elf = FakeElf(
         {
             ("k_thread", "base"): 0,
@@ -214,7 +215,8 @@ def test_usage_group_needs_the_kernel_wide_counter():
         }
     )
 
-    assert compat.resolve_fields(elf, USAGE_FIELDS) is None
+    assert compat.resolve_fields(elf, USAGE_FIELDS) == {"thread_usage": 48}
+    assert compat.resolve_fields(elf, KERNEL_USAGE_FIELDS) is None
 
 
 def test_the_switch_stamp_is_found_inside_each_cpu():

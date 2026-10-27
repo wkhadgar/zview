@@ -46,13 +46,17 @@ THREAD_NAME_FIELDS: FieldTable = {
     "thread_name": ((("k_thread", "name"),),),
 }
 
-# CONFIG_THREAD_RUNTIME_STATS. z_kernel.usage exists from v3.5.0; on v3.0 and
-# v3.3 this group does not resolve.
+# CONFIG_THREAD_RUNTIME_STATS. Each thread's cycle counter, from v3.3.0.
 USAGE_FIELDS: FieldTable = {
-    "cpu_usage": ((("z_kernel", "usage"),),),
     "thread_usage": (
         (("k_thread", "base"), ("_thread_base", "usage"), ("k_cycle_stats", "total")),
     ),
+}
+
+# CONFIG_SCHED_THREAD_USAGE_ALL. The kernel-wide counter, from v3.5.0, which a
+# recording from before the usage snapshot read first.
+KERNEL_USAGE_FIELDS: FieldTable = {
+    "cpu_usage": ((("z_kernel", "usage"),),),
 }
 
 # CONFIG_SCHED_THREAD_USAGE. Each CPU's switch stamp, rewritten whenever the
@@ -236,6 +240,7 @@ class Threads(Group):
         THREAD_STACK_FIELDS,
         THREAD_NAME_FIELDS,
         USAGE_FIELDS,
+        KERNEL_USAGE_FIELDS,
         USAGE_STAMP_FIELDS,
         THREAD_PRIORITY_FIELDS,
         THREAD_STATE_FIELDS,
@@ -246,15 +251,17 @@ class Threads(Group):
     # The metadata bytes in one read and the entry pointer once per thread,
     # the stack scan skipped on a build that leaves its stacks unfilled,
     # every thread's usage counter read first, as of one instant, the scan
-    # started above the stack sentinel, and threads that share a name kept
-    # apart. A recording taken before each holds those reads the way they
-    # were made then.
+    # started above the stack sentinel, threads that share a name kept apart,
+    # and the threads' counters read on a build without the kernel-wide one.
+    # A recording taken before each holds those reads the way they were made
+    # then.
     parts = (
         "merged_thread_meta",
         "unfilled_stacks",
         "usage_snapshot",
         "stack_sentinel",
         "distinct_names",
+        "thread_usage_alone",
     )
     max_threads = 64
 
@@ -276,6 +283,17 @@ class Threads(Group):
         self._cpu_usage_address = 0
         self._usage_stamps: tuple[int, ...] = ()
 
+    @staticmethod
+    def _counts_usage(session: Session) -> bool:
+        """
+        The threads' cycle counters are read: the build has them and, unless
+        the session reads them alone, the kernel-wide counter beside them.
+        """
+        layout = session.layout
+        return layout.thread_usage is not None and (
+            layout.cpu_usage is not None or session.has_part("thread_usage_alone")
+        )
+
     def discover(self, session: Session) -> dict[str, list[int]]:
         """
         ``{name: [address]}`` of the threads alive now: the kernel's list, or
@@ -289,8 +307,9 @@ class Threads(Group):
         cpus = max(1, elf.get_symbol_info("z_idle_threads", "size")[0] // thread_size)
         self.idle_addresses = tuple(idle + i * thread_size for i in range(cpus))
 
-        if layout.thread_usage is not None:
-            self._cpu_usage_address = kernel + layout.cpu_usage
+        if self._counts_usage(session):
+            if layout.cpu_usage is not None:
+                self._cpu_usage_address = kernel + layout.cpu_usage
             if layout.cpu_usage0 is not None:
                 cpu_size = elf.get_struct_size("_cpu")
                 self._usage_stamps = tuple(
@@ -348,7 +367,7 @@ class Threads(Group):
             for enabled, notice in (
                 (layout.thread_name is not None, "Warning: no thread names (CONFIG_THREAD_NAME=n)"),
                 (
-                    layout.thread_usage is not None,
+                    self._counts_usage(session),
                     "Warning: no cpu stats (CONFIG_THREAD_RUNTIME_STATS=n)",
                 ),
                 (
@@ -404,7 +423,7 @@ class Threads(Group):
         snapshot, whose counters sit beside each thread's stack.
         """
         scraper, layout = session.scraper, session.layout
-        if layout.thread_usage is None:
+        if not self._counts_usage(session):
             return {}
 
         if not session.has_part("usage_snapshot"):
@@ -428,7 +447,7 @@ class Threads(Group):
         """Read a thread's watermark and metadata, beside its share of ``deltas``."""
         scraper, layout = session.scraper, session.layout
         usage_delta = deltas.get(thread.address, 0)
-        if layout.thread_usage is not None and not session.has_part("usage_snapshot"):
+        if self._counts_usage(session) and not session.has_part("usage_snapshot"):
             try:
                 cycles = scraper.read64(thread.address + layout.thread_usage)[0]
             except Exception as e:
@@ -545,7 +564,7 @@ class Threads(Group):
         self, session: Session, polled: list[dict], deltas: dict[int, int]
     ) -> list[ThreadInfo]:
         """Build ``ThreadInfo`` objects from raw polling state, computing CPU% and load%."""
-        has_usage = session.layout.thread_usage is not None
+        has_usage = self._counts_usage(session)
         # A recording from before the snapshot has counters for the polled threads only.
         deltas = deltas or {d["info"].address: d["usage_delta"] for d in polled}
         total = sum(deltas.values())
