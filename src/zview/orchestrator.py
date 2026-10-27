@@ -268,10 +268,9 @@ class ZScraper:
             return
 
         self._stop_event.set()
-        if self._polling_thread.is_alive():
-            self._polling_thread.join(timeout=1.0)
-            if self._polling_thread.is_alive():
-                logger.warning("Polling thread did not terminate gracefully.")
+        # The poll stops after the frame in flight, which a slow probe takes
+        # over a second to read. The probe stays open until then.
+        self._polling_thread.join()
 
         self._polling_thread = None
 

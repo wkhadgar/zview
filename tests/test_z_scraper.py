@@ -287,6 +287,31 @@ def test_the_poller_ends_after_its_frames(elf_path):
     assert mock.begin_batch.call_count == 3
 
 
+def test_finishing_the_poll_waits_for_the_frame_in_flight(elf_path):
+    """A pyOCD frame through a J-Link OB takes 1.4 s, and the probe closes after it."""
+    scraper, mock = _make_strike_scraper(elf_path)
+    in_frame, release = threading.Event(), threading.Event()
+
+    def slow_scan(*args, **kwargs):
+        in_frame.set()
+        release.wait()
+        return 100
+
+    mock.calculate_dynamic_watermark.side_effect = slow_scan
+    scraper.start_polling_thread(queue.Queue(), threading.Event(), 0)
+    assert in_frame.wait(timeout=1)
+
+    finisher = threading.Thread(target=scraper.finish_polling_thread)
+    finisher.start()
+    finisher.join(timeout=1.2)
+    waited = finisher.is_alive()
+    release.set()
+    finisher.join(timeout=1)
+
+    assert waited
+    assert not finisher.is_alive()
+
+
 def test_three_strikes_emit_fatal_and_break(elf_path):
     """Three consecutive failures emit ``fatal_error`` and terminate the loop."""
     scraper, mock = _make_strike_scraper(elf_path)
