@@ -131,7 +131,8 @@ def record_session(
 
         data_queue: queue.Queue = queue.Queue()
         stop = threading.Event()
-        scraper.start_polling_thread(data_queue, stop, period)
+        # The poller stops at the bound itself: it runs a frame ahead of this loop.
+        scraper.start_polling_thread(data_queue, stop, period, frames)
 
         captured = 0
         start = time.monotonic()
@@ -142,10 +143,15 @@ def record_session(
                 except queue.Empty:
                     pass
                 else:
-                    if isinstance(frame, Frame):
-                        captured += 1
-                        if frames is not None and captured >= frames:
+                    match frame:
+                        case Fatal(text):
+                            raise RuntimeError(text)
+                        case ReplayEnd():
                             break
+                        case Frame():
+                            captured += 1
+                            if frames is not None and captured >= frames:
+                                break
                 if duration is not None and (time.monotonic() - start) >= duration:
                     break
         finally:

@@ -274,6 +274,19 @@ def test_single_strike_emits_transient_error(elf_path):
     assert "read fail" in msg.text
 
 
+def test_the_poller_ends_after_its_frames(elf_path):
+    """A recording bounded in frames gets no frame the poller would run ahead to."""
+    scraper, mock = _make_strike_scraper(elf_path)
+    mock.calculate_dynamic_watermark.return_value = 100
+
+    q: queue.Queue = queue.Queue()
+    with patch("time.sleep"):
+        scraper._poll_thread_worker(q, threading.Event(), 0, frames=3)
+
+    assert [type(q.get_nowait()) for _ in range(q.qsize())] == [Frame] * 3
+    assert mock.begin_batch.call_count == 3
+
+
 def test_three_strikes_emit_fatal_and_break(elf_path):
     """Three consecutive failures emit ``fatal_error`` and terminate the loop."""
     scraper, mock = _make_strike_scraper(elf_path)
