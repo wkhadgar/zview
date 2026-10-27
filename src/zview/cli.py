@@ -288,8 +288,15 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     if target_needed and args.runner_target is None:
         parser.error(f"{args.cmd}: runner '{args.runner}' requires --runner-target.")
 
-    if getattr(args, "frequency", None) is not None and args.runner not in (None, *CLOCKED_RUNNERS):
+    # A replay has no runner, and no clock either.
+    if getattr(args, "frequency", None) is not None and args.runner not in CLOCKED_RUNNERS:
         parser.error(f"{args.cmd}: --frequency sets the pyocd and jlink runners' clock only.")
+
+    if getattr(args, "period", 0) < 0:
+        parser.error(f"{args.cmd}: --period must be >= 0.")
+
+    if getattr(args, "frames", None) is not None and args.frames < 1:
+        parser.error(f"{args.cmd}: --frames must be >= 1.")
 
     if args.cmd == "dump":
         if args.input and (args.runner or args.runner_target):
