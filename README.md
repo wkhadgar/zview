@@ -120,7 +120,7 @@ Reading fewer rows makes each frame shorter. A recording keeps the selection it 
 | `--frames` | `record` | Recording upper bound, in data frames. |
 | `-i, --input` | `replay`, `dump` | Recording source path (`.ndjson.gz`). |
 | `--no-pacing` | `replay` | Drain the recording as fast as possible instead of honoring its wall-clock cadence. |
-| `--frame` | `dump` | Which polling frame to emit (1-indexed; default: `1`). |
+| `--frame` | `dump` | Which polling frame to emit (1-indexed; default: `2`, the first with CPU shares). |
 | `--json` | `dump` | Emit the frame as JSON on stdout. |
 
 <details>
@@ -273,7 +273,7 @@ west zview dump -e build/zephyr/zephyr.elf -r jlink -t nRF5340_xxAA --json \
   | jq '.threads[] | select(.runtime.stack_watermark_percent > 80)'
 ```
 
-`dump` accepts either a live source (`-r`/`-t`) or a recording (`-i`). Omit `--json` for a human-readable one-shot dump. Use `--frame N` to emit the Nth polling frame instead of the first.
+`dump` accepts either a live source (`-r`/`-t`) or a recording (`-i`). Omit `--json` for a human-readable one-shot dump. Use `--frame N` to emit the Nth polling frame instead of the second, the first with CPU shares.
 
 > **Note:** Status messages (probe connect, ELF load) are emitted on stderr, so stdout stays clean for piping into `jq` or similar.
 

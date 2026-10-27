@@ -192,8 +192,11 @@ def register_commands(
     p_dump.add_argument(
         "--frame",
         type=int,
-        default=1,
-        help="Which polling frame to dump (1-indexed). Default: 1.",
+        default=2,
+        help=(
+            "Which polling frame to dump (1-indexed). Default: 2, the first with CPU shares, "
+            "as frame 1 has no earlier frame to count cycles from."
+        ),
     )
     p_dump.add_argument(
         "--json",
