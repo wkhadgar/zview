@@ -309,20 +309,40 @@ def test_thread_detail_history_never_exceeds_the_graph_columns(controller, theme
     thread = ThreadInfo(
         address=0x1000, stack_start=0x2000, stack_size=512, name="worker", runtime=runtime
     )
-    controller.frames = _frames(threads=[thread])
+    controller.frames = FrameHistory()
+    for _ in range(80):
+        controller.frames.add(Frame({"threads": [thread]}))
     controller.detailing_thread = "worker"
     controller.min_dimensions = (14, 85)
 
     view = ThreadDetailView(controller, theme)
 
-    for _ in range(80):
+    # One sample per frame, however often the view redraws.
+    for _ in range(3):
         view.render(_StubWin(width=120), 24, 120)
-    assert len(view._usages["cpu"]) <= (120 // 2) - 2
+    assert len(view._usages["cpu"]) == (120 // 2) - 2
 
     # Shrinking the terminal must bring the history inside the new budget at
     # once, not one sample per frame.
     view.render(_StubWin(width=60), 24, 60)
-    assert len(view._usages["cpu"]) <= (60 // 2) - 2
+    assert len(view._usages["cpu"]) == (60 // 2) - 2
+
+
+def test_thread_detail_graphs_take_one_sample_per_frame(controller, theme):
+    """A sample per redraw ran the graphs ten times faster than the poll."""
+    from zview.backend.base import ThreadInfo, ThreadRuntime
+
+    runtime = ThreadRuntime(10.0, 5.0, True, 64, 25.0)
+    thread = ThreadInfo(0x1000, 0x2000, 512, "worker", runtime)
+    controller.frames = _frames(threads=[thread])
+    controller.detailing_thread = "worker"
+    controller.min_dimensions = (14, 85)
+    view = ThreadDetailView(controller, theme)
+
+    for _ in range(5):
+        view.render(_StubWin(width=120), 24, 120)
+
+    assert view._usages == {"cpu": [5], "load": [10]}
 
 
 class _TextWin(_StubWin):
