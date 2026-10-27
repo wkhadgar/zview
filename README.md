@@ -2,7 +2,7 @@
 
 Real-time system observability for Zephyr RTOS, delivered over SWD.
 
-**Stop guessing your stack margins and heap health.** ZView provides a zero-footprint, high-fidelity visualization of your Zephyr application’s runtime, delivered over SWD with zero instrumentation.
+**Stop guessing your stack margins and heap health.** ZView shows your Zephyr application's runtime from the kernel's own structures, read over SWD, with no code added to the firmware.
 
 *No UART, no RTT, and no manual code changes. Just Kconfig and your probe.*
 
@@ -102,10 +102,10 @@ ZView is invoked through one of four commands. Bare `zview` with no command runs
 | `-e, --elf-file` | all | Path to the firmware `.elf` file (e.g. `build/zephyr/zephyr.elf`). |
 | `-d, --build-dir` | all | Application build directory to read unset `-e`, `-r`, `-t` and `--frequency` from. |
 | `--domain` | all | Sysbuild domain to view (default: the build's default domain). |
-| `-r, --runner` | `live`, `record`, `dump` | Debug runner: `jlink`, `pyocd`, or `gdb`. |
+| `-r, --runner` | `live`, `record`, `dump` | Debug runner: `jlink`, `pyocd`, `nrfutil`, or `gdb`. |
 | `-t, --runner-target` | `live`, `record`, `dump` | MCU descriptor for the chosen runner (see below). |
 | `--frequency` | `live`, `record`, `dump` | SWD clock of `-r pyocd` and `-r jlink`, in Hz or with a `k` or `M` suffix (default: `4M` on pyocd, the J-Link's own on jlink). Lower it if long wires give read errors. |
-| `--period` | `live`, `record`, `dump` | Polling period in seconds (default: `0.10`). |
+| `--period` | `live`, `record`, `dump` | Minimum polling period in seconds (default: `0.10`). A frame that takes longer is followed by the next one right away. |
 | `--only` | `live`, `record`, `dump` | Read only these groups, comma separated, such as `threads,mutexes`. The groups are `threads`, `heaps`, `semaphores`, `mutexes`, `msgqs`, `mem_slabs` and `workqs`. |
 | `--match` | `live`, `record`, `dump` | Read only the rows this line matches, the same line **/** edits: `GLOB`, `GROUP:GLOB` within one group, or `!GLOB` to skip, comma separated, such as `--match 'threads:gate*, !*_old'`. |
 
@@ -168,7 +168,7 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
 * **ENTER**: Get details for the selected thread or kernel object (hit ENTER again to return).
 * **S / I**: Sort the data and invert the sorting order.
 * **k**: Access the **Kernel Objects** view listing semaphores, mutexes, message queues, memory slabs, heaps and work queues (hit k again to return).
-* **x**: Mute the selected thread or object. It stays listed, dimmed, with its last values, and is no longer read.
+* **x**: Mute the selected thread or object. It stays listed, dimmed, with its last values, and is no longer read. A muted thread's usage counter still is, since each CPU share is of every thread's cycles.
 * **/**: Edit the row patterns on the line `--match` takes: `GLOB`, `GROUP:GLOB`, or `!GLOB` to exclude, comma separated. **ENTER** applies the line, **Esc** drops it.
 * **g**: Pick the groups read (threads, heaps, semaphores and the rest) from a checklist, where **Space** toggles one.
 * **r**: Soft refresh, re-walks the kernel thread list and clears runtime baselines.
@@ -317,9 +317,9 @@ west zview live -r gdb -t localhost:1234
 <summary><strong>Kernel object coverage</strong></summary>
 <br>
 
-Only statically declared objects are listed. `K_SEM_DEFINE`, `K_MUTEX_DEFINE`, `K_MSGQ_DEFINE`, `K_MEM_SLAB_DEFINE`, `K_HEAP_DEFINE` and friends land in the symbol table, where ZView finds them while parsing the ELF; an object created at runtime has no symbol and never appears in the view. Nor does one the linker drops: an object no code touches is garbage collected out of the symbol table, however statically it was declared.
+Only statically declared objects are listed. `K_SEM_DEFINE`, `K_MUTEX_DEFINE`, `K_MSGQ_DEFINE`, `K_MEM_SLAB_DEFINE`, `K_HEAP_DEFINE` and friends define globals, which ZView finds while parsing the ELF: at the address their DWARF location gives, or through the symbol table for one the debug information only declares. An object created at runtime is no global and never appears in the view. Nor does one the linker drops: an object no code touches is garbage collected out of the image, however statically it was declared.
 
-> **Note:** Waiter lists need a `sys_dlist_t` wait queue, Zephyr's default (`CONFIG_WAITQ_SIMPLE`). Under `CONFIG_WAITQ_SCALABLE` the queue is a red-black tree, and the waiters column reads `unknown` instead of a count.
+> **Note:** Waiter lists need a `sys_dlist_t` wait queue, Zephyr's default (`CONFIG_WAITQ_SIMPLE`). Under `CONFIG_WAITQ_SCALABLE` the queue is a red-black tree, and the waiters column reads `?` instead of a count.
 
 </details>
 

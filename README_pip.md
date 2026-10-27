@@ -2,7 +2,7 @@
 
 Real-time system observability for Zephyr RTOS, delivered over SWD.
 
-**Stop guessing your stack margins and heap health.** ZView provides a zero-footprint, high-fidelity visualization of your Zephyr application's runtime, delivered over SWD with zero instrumentation.
+**Stop guessing your stack margins and heap health.** ZView shows your Zephyr application's runtime from the kernel's own structures, read over SWD, with no code added to the firmware.
 
 *No UART, no RTT, and no manual code changes. Just Kconfig and your probe.*
 
