@@ -322,7 +322,16 @@ class ElfInspector:
         if loc_attr is None:
             # Union members elide the location attribute (offset is 0).
             return 0
-        return loc_attr.value[1] if loc_attr.form == "DW_FORM_exprloc" else loc_attr.value
+        if loc_attr.form != "DW_FORM_exprloc":
+            return loc_attr.value
+
+        # DW_OP_plus_uconst, then the offset as a ULEB128.
+        offset = 0
+        for shift, byte in enumerate(loc_attr.value[1:]):
+            offset |= (byte & 0x7F) << (7 * shift)
+            if not byte & 0x80:
+                break
+        return offset
 
     def _aggregate_type(self, die, cu_offset: int) -> tuple:
         """A struct or union as its type graph entry."""

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -40,6 +41,15 @@ def test_struct_member_sizes_follow_the_typedefs(parser):
     """uint16_t and int8_t resolve to their base types, inside an anonymous union too."""
     assert parser.get_struct_member_size("_thread_base", "user_options") == 2
     assert parser.get_struct_member_size("_thread_base", "prio") == 1
+
+
+@pytest.mark.parametrize(("expression", "offset"), [([0x23, 0x7F], 127), ([0x23, 0x80, 0x02], 256)])
+def test_an_expression_member_location_is_a_uleb128(expression, offset):
+    """DWARF 2 and 3 place a member with DW_OP_plus_uconst."""
+    location = SimpleNamespace(form="DW_FORM_exprloc", value=expression)
+    member = SimpleNamespace(attributes={"DW_AT_data_member_location": location})
+
+    assert ElfInspector._member_location(member) == offset
 
 
 def test_struct_size(parser):
