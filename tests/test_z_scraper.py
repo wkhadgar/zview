@@ -11,6 +11,7 @@ import pytest
 
 from zview.backend.base import (
     AbstractScraper,
+    ProbeConnectFailure,
     ProbeReadError,
     ProbeReadMalformed,
     ProbeReadTimeout,
@@ -452,7 +453,7 @@ def test_gdb_failed_connect_leaves_no_socket_to_resume_on():
 
     with (
         patch("zview.backend.gdb.socket.socket", return_value=refused),
-        pytest.raises(ConnectionError, match="Is QEMU running"),
+        pytest.raises(ProbeConnectFailure, match="Is QEMU running"),
     ):
         scraper.connect()
 
@@ -460,6 +461,55 @@ def test_gdb_failed_connect_leaves_no_socket_to_resume_on():
 
     assert scraper.sock is None
     refused.sendall.assert_not_called()
+
+
+def _gdb_over(replies: list[bytes]) -> tuple[GDBScraper, MagicMock]:
+    """A ``GDBScraper`` connected over a socket stand-in that answers ``replies``, in order."""
+    sock = MagicMock()
+    # An empty first chunk ends the banner drain.
+    sock.recv.side_effect = [b"", *replies]
+    scraper = GDBScraper("localhost:1234")
+    with patch("zview.backend.gdb.socket.socket", return_value=sock):
+        scraper.connect()
+    return scraper, sock
+
+
+def test_gdb_connect_reads_the_no_ack_reply():
+    """Left unread, the OK would answer the first read."""
+    scraper, _ = _gdb_over([b"+$OK#9a", b"$deadbeef#00"])
+
+    assert scraper.read_bytes(0x1000, 4) == b"\xde\xad\xbe\xef"
+
+
+def test_gdb_stub_without_no_ack_mode_has_its_replies_acked():
+    """QEMU answers QStartNoAckMode empty."""
+    scraper, sock = _gdb_over([b"+$#00", b"+$deadbeef#00"])
+
+    assert scraper.read_bytes(0x1000, 4) == b"\xde\xad\xbe\xef"
+    assert sock.sendall.call_args_list[-1].args == (b"+",)
+
+
+def test_gdb_connects_once():
+    """``record`` connects the backend to check the image, then the recorder connects it."""
+    scraper, _ = _gdb_over([b"+$OK#9a"])
+
+    with patch("zview.backend.gdb.socket.socket") as opened:
+        scraper.connect()
+
+    opened.assert_not_called()
+
+
+def test_gdb_interrupts_only_a_running_target():
+    """A stub ignores the interrupt byte unless a 'c' is pending, as it is not on attach."""
+    scraper, sock = _gdb_over([b"+$OK#9a", b"$T05#b9"])
+
+    scraper.begin_batch()
+    scraper.end_batch()
+    scraper.begin_batch()
+
+    sent = [c.args[0] for c in sock.sendall.call_args_list]
+    assert sent[-2:] == [b"$c#63", b"\x03"]
+    assert sent.count(b"\x03") == 1
 
 
 def test_reload_elf_rebuilds_features_and_keeps_tui_settings(elf_path):
