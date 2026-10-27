@@ -28,7 +28,7 @@ from elftools.elf.sections import SymbolTableSection
 _CACHE_HMAC_KEY = hashlib.sha256(str(Path.home()).encode()).digest()
 _HMAC_SIZE = 32  # SHA-256 digest length in bytes
 
-_CACHE_SCHEMA_VERSION = 7
+_CACHE_SCHEMA_VERSION = 8
 
 # DWARF location opcodes: an object's own address, and the frame and register
 # forms a function local takes.
@@ -43,20 +43,24 @@ _NESTED_STRUCTS = ("k_thread",)
 # Tags that only name or qualify the type they point to.
 _ALIAS_TAGS = ("DW_TAG_typedef", "DW_TAG_const_type", "DW_TAG_volatile_type", "DW_TAG_atomic_type")
 
+# Tags of a type that holds no members.
+_SCALAR_TAGS = ("DW_TAG_base_type", "DW_TAG_enumeration_type", "DW_TAG_pointer_type")
+
 
 class _TypeGraph:
-    """The struct, union, array and alias types of a DWARF scan, by DIE offset."""
+    """The struct, union, array, alias and scalar types of a DWARF scan, by DIE offset."""
 
     def __init__(self) -> None:
         # ("struct", name, size, ((member, offset, type), ...)),
-        # ("array", element type, dimensions) or ("alias", target type).
+        # ("array", element type, dimensions), ("alias", target type) or
+        # ("scalar", size).
         self.types: dict[int, tuple] = {}
         self._placements: dict[tuple[int, str], tuple[tuple[str, int], ...]] = {}
 
     def size(self, offset: int) -> int:
         """Byte size of the type at ``offset``, 0 when it was not recorded."""
         match self.types.get(offset):
-            case ("struct", _, size, _):
+            case ("struct", _, size, _) | ("scalar", size):
                 return size
             case ("array", element, dimensions):
                 return math.prod(dimensions) * self.size(element)
@@ -123,6 +127,7 @@ class ElfInspector:
         self._symbols_is_object: dict[str, list[bool]] = {}
         self._struct_sizes: dict[str, int] = {}
         self._struct_members: dict[str, dict[str, int]] = {}
+        self._struct_member_sizes: dict[str, dict[str, int]] = {}
         self._struct_variables: dict[str, list[str]] = {}
         self._struct_addresses: dict[str, dict[str, list[int]]] = {}
         self._struct_declarations: dict[str, list[str]] = {}
@@ -215,6 +220,7 @@ class ElfInspector:
             self._symbols_is_object = data["sym_is_obj"]
             self._struct_sizes = data["struct_sizes"]
             self._struct_members = data["struct_members"]
+            self._struct_member_sizes = data["struct_member_sizes"]
             self._struct_variables = data["struct_vars"]
             self._struct_addresses = data["struct_addrs"]
             self._struct_declarations = data["struct_decls"]
@@ -244,6 +250,7 @@ class ElfInspector:
             "sym_is_obj": self._symbols_is_object,
             "struct_sizes": self._struct_sizes,
             "struct_members": self._struct_members,
+            "struct_member_sizes": self._struct_member_sizes,
             "struct_vars": self._struct_variables,
             "struct_addrs": self._struct_addresses,
             "struct_decls": self._struct_declarations,
@@ -270,8 +277,14 @@ class ElfInspector:
         except OSError:
             tmp.unlink(missing_ok=True)
 
-    def _collect_members(self, parent_die, struct_name: str, base_offset: int) -> None:
-        """Walk ``parent_die`` recording each ``DW_TAG_member``.
+    def _collect_members(
+        self,
+        parent_die,
+        struct_name: str,
+        base_offset: int,
+        member_types: dict[tuple[str, str], int],
+    ) -> None:
+        """Walk ``parent_die`` recording each ``DW_TAG_member``, and its type in ``member_types``.
 
         Anonymous members whose type is itself a struct or union are flattened:
         their inner members are folded into ``struct_name`` at the parent's
@@ -287,6 +300,9 @@ class ElfInspector:
             if m_name_attr:
                 m_name = m_name_attr.value.decode(errors="ignore")
                 self._struct_members[struct_name][m_name] = full_loc
+                if "DW_AT_type" in child.attributes:
+                    type_offset = child.attributes["DW_AT_type"].value + child.cu.cu_offset
+                    member_types[(struct_name, m_name)] = type_offset
                 continue
 
             # Anonymous member: descend into its type if it's a struct/union.
@@ -297,7 +313,7 @@ class ElfInspector:
             except Exception:
                 continue
             if type_die.tag in ("DW_TAG_structure_type", "DW_TAG_union_type"):
-                self._collect_members(type_die, struct_name, full_loc)
+                self._collect_members(type_die, struct_name, full_loc, member_types)
 
     @staticmethod
     def _member_location(member) -> int:
@@ -422,6 +438,7 @@ class ElfInspector:
             dwarf = elf.get_dwarf_info()
             offset_to_struct: dict[int, str] = {}
             pending_vars: list[tuple[str, int, int | None, bool]] = []
+            member_types: dict[tuple[str, str], int] = {}
             graph = _TypeGraph()
 
             for CU in dwarf.iter_CUs():
@@ -436,6 +453,9 @@ class ElfInspector:
                     elif die.tag in _ALIAS_TAGS and "DW_AT_type" in die.attributes:
                         target = die.attributes["DW_AT_type"].value + cu_offset
                         graph.types[die.offset] = ("alias", target)
+                    elif die.tag in _SCALAR_TAGS and "DW_AT_byte_size" in die.attributes:
+                        size = die.attributes["DW_AT_byte_size"].value
+                        graph.types[die.offset] = ("scalar", size)
 
                     if die.tag == "DW_TAG_structure_type":
                         name_attr = die.attributes.get("DW_AT_name")
@@ -453,7 +473,7 @@ class ElfInspector:
                             self._struct_sizes[struct_name] = size_attr.value
 
                         self._struct_members.setdefault(struct_name, {})
-                        self._collect_members(die, struct_name, base_offset=0)
+                        self._collect_members(die, struct_name, 0, member_types)
 
                     elif die.tag == "DW_TAG_variable":
                         # The definition of an object declared extern keeps
@@ -487,6 +507,10 @@ class ElfInspector:
                         if low_pc and low_pc.value and site is not None:
                             # Thumb code pointers carry bit 0 set.
                             self._function_sites[low_pc.value & ~1] = site
+
+            for (struct_name, member), type_offset in member_types.items():
+                if size := graph.size(type_offset):
+                    self._struct_member_sizes.setdefault(struct_name, {})[member] = size
 
             # Variable-to-struct resolution is deferred to a second loop over
             # pending_vars because DWARF type references may point forward in the
@@ -561,6 +585,17 @@ class ElfInspector:
         if member_name not in self._struct_members[struct_name]:
             raise LookupError(f"Member '{member_name}' not found in struct '{struct_name}'.")
         return self._struct_members[struct_name][member_name]
+
+    def get_struct_member_size(self, struct_name: str, member_name: str) -> int:
+        """
+        Returns the byte size of a named member within a named struct.
+
+        Raises LookupError if the member or the size of its type is not found.
+        """
+        try:
+            return self._struct_member_sizes[struct_name][member_name]
+        except KeyError as e:
+            raise LookupError(f"Size of '{struct_name}.{member_name}' not found.") from e
 
     def get_struct_size(self, struct_name: str) -> int:
         """

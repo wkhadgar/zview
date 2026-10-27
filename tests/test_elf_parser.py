@@ -36,6 +36,12 @@ def test_struct_member_offsets(parser):
     assert val_offset == 100
 
 
+def test_struct_member_sizes_follow_the_typedefs(parser):
+    """uint16_t and int8_t resolve to their base types, inside an anonymous union too."""
+    assert parser.get_struct_member_size("_thread_base", "user_options") == 2
+    assert parser.get_struct_member_size("_thread_base", "prio") == 1
+
+
 def test_struct_size(parser):
     size = parser.get_struct_size("k_thread")
     assert size == 192

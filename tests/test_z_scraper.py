@@ -647,6 +647,19 @@ def test_thread_metadata_bytes_come_in_one_read(elf_path):
     assert (meta["user_options"], meta["priority"], meta["state"]) == (0x7F, 0x7F, 0x7F)
 
 
+def test_user_options_is_read_at_its_width(elf_path):
+    """user_options is a uint16_t from v4.4.0, and K_SSE_REGS is its bit 15."""
+    scraper, _ = _meta_scraper(elf_path)
+    thread = ThreadInfo(address=0x2000, stack_start=0, stack_size=0, name="t", runtime=None)
+    with patch("zview.kernel.threads.walk_thread_list", return_value={"t": thread}):
+        scraper.discover()
+    scraper._m_scraper.read8 = lambda at, amount=1: [0x01, 0x80, 0xFF, 0x00, 0x02][:amount]
+
+    meta = scraper.groups["threads"]._read_meta(scraper._session(), thread)
+
+    assert (meta["user_options"], meta["priority"], meta["state"]) == (0x8001, -1, 0x02)
+
+
 def test_the_entry_pointer_is_read_once_per_thread(elf_path):
     scraper, reads = _meta_scraper(elf_path)
     thread = ThreadInfo(address=0x2000, stack_start=0, stack_size=0, name="t", runtime=None)

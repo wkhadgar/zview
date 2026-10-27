@@ -64,6 +64,24 @@ def resolve_offset(elf: ElfInspector, candidates: Sequence[MemberPath]) -> int |
     return None
 
 
+def resolve_size(elf: ElfInspector, candidates: Sequence[MemberPath]) -> int | None:
+    """
+    Return the byte size of the member the first resolving candidate path ends at.
+
+    Returns ``None`` when no candidate resolves, or its member has no known size.
+    """
+    for path in candidates:
+        if resolve_offset(elf, (path,)) is None:
+            continue
+        struct_name, member = path[-1]
+        try:
+            return elf.get_struct_member_size(struct_name, member)
+        except LookupError:
+            return None
+
+    return None
+
+
 def resolve_fields(elf: ElfInspector, fields: FieldTable) -> dict[str, int] | None:
     """
     Resolve a whole field group.

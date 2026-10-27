@@ -14,6 +14,7 @@ from zview.kernel.compat import (
     CONFIG_STACK_SENTINEL,
     FieldTable,
     has_kconfig,
+    resolve_size,
 )
 from zview.kernel.group import BrokenFrame, Group
 from zview.kernel.layout import KernelLayout
@@ -282,6 +283,9 @@ class Threads(Group):
         self._symbols: dict[int, str | None] = {}
         self._cpu_usage_address = 0
         self._usage_stamps: tuple[int, ...] = ()
+        # The metadata members wider than a byte, and the byte order they are in.
+        self._meta_sizes: dict[str, int] = {}
+        self._byteorder: Literal["little", "big"] = "little"
 
     @staticmethod
     def _counts_usage(session: Session) -> bool:
@@ -318,6 +322,11 @@ class Threads(Group):
                 )
 
         endianess: Literal["little", "big"] = "little" if elf._little_endian else "big"
+        # user_options is a uint8_t through v4.3.0 and a uint16_t from v4.4.0.
+        options_size = resolve_size(elf, THREAD_OPTIONS_FIELDS["thread_user_options"])
+        self._meta_sizes = {"user_options": options_size or 1}
+        self._byteorder = endianess
+
         has_names = layout.thread_name is not None
         if layout.threads_head is not None:
             threads = walk_thread_list(
@@ -507,7 +516,7 @@ class Threads(Group):
         return meta
 
     def _read_meta_span(self, session: Session, thread: ThreadInfo) -> dict:
-        """The metadata bytes in one read: they sit within a few bytes of each other."""
+        """The metadata members in one read: they sit within a few bytes of each other."""
         offsets = {
             name: offset
             for name, attribute in self._META_BYTES
@@ -516,10 +525,15 @@ class Threads(Group):
         if not offsets:
             return {}
 
+        sizes = {name: self._meta_sizes.get(name, 1) for name in offsets}
         base = min(offsets.values())
-        raw = session.scraper.read8(thread.address + base, max(offsets.values()) - base + 1)
+        end = max(offsets[name] + sizes[name] for name in offsets)
+        raw = bytes(session.scraper.read8(thread.address + base, end - base))
 
-        values = {name: raw[offset - base] for name, offset in offsets.items()}
+        values = {
+            name: int.from_bytes(raw[offset - base : offset - base + sizes[name]], self._byteorder)
+            for name, offset in offsets.items()
+        }
         if "priority" in values:
             values["priority"] = _signed_priority(values["priority"])
         return values
