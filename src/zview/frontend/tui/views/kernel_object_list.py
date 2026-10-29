@@ -221,7 +221,7 @@ class KernelObjectListView(BaseStateView):
 
     def _empty_message(self, name: str) -> str:
         if not self.controller.has_kernel_objects():
-            return " No kernel object group is read, g picks the groups."
+            return " No kernel object group is read, / edits the patterns."
 
         return f" No {name} objects."
 

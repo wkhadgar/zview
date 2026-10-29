@@ -193,7 +193,7 @@ class ThreadListView(BaseStateView):
                 "You may try to refresh (r) the thread list.",
             )
             if not self.controller.selection.reads_group("threads"):
-                no_threads_strs = ("Threads are not read.", "g picks the groups.")
+                no_threads_strs = ("Threads are not read.", "/ edits the patterns.")
             for i, _str in enumerate(no_threads_strs):
                 stdscr.addstr(height // 2 + i, width // 2 - len(_str) // 2, _str)
 

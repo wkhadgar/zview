@@ -77,8 +77,6 @@ class SpecialCode:
     PATTERNS = ord("/")
     WIDER = ord("+")
     NARROWER = ord("-")
-    GROUPS = ord("g")
-    SPACE = ord(" ")
     BACKSPACE = ord("\b")
     DELETE = 127
 

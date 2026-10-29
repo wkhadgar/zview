@@ -173,11 +173,10 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
 * **x**: Mute the selected thread or object. It stays listed, dimmed, with its last values, and is no longer read. A muted thread's usage counter still is, since each CPU share is of every thread's cycles.
 * **/**: Edit the row patterns on the line `--match` takes: `GLOB`, `GROUP:GLOB`, or `!GLOB` and `GROUP:!GLOB` to exclude, comma separated. **ENTER** applies the line, **Esc** drops it.
 * **+ / -**: In the thread views, sum the CPU and load shares over twice or half the polls, from 1 up to 64. The bottom bar shows the count above 1.
-* **g**: Pick the groups read (threads, heaps, semaphores and the rest) from a checklist, where **Space** toggles one.
 * **r**: Soft refresh, re-walks the kernel thread list and clears runtime baselines.
 * **R**: Full reload, tears down the polling thread, disconnects the probe, re-parses the ELF, reconnects, checks the target runs that ELF, and resumes. After a rebuild, press it once the target runs the new image. It also unmutes every row.
 
-The bottom bar names the groups turned off, the patterns and the muted rows. On a replay, **x**, **/** and **g** change what is shown, not what is read.
+The bottom bar names the groups turned off, the patterns and the muted rows. On a replay, **x** and **/** change what is shown, not what is read.
 
 ### See your threads
 
@@ -201,7 +200,7 @@ Press **k** for every statically declared `k_sem`, `k_mutex`, `k_msgq`, `k_mem_s
 `k_heap` and `k_work_q`: semaphore counts with their waiter lists, mutexes with the thread
 that holds each lock, queues with their fill level, slabs and heaps with what they have
 handed out, and work queues with the work waiting to run. The aggregate row on top sums
-the objects listed, and takes a type's own wording when **g** leaves only that type read.
+the objects listed, and takes a type's own wording when **/** leaves only that type read.
 
 ![Kernel objects list](docs/assets/kernel_objects.gif)
 
