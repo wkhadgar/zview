@@ -107,12 +107,11 @@ ZView is invoked through one of four commands. Bare `zview` with no command runs
 | `--frequency` | `live`, `record`, `dump` | SWD clock of `-r pyocd` and `-r jlink`, in Hz or with a `k` or `M` suffix (default: `4M` on pyocd, the J-Link's own on jlink). Lower it if long wires give read errors. |
 | `--period` | `live`, `record`, `dump` | Minimum polling period in seconds (default: `0.10`). A frame that takes longer is followed by the next one right away. |
 | `--usage-window` | `live`, `replay` | Sum the CPU and load shares over the last N polls, up to 64 (default: `1`, each poll alone). |
-| `--only` | `live`, `record`, `dump` | Read only these groups, comma separated, such as `threads,mutexes`. The groups are `threads`, `heaps`, `semaphores`, `mutexes`, `msgqs`, `mem_slabs` and `workqs`. |
 | `--match` | `live`, `record`, `dump` | Read only the rows this line matches, the line **/** edits (default: `*`). `--match '*, heaps:!*'` reads everything but the heaps. |
 
 Patterns follow two rules. Excludes always win: `threads:worker*, !worker_3` skips `worker_3`. A group's own includes replace the bare ones: `*, heaps:min_*` narrows only the heaps.
 
-Reading fewer rows makes each frame shorter. A recording keeps the selection it was made with, and a replay reads the same rows. On `dump -i` the two flags filter only what is shown. A pattern that matches no row is reported, in the message log on `live` and on stderr otherwise.
+The groups are `threads`, `heaps`, `semaphores`, `mutexes`, `msgqs`, `mem_slabs` and `workqs`. Reading fewer rows makes each frame shorter. A recording keeps the selection it was made with, and a replay reads the same rows. On `dump -i` the line filters only what is shown. A pattern that matches no row is reported, in the message log on `live` and on stderr otherwise.
 
 ### Command-specific arguments
 
