@@ -182,6 +182,11 @@ def register_commands(
         help="Drain the recording as fast as possible instead of honoring its wall-clock cadence.",
     )
     _add_usage_window(p_replay)
+    p_replay.add_argument(
+        "--match",
+        metavar="LINE",
+        help="Show only the rows this line matches, as / edits it (default: the recording's line).",
+    )
 
     p_dump = _sub("dump", "Capture a single polling frame and exit (no TUI).")
     _add_elf(p_dump)
@@ -373,11 +378,10 @@ def _do_live(args) -> int:
         scraper = ZScraper(backend, args.elf_file)
         selection = _selection(args)
         scraper.check_selection(selection)
-        scraper.selection = selection
         scraper.groups["threads"].usage_window = args.usage_window
         for notice in scraper.absent_features():
             print(notice, file=sys.stderr)
-        curses.wrapper(tui_run, scraper, args.period)
+        curses.wrapper(tui_run, scraper, args.period, selection)
     return 0
 
 
@@ -406,8 +410,10 @@ def _do_replay(args) -> int:
     with backend:
         scraper = ZScraper(backend, args.elf_file)
         scraper.groups["threads"].usage_window = args.usage_window
+        selection = scraper.selection if args.match is None else _selection(args)
+        scraper.check_selection(selection)
         # Pacing comes from the recording; the polling-thread sleep is just a floor.
-        curses.wrapper(tui_run, scraper, 0.05)
+        curses.wrapper(tui_run, scraper, 0.05, selection)
     return 0
 
 

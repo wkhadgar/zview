@@ -101,20 +101,21 @@ class ZView:
     and updates the display with real-time thread statistics from a connected MCU.
     """
 
-    def __init__(self, scraper: ZScraper, stdscr):
+    def __init__(self, scraper: ZScraper, stdscr, selection: Selection):
         """
         Initializes the ZView application.
 
         Args:
             stdscr: The main curses window object provided by curses.wrapper.
+            selection: What the lists show, and all a live target reads.
         """
         self.min_dimensions = (14, 85)
         self.stdscr: curses.window = stdscr
         self.scraper: ZScraper = scraper
         self.running = True
         self.frames = FrameHistory()
-        # What the lists show: the session's selection, then what the keys change.
-        self.selection: Selection = scraper.selection
+        # What the lists show: the launch's selection, then what the keys change.
+        self.select(selection)
         self.status_message: str = ""
         # One entry per reported message, newest last.
         self.messages: deque[LogEntry] = deque(maxlen=_MESSAGE_LOG_SIZE)
@@ -531,7 +532,7 @@ class ZView:
             self.scraper.discover()
         except RuntimeError as e:
             self.report(f"Unable to update available threads [{e}]")
-        for notice in self.scraper.unmatched(self.scraper.selection):
+        for notice in self.scraper.unmatched(self.selection):
             self.report(notice)
 
         self.scraper.start_polling_thread(self.data_queue, self.stop_event, inspection_period)
@@ -550,7 +551,7 @@ class ZView:
             time.sleep(0.01)
 
 
-def tui_run(stdscr, scraper: ZScraper, inspection_period):
+def tui_run(stdscr, scraper: ZScraper, inspection_period, selection: Selection):
     """
     The entry point for the curses application.
 
@@ -561,8 +562,9 @@ def tui_run(stdscr, scraper: ZScraper, inspection_period):
         :param stdscr: Standard screen window object provided by `curses.wrapper`.
         :param scraper: ZScraper instance for data gathering.
         :param inspection_period: Period for inspection, in seconds.
+        :param selection: What the lists show, and all a live target reads.
     """
-    app = ZView(scraper, stdscr)
+    app = ZView(scraper, stdscr, selection)
     for notice in scraper.absent_features():
         app.report(notice)
 
