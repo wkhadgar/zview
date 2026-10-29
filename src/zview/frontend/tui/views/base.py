@@ -9,7 +9,7 @@ from abc import abstractmethod
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 
-from zview.selection import Selection
+from zview.selection import EVERY_ROW, Selection
 
 
 class Keybind(NamedTuple):
@@ -188,7 +188,10 @@ class BaseStateView:
             note
             for shown, note in (
                 (off, f"Off: {', '.join(off)}"),
-                (selection.include or selection.exclude, f"Patterns: {selection.pattern_line()}"),
+                (
+                    selection.include != EVERY_ROW or selection.exclude,
+                    f"Patterns: {selection.pattern_line()}",
+                ),
                 (muted, f"{muted} muted"),
                 (reads.reads_group("threads") and window > 1, f"CPU over {window} polls"),
             )

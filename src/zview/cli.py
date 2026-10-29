@@ -116,6 +116,7 @@ def _groups(value: str) -> frozenset[str]:
 
 
 def _add_selection(parser: argparse.ArgumentParser) -> None:
+    every_row = Selection().pattern_line()
     parser.add_argument(
         "--only",
         type=_groups,
@@ -125,10 +126,10 @@ def _add_selection(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--match",
-        default="",
+        default=every_row,
         metavar="LINE",
-        help="Read only the rows this line matches, as / edits it: GLOB, GROUP:GLOB within one "
-        "group, or !GLOB to skip, comma-separated.",
+        help="Read only the rows this line matches, as / edits it, such as '*, heaps:!*' for "
+        f"all but the heaps (default: {every_row}).",
     )
 
 

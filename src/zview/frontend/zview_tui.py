@@ -42,7 +42,11 @@ from zview.selection import Selection
 _GLOBAL_KEYBINDINGS: list[Keybind] = [
     Keybind("?", "Help", "Toggle this help overlay"),
     Keybind("m", "Messages", "Toggle the message log"),
-    Keybind("/", "Patterns", "Edit the row patterns: GLOB, GROUP:GLOB, !GLOB, comma separated"),
+    Keybind(
+        "/",
+        "Patterns",
+        "Edit the row patterns: GLOB, GROUP:GLOB, !GLOB, GROUP:!GLOB, comma separated",
+    ),
     Keybind("g", "Groups", "Pick the groups read"),
     Keybind("R", "Reload", "Re-parse the ELF and reattach the probe (full cycle)"),
     Keybind("q", "Quit", "Exit ZView"),
@@ -464,9 +468,12 @@ class ZView:
                 self._prompt.edit(key)
 
     def _select_patterns(self, line: str) -> None:
-        """Select the patterns of ``line``, unless it names a group the session lacks."""
-        selection = self.selection.with_pattern_line(line)
+        """
+        Select the patterns of ``line``, unless it is malformed or names a group
+        the session lacks.
+        """
         try:
+            selection = self.selection.with_pattern_line(line)
             self.scraper.check_selection(selection)
         except ValueError as e:
             self.report(f"Error: {e}")

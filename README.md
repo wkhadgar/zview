@@ -108,7 +108,9 @@ ZView is invoked through one of four commands. Bare `zview` with no command runs
 | `--period` | `live`, `record`, `dump` | Minimum polling period in seconds (default: `0.10`). A frame that takes longer is followed by the next one right away. |
 | `--usage-window` | `live`, `replay` | Sum the CPU and load shares over the last N polls, up to 64 (default: `1`, each poll alone). |
 | `--only` | `live`, `record`, `dump` | Read only these groups, comma separated, such as `threads,mutexes`. The groups are `threads`, `heaps`, `semaphores`, `mutexes`, `msgqs`, `mem_slabs` and `workqs`. |
-| `--match` | `live`, `record`, `dump` | Read only the rows this line matches, the same line **/** edits: `GLOB`, `GROUP:GLOB` within one group, or `!GLOB` to skip, comma separated, such as `--match 'threads:gate*, !*_old'`. |
+| `--match` | `live`, `record`, `dump` | Read only the rows this line matches, the line **/** edits (default: `*`). `--match '*, heaps:!*'` reads everything but the heaps. |
+
+Patterns follow two rules. Excludes always win: `threads:worker*, !worker_3` skips `worker_3`. A group's own includes replace the bare ones: `*, heaps:min_*` narrows only the heaps.
 
 Reading fewer rows makes each frame shorter. A recording keeps the selection it was made with, and a replay reads the same rows. On `dump -i` the two flags filter only what is shown. A pattern that matches no row is reported, in the message log on `live` and on stderr otherwise.
 
@@ -170,7 +172,7 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
 * **S / I**: Sort the data and invert the sorting order.
 * **k**: Access the **Kernel Objects** view listing semaphores, mutexes, message queues, memory slabs, heaps and work queues (hit k again to return).
 * **x**: Mute the selected thread or object. It stays listed, dimmed, with its last values, and is no longer read. A muted thread's usage counter still is, since each CPU share is of every thread's cycles.
-* **/**: Edit the row patterns on the line `--match` takes: `GLOB`, `GROUP:GLOB`, or `!GLOB` to exclude, comma separated. **ENTER** applies the line, **Esc** drops it.
+* **/**: Edit the row patterns on the line `--match` takes: `GLOB`, `GROUP:GLOB`, or `!GLOB` and `GROUP:!GLOB` to exclude, comma separated. **ENTER** applies the line, **Esc** drops it.
 * **+ / -**: In the thread views, sum the CPU and load shares over twice or half the polls, from 1 up to 64. The bottom bar shows the count above 1.
 * **g**: Pick the groups read (threads, heaps, semaphores and the rest) from a checklist, where **Space** toggles one.
 * **r**: Soft refresh, re-walks the kernel thread list and clears runtime baselines.

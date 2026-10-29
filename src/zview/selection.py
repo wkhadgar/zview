@@ -7,11 +7,23 @@
 from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
 
+Pattern = tuple[str | None, str]
 
-def _parse_pattern(value: str) -> tuple[str | None, str]:
-    """``GROUP:GLOB`` for one group, or a bare ``GLOB`` for every group."""
+# The patterns of every row of every group, read when no line is given.
+EVERY_ROW: tuple[Pattern, ...] = ((None, "*"),)
+
+
+def _parse_pattern(value: str) -> tuple[str | None, str, bool]:
+    """
+    ``(group, glob, excluded)`` of a bare ``GLOB`` for every group or of
+    ``GROUP:GLOB`` for one, a ``!`` before the glob excluding it. Raises
+    ``ValueError`` on ``!GROUP:GLOB``.
+    """
     group, sep, glob = value.partition(":")
-    return (group, glob) if sep else (None, value)
+    scope, glob = (group, glob) if sep else (None, value)
+    if scope is not None and scope.startswith("!"):
+        raise ValueError(f"Write {scope[1:]}:!{glob} to exclude within one group, not {value}.")
+    return scope, glob.removeprefix("!"), glob.startswith("!")
 
 
 def _shown(scope: str | None, glob: str) -> str:
@@ -25,42 +37,55 @@ class Selection:
     The groups a frame reads, narrowed by name.
 
     A row is read when its group is in ``groups`` and not in ``skipped``, its
-    name matches an ``include`` pattern that applies to the group or none
-    applies, it matches no ``exclude`` pattern that applies, and it is not
-    ``muted``. Patterns are ``(group, glob)`` pairs, and a pattern with no
-    group applies to every group. ``muted`` holds exact ``(group, name)``
-    pairs, since a name such as ``z_idle_threads[0]`` reads as a glob.
+    name matches an ``include`` pattern that applies to the group, it matches
+    no ``exclude`` pattern that applies, and it is not ``muted``. Patterns are
+    ``(group, glob)`` pairs, and a pattern with no group is for every group:
+    a group's own includes replace those, while every exclude for it applies.
+    A group no include applies to, or that excludes ``*``, is not read at all.
+    ``muted`` holds exact ``(group, name)`` pairs, since a name such as
+    ``z_idle_threads[0]`` reads as a glob.
     """
 
     groups: frozenset[str] | None = None
     skipped: frozenset[str] = frozenset()
-    include: tuple[tuple[str | None, str], ...] = ()
-    exclude: tuple[tuple[str | None, str], ...] = ()
+    include: tuple[Pattern, ...] = EVERY_ROW
+    exclude: tuple[Pattern, ...] = ()
     muted: frozenset[tuple[str, str]] = frozenset()
 
-    def reads_group(self, group: str) -> bool:
+    def _listed(self, group: str) -> bool:
+        """The group is in ``groups`` and not in ``skipped``."""
         return (self.groups is None or group in self.groups) and group not in self.skipped
+
+    def _globs(self, group: str) -> tuple[list[str], list[str]]:
+        """The include globs and the exclude globs that apply to ``group``."""
+        own = [glob for scope, glob in self.include if scope == group]
+        includes = own or [glob for scope, glob in self.include if scope is None]
+        return includes, [glob for scope, glob in self.exclude if scope in (None, group)]
+
+    def reads_group(self, group: str) -> bool:
+        includes, excludes = self._globs(group)
+        return self._listed(group) and bool(includes) and "*" not in excludes
 
     def reads(self, group: str, name: str) -> bool:
         return self.matches(group, name) and (group, name) not in self.muted
 
     def matches(self, group: str, name: str) -> bool:
         """The row's group is read and its name passes the patterns, muted or not."""
-        if not self.reads_group(group):
-            return False
-        includes = [pattern for scope, pattern in self.include if scope in (None, group)]
-        if includes and not any(fnmatchcase(name, pattern) for pattern in includes):
-            return False
-        return not any(
-            fnmatchcase(name, pattern) for scope, pattern in self.exclude if scope in (None, group)
+        includes, excludes = self._globs(group)
+        return (
+            self._listed(group)
+            and any(fnmatchcase(name, glob) for glob in includes)
+            and not any(fnmatchcase(name, glob) for glob in excludes)
         )
 
     def unmatched(self, names: dict[str, list[str]]) -> tuple[str, ...]:
         """
         One notice per pattern or muted row that names no row in ``names``,
-        each group's row names, among the groups this selection reads.
+        each group's row names, among the groups in ``groups`` and not in
+        ``skipped``, after one when the patterns read none of those groups.
         """
-        read = {group: rows for group, rows in names.items() if self.reads_group(group)}
+        read = {group: rows for group, rows in names.items() if self._listed(group)}
+        none_read = not any(self.reads_group(group) for group in read)
 
         def matches(scope: str | None, glob: str) -> bool:
             return any(
@@ -70,7 +95,8 @@ class Selection:
                 for name in rows
             )
 
-        notices = [
+        notices = ["Warning: the patterns read no group"] if none_read else []
+        notices += [
             f"Warning: {word} pattern {_shown(scope, glob)} matches no row"
             for word, patterns in (("include", self.include), ("exclude", self.exclude))
             for scope, glob in patterns
@@ -88,17 +114,20 @@ class Selection:
         return ", ".join(
             [
                 *(_shown(scope, glob) for scope, glob in self.include),
-                *(f"!{_shown(scope, glob)}" for scope, glob in self.exclude),
+                *(_shown(scope, f"!{glob}") for scope, glob in self.exclude),
             ]
         )
 
     def with_pattern_line(self, line: str) -> "Selection":
-        """This selection with the patterns of ``line``, as ``pattern_line`` writes them."""
-        patterns = [pattern.strip() for pattern in line.split(",") if pattern.strip()]
+        """
+        This selection with the patterns of ``line``, as ``pattern_line``
+        writes them. Raises ``ValueError`` on ``!GROUP:GLOB``.
+        """
+        patterns = [_parse_pattern(p.strip()) for p in line.split(",") if p.strip()]
         return replace(
             self,
-            include=tuple(_parse_pattern(p) for p in patterns if not p.startswith("!")),
-            exclude=tuple(_parse_pattern(p[1:]) for p in patterns if p.startswith("!")),
+            include=tuple((scope, glob) for scope, glob, excluded in patterns if not excluded),
+            exclude=tuple((scope, glob) for scope, glob, excluded in patterns if excluded),
         )
 
     def to_header(self) -> dict:
@@ -113,13 +142,16 @@ class Selection:
 
     @classmethod
     def from_header(cls, header: dict | None) -> "Selection":
-        """The selection a recording header holds. A header without one read everything."""
+        """
+        The selection a recording header holds. A header without one, or
+        without includes, read every row, which ``*`` names.
+        """
         if not header:
             return cls()
         return cls(
             groups=None if header.get("groups") is None else frozenset(header["groups"]),
             skipped=frozenset(header.get("skipped", ())),
-            include=tuple((scope, pattern) for scope, pattern in header.get("include", ())),
+            include=tuple((scope, pattern) for scope, pattern in header.get("include", EVERY_ROW)),
             exclude=tuple((scope, pattern) for scope, pattern in header.get("exclude", ())),
             muted=frozenset((group, name) for group, name in header.get("muted", ())),
         )

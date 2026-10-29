@@ -351,6 +351,7 @@ def test_escape_drops_the_pattern_line_and_enter_selects_it(app):
         *map(ord, "idle"),
         SpecialCode.ESCAPE,
         ord("/"),
+        SpecialCode.DELETE,
         *map(ord, "maix"),
         SpecialCode.DELETE,
         ord("n"),
