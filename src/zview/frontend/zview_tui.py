@@ -393,6 +393,11 @@ class ZView:
         muted = self.selection.muted ^ {(group, name)}
         self.select(dataclasses.replace(self.selection, muted=muted))
 
+    def unmute(self, group: str, name: str) -> None:
+        """Read the row again, if it is muted, as the detail view opening on it tracks it."""
+        if (group, name) in self.selection.muted:
+            self.toggle_mute(group, name)
+
     @property
     def usage_window(self) -> int:
         """
@@ -453,6 +458,8 @@ class ZView:
         view = self.views[new_state]
         if not view.can_open():
             return
+        if row := view.row():
+            self.unmute(*row)
 
         # Replay backends cannot absorb polling-shape mutations without drifting
         # against the recording. Views still transition; the display filters

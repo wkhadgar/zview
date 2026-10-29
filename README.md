@@ -170,7 +170,7 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
 * **ENTER**: Get details for the selected thread or kernel object (hit ENTER again, or **Esc**, to return).
 * **S / I**: Sort the data and invert the sorting order.
 * **k**: Access the **Kernel Objects** view listing semaphores, mutexes, message queues, memory slabs, heaps and work queues (hit k again to return).
-* **x**: Mute the selected thread or object. It stays listed, dimmed, with its last values, and is no longer read. A muted thread's usage counter still is, since each CPU share is of every thread's cycles.
+* **x**: Mute the selected thread or object. It stays listed, dimmed, with its last values, and is no longer read. A muted thread's usage counter still is, since each CPU share is of every thread's cycles. **ENTER** on a muted row unmutes it, so its detail view is tracked.
 * **/**: Edit the row patterns on the line `--match` takes: `GLOB`, `GROUP:GLOB`, or `!GLOB` and `GROUP:!GLOB` to exclude, comma separated. **ENTER** applies the line, **Esc** drops it.
 * **+ / -**: In the thread views, sum the CPU and load shares over twice or half the polls, from 1 up to 64. The bottom bar shows the count above 1.
 * **r**: Soft refresh, re-walks the kernel thread list and clears runtime baselines.

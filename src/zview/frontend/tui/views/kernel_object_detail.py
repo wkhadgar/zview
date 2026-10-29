@@ -78,6 +78,10 @@ class KernelObjectDetailView(BaseStateView):
     def reads(self) -> Selection:
         return KernelObjectListView.OBJECTS
 
+    def row(self) -> tuple[str, str] | None:
+        obj = self._target()
+        return None if obj is None else (self.kind.key, obj.name)
+
     def _target(self) -> Any:
         """The detailed object's latest info, as last read if muted, or ``None`` once it is gone."""
         if self.controller.detailing is None:
@@ -192,6 +196,9 @@ class ObjectDetailView(BaseStateView):
 
     def reads(self) -> Selection:
         return self._view().reads()
+
+    def row(self) -> tuple[str, str] | None:
+        return self._view().row()
 
     def opened(self) -> None:
         self._view().opened()

@@ -73,6 +73,9 @@ class ThreadDetailView(BaseStateView):
         name = self.controller.detailing_thread
         return name is not None and name in self.controller.scraper.rows["threads"]
 
+    def row(self) -> tuple[str, str] | None:
+        return "threads", self.controller.detailing_thread
+
     def reads(self) -> Selection:
         # Every thread's cycles are still read, so the view names only the stack to scan.
         return Selection(

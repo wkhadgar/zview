@@ -162,6 +162,10 @@ class BaseStateView:
     def can_open(self) -> bool:
         return True
 
+    def row(self) -> tuple[str, str] | None:
+        """The ``(group, name)`` of the one row the view shows, if it shows one."""
+        return None
+
     def opened(self) -> None:  # noqa: B027
         """Called as the view opens on a live target."""
 

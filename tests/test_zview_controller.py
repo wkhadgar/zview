@@ -330,6 +330,30 @@ def test_a_muted_object_opens_on_its_last_read(app):
     assert SemaphoreDetailView(app, ZViewTUIAttributes.create_mono())._target() == sem
 
 
+def test_a_muted_threads_detail_reads_it_again_once_it_opens(app):
+    """It would otherwise sit on the last read, frozen. A thread gone keeps its mute."""
+    from zview.frontend.tui.views.base import ZViewTUIAttributes
+    from zview.frontend.tui.views.thread_list import ThreadListView
+
+    theme = ZViewTUIAttributes.create_mono()
+    app.views = {
+        ZViewState.THREAD_LIST_VIEW: ThreadListView(app, theme),
+        ZViewState.THREAD_DETAIL_VIEW: ThreadDetailView(app, theme),
+    }
+    app.scraper.rows = {"threads": {"worker": [1]}}
+    app.select(Selection(muted=frozenset({("threads", "worker"), ("threads", "gone")})))
+
+    app.detailing_thread = "gone"
+    app.transition_to(ZViewState.THREAD_DETAIL_VIEW)
+    assert app.state is ZViewState.THREAD_LIST_VIEW
+    assert ("threads", "gone") in app.selection.muted
+
+    app.detailing_thread = "worker"
+    app.transition_to(ZViewState.THREAD_DETAIL_VIEW)
+    assert app.state is ZViewState.THREAD_DETAIL_VIEW
+    assert app.selection.muted == frozenset({("threads", "gone")})
+
+
 def test_reload_onto_a_target_running_another_image_is_fatal(reloading_app, monkeypatch):
     def mismatch(scraper, elf_path):
         raise ImageMismatch("the target is not running this ELF")
