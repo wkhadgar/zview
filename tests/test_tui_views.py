@@ -24,6 +24,7 @@ def theme() -> ZViewTUIAttributes:
 def controller() -> MagicMock:
     c = MagicMock()
     c.scraper.has_heaps = True
+    c.usage_window = 1
     return c
 
 
@@ -39,7 +40,7 @@ def test_thread_list_footer_truncates_at_max_with_ellipsis(controller, theme):
 
 def test_thread_detail_footer_minimal(controller, theme):
     view = ThreadDetailView(controller, theme)
-    assert view._footer_hint() == "Help: ? | Back: <Enter> "
+    assert view._footer_hint() == "Help: ? | Back: <Enter> | Window: +/- "
 
 
 def test_heap_detail_footer_matches_the_other_object_views(controller, theme):
@@ -419,6 +420,19 @@ def test_the_bottom_bar_names_the_patterns_and_the_rows_muted_in_its_view(contro
     controller.scraper.available = {"threads": True, "semaphores": True}
     controller.selection = Selection(groups=frozenset())
     assert view._bar_count("Threads: 0-0 of 0", 80) == " Threads: 0-0 of 0 | Off: threads "
+
+
+def test_the_bottom_bar_names_the_polls_the_cpu_shares_are_summed_over(controller, theme):
+    """One poll alone is the default, and says nothing."""
+    from zview.selection import Selection
+
+    controller.selection = Selection()
+    controller.scraper.available = {}
+    view = ThreadListView(controller, theme)
+    assert view._bar_count("Threads: 1-2 of 2", 80) == " Threads: 1-2 of 2 "
+
+    controller.usage_window = 4
+    assert view._bar_count("Threads: 1-2 of 2", 80) == " Threads: 1-2 of 2 | CPU over 4 polls "
 
 
 def test_the_all_threads_row_sums_only_the_threads_read(controller, theme):

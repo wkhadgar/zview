@@ -7,6 +7,7 @@ import glob
 
 from zview.backend.base import ThreadInfo
 from zview.frontend.tui.views.base import (
+    USAGE_WINDOW_KEYS,
     Any,
     BaseStateView,
     Keybind,
@@ -109,7 +110,10 @@ class ThreadDetailView(BaseStateView):
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()
 
-        self._render_frame(stdscr, self._footer_hint(), height, width)
+        hint = self._footer_hint()
+        self._render_frame(stdscr, hint, height, width)
+        bar = self._bar_count(f"Thread: {self.controller.detailing_thread}", width - len(hint))
+        stdscr.addstr(height - 1, 0, bar, self._frame_attr)
 
         threads = listed_threads(self.controller)
         widths = compute_flex_widths(list(self._scheme.values()), width, threads)
@@ -183,11 +187,13 @@ class ThreadDetailView(BaseStateView):
         stdscr.refresh()
 
     def keybindings(self) -> list[Keybind]:
-        return [Keybind("<Enter>", "Back", "Return to the thread list")]
+        return [Keybind("<Enter>", "Back", "Return to the thread list"), USAGE_WINDOW_KEYS]
 
     def handle_input(self, key: int) -> ZViewState | None:
         if key in (curses.KEY_ENTER, SpecialCode.NEWLINE, SpecialCode.RETURN):
             return ZViewState.THREAD_LIST_VIEW
+        elif key in (SpecialCode.WIDER, SpecialCode.NARROWER):
+            self.controller.scale_usage_window(key == SpecialCode.WIDER)
         elif key == SpecialCode.QUIT:
             self.controller.running = False
         return None

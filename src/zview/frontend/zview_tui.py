@@ -35,6 +35,7 @@ from zview.frontend.tui.views.thread_detail import ThreadDetailView
 from zview.frontend.tui.views.thread_list import ThreadListView
 from zview.frontend.tui.views.workq_detail import WorkqDetailView
 from zview.frontend.tui.widgets import PopupRow, TUILineEdit, TUIPopup
+from zview.kernel.threads import USAGE_WINDOW_MAX
 from zview.orchestrator import ZScraper
 from zview.selection import Selection
 
@@ -426,6 +427,21 @@ class ZView:
         """Mute the row, or unmute it if it is muted."""
         muted = self.selection.muted ^ {(group, name)}
         self.select(dataclasses.replace(self.selection, muted=muted))
+
+    @property
+    def usage_window(self) -> int:
+        """
+        The polls the CPU and load shares are summed over, 1 on a recording
+        from before the usage snapshot, whose shares are of each poll alone.
+        """
+        summed = "usage_snapshot" in self.scraper.parts
+        return self.scraper.groups["threads"].usage_window if summed else 1
+
+    def scale_usage_window(self, wider: bool) -> None:
+        """Double the polls the CPU and load shares are summed over, or halve them."""
+        threads = self.scraper.groups["threads"]
+        window = threads.usage_window * 2 if wider else threads.usage_window // 2
+        threads.usage_window = max(1, min(USAGE_WINDOW_MAX, window))
 
     def toggle_group(self, group: str) -> None:
         """Read the group, or stop reading it if it is read."""

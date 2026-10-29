@@ -106,6 +106,7 @@ ZView is invoked through one of four commands. Bare `zview` with no command runs
 | `-t, --runner-target` | `live`, `record`, `dump` | MCU descriptor for the chosen runner (see below). |
 | `--frequency` | `live`, `record`, `dump` | SWD clock of `-r pyocd` and `-r jlink`, in Hz or with a `k` or `M` suffix (default: `4M` on pyocd, the J-Link's own on jlink). Lower it if long wires give read errors. |
 | `--period` | `live`, `record`, `dump` | Minimum polling period in seconds (default: `0.10`). A frame that takes longer is followed by the next one right away. |
+| `--usage-window` | `live`, `replay` | Sum the CPU and load shares over the last N polls, up to 64 (default: `1`, each poll alone). |
 | `--only` | `live`, `record`, `dump` | Read only these groups, comma separated, such as `threads,mutexes`. The groups are `threads`, `heaps`, `semaphores`, `mutexes`, `msgqs`, `mem_slabs` and `workqs`. |
 | `--match` | `live`, `record`, `dump` | Read only the rows this line matches, the same line **/** edits: `GLOB`, `GROUP:GLOB` within one group, or `!GLOB` to skip, comma separated, such as `--match 'threads:gate*, !*_old'`. |
 
@@ -170,6 +171,7 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
 * **k**: Access the **Kernel Objects** view listing semaphores, mutexes, message queues, memory slabs, heaps and work queues (hit k again to return).
 * **x**: Mute the selected thread or object. It stays listed, dimmed, with its last values, and is no longer read. A muted thread's usage counter still is, since each CPU share is of every thread's cycles.
 * **/**: Edit the row patterns on the line `--match` takes: `GLOB`, `GROUP:GLOB`, or `!GLOB` to exclude, comma separated. **ENTER** applies the line, **Esc** drops it.
+* **+ / -**: In the thread views, sum the CPU and load shares over twice or half the polls, from 1 up to 64. The bottom bar shows the count above 1.
 * **g**: Pick the groups read (threads, heaps, semaphores and the rest) from a checklist, where **Space** toggles one.
 * **r**: Soft refresh, re-walks the kernel thread list and clears runtime baselines.
 * **R**: Full reload, tears down the polling thread, disconnects the probe, re-parses the ELF, reconnects, checks the target runs that ELF, and resumes. After a rebuild, press it once the target runs the new image. It also unmutes every row.
@@ -329,7 +331,7 @@ Only statically declared objects are listed. `K_SEM_DEFINE`, `K_MUTEX_DEFINE`, `
 
 ZView achieves a minimal footprint by avoiding on-target processing or UART/Shell output. It utilizes the debug probe's ability to read memory through the AHB-AP (a MEM-AP on the system bus) without halting the CPU. By parsing the ELF file, ZView identifies kernel object locations, performs analysis of stack watermarks, thread CPU usages, and executes a deterministic walk of physical heap chunks to map memory fragmentation.
 
-Every value is sampled at the polling period, so state that appears and disappears between two polls is never seen: a lock taken and released, a thread that starts and exits, an allocation made and freed. The high-water marks are the exception, since a stack watermark and a slab's peak usage hold their maximum between reads.
+Every value is sampled at the polling period, so state that appears and disappears between two polls is never seen: a lock taken and released, a thread that starts and exits, an allocation made and freed. The high-water marks are the exception, since a stack watermark and a slab's peak usage hold their maximum between reads. Zephyr counts a thread's cycles only as it is switched out, so a poll alone shows each thread's run at its switch: a poll faster than the run reads it idle, then the whole run at once. `--usage-window` and **+ / -** sum the CPU and load shares over more polls.
 
 > **Note:** The `idle` thread is implicit and only expresses itself on the used CPU %, when available.
 

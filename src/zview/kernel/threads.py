@@ -4,6 +4,8 @@
 
 """Zephyr ``k_thread`` group, with its thread list and static thread walkers."""
 
+from collections import deque
+from itertools import islice
 from typing import Literal
 
 from zview.backend.base import AbstractScraper, ThreadInfo, ThreadRuntime
@@ -29,6 +31,9 @@ _THREAD_DEAD = 1 << 3
 
 # K_THREAD_DEFINE names its object after the thread's id.
 _DEFINED_THREAD_PREFIX = "_k_thread_obj_"
+
+# The most frames the CPU and load shares can be summed over.
+USAGE_WINDOW_MAX = 64
 
 # CONFIG_THREAD_MONITOR: the kernel's list of every thread.
 THREAD_FIELDS: FieldTable = {
@@ -283,6 +288,10 @@ class Threads(Group):
         self.infos: dict[int, ThreadInfo] = {}
         self.idle_addresses: tuple[int, ...] = ()
         self.last_cycles: dict[int, int] = {}
+        # The frames the CPU and load shares are summed over, and the usage
+        # deltas of the last ones.
+        self.usage_window = 1
+        self._window: deque[dict[int, int]] = deque(maxlen=USAGE_WINDOW_MAX)
         self._entries: dict[int, int] = {}
         self._symbols: dict[int, str | None] = {}
         self._cpu_usage_address = 0
@@ -400,7 +409,9 @@ class Threads(Group):
         )
 
     def reset(self) -> None:
+        # Rebound, not cleared, since a poll may be reading them on its own thread.
         self.last_cycles = {}
+        self._window = deque(maxlen=USAGE_WINDOW_MAX)
 
     def walk(self, session: Session, addresses: dict[str, list[int]]) -> dict[str, ThreadInfo]:
         """
@@ -412,12 +423,29 @@ class Threads(Group):
         or not, the shares add up to 100% and none passes it.
         """
         deltas, coherent = self._usage_deltas(session)
+        summed = self._windowed(deltas)
         polled = [
-            self._poll(session, self.infos[address], deltas)
+            self._poll(session, self.infos[address], deltas, summed)
             for _, address in label_instances(addresses)
         ]
-        finalized = self._finalize(session, polled, deltas, coherent)
+        finalized = self._finalize(session, polled, summed, coherent)
         return {thread.name: thread for thread in finalized}
+
+    def _windowed(self, deltas: dict[int, int]) -> dict[int, int]:
+        """
+        Each thread's cycles over the last ``usage_window`` frames, ``deltas``
+        being this frame's. Zephyr counts a thread's cycles as it is switched
+        out, so a frame shorter than its run shows it idle, then the whole run.
+        """
+        if not deltas:
+            return deltas
+
+        self._window.append(deltas)
+        summed: dict[int, int] = {}
+        for frame in islice(reversed(self._window), self.usage_window):
+            for address, cycles in frame.items():
+                summed[address] = summed.get(address, 0) + cycles
+        return summed
 
     def _usage_delta(self, address: int, cycles: int) -> int:
         """A thread's cycles since the last frame, 0 on its first. A regression breaks the frame."""
@@ -466,8 +494,17 @@ class Threads(Group):
         }
         return deltas, coherent
 
-    def _poll(self, session: Session, thread: ThreadInfo, deltas: dict[int, int]) -> dict:
-        """Read a thread's watermark and metadata, beside its share of ``deltas``."""
+    def _poll(
+        self,
+        session: Session,
+        thread: ThreadInfo,
+        deltas: dict[int, int],
+        summed: dict[int, int],
+    ) -> dict:
+        """
+        Read a thread's watermark and metadata, beside its share of ``summed``,
+        active when it ran in this frame's ``deltas``.
+        """
         scraper, layout = session.scraper, session.layout
         usage_delta = deltas.get(thread.address, 0)
         if self._counts_usage(session) and not session.has_part("usage_snapshot"):
@@ -495,7 +532,8 @@ class Threads(Group):
 
         return {
             "info": thread,
-            "usage_delta": usage_delta,
+            # A recording from before the snapshot sums no window.
+            "usage_delta": summed.get(thread.address, usage_delta),
             "is_active": usage_delta > 0,
             "watermark": watermark,
             "stack_usage_pct": stack_usage_pct,
