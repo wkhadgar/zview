@@ -9,6 +9,8 @@ from collections.abc import Sequence
 from typing import ClassVar, NamedTuple
 
 from zview.frontend.tui.views.base import (
+    BACK_CODES,
+    BACK_KEYS,
     Any,
     BaseStateView,
     Keybind,
@@ -156,28 +158,15 @@ class KernelObjectDetailView(BaseStateView):
 
     def keybindings(self) -> list[Keybind]:
         return [
-            Keybind("<Esc>", "Back", "Return to the kernel objects list"),
+            BACK_KEYS,
             Keybind("k", "Objects", "Return to the kernel objects list"),
         ]
 
     def handle_input(self, key: int) -> ZViewState | None:
-        match key:
-            case (
-                curses.KEY_LEFT
-                | curses.KEY_EXIT
-                | SpecialCode.KERNEL_OBJECTS
-                | SpecialCode.NEWLINE
-                | SpecialCode.RETURN
-                | SpecialCode.ESCAPE
-            ):
-                return ZViewState.KERNEL_OBJECT_LIST_VIEW
-
-            case SpecialCode.QUIT:
-                self.controller.running = False
-
-            case _:
-                return None
-
+        if key in (*BACK_CODES, curses.KEY_LEFT, curses.KEY_EXIT, SpecialCode.KERNEL_OBJECTS):
+            return ZViewState.KERNEL_OBJECT_LIST_VIEW
+        if key == SpecialCode.QUIT:
+            self.controller.running = False
         return None
 
 

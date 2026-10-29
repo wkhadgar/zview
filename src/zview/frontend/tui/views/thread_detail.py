@@ -7,6 +7,8 @@ import glob
 
 from zview.backend.base import ThreadInfo
 from zview.frontend.tui.views.base import (
+    BACK_CODES,
+    BACK_KEYS,
     USAGE_WINDOW_KEYS,
     Any,
     BaseStateView,
@@ -187,10 +189,10 @@ class ThreadDetailView(BaseStateView):
         stdscr.refresh()
 
     def keybindings(self) -> list[Keybind]:
-        return [Keybind("<Enter>", "Back", "Return to the thread list"), USAGE_WINDOW_KEYS]
+        return [BACK_KEYS, USAGE_WINDOW_KEYS]
 
     def handle_input(self, key: int) -> ZViewState | None:
-        if key in (curses.KEY_ENTER, SpecialCode.NEWLINE, SpecialCode.RETURN):
+        if key in BACK_CODES:
             return ZViewState.THREAD_LIST_VIEW
         elif key in (SpecialCode.WIDER, SpecialCode.NARROWER):
             self.controller.scale_usage_window(key == SpecialCode.WIDER)

@@ -166,7 +166,7 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
 * **?**: Open the contextual help overlay listing every binding active in the current view.
 * **m**: Open the message log, holding the last reported messages with the time each arrived.
   The status row is reclaimed by the poll heartbeat, so this is where messages stay readable.
-* **ENTER**: Get details for the selected thread or kernel object (hit ENTER again to return).
+* **ENTER**: Get details for the selected thread or kernel object (hit ENTER again, or **Esc**, to return).
 * **S / I**: Sort the data and invert the sorting order.
 * **k**: Access the **Kernel Objects** view listing semaphores, mutexes, message queues, memory slabs, heaps and work queues (hit k again to return).
 * **x**: Mute the selected thread or object. It stays listed, dimmed, with its last values, and is no longer read. A muted thread's usage counter still is, since each CPU share is of every thread's cycles.

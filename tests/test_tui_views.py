@@ -40,7 +40,12 @@ def test_thread_list_footer_truncates_at_max_with_ellipsis(controller, theme):
 
 def test_thread_detail_footer_minimal(controller, theme):
     view = ThreadDetailView(controller, theme)
-    assert view._footer_hint() == "Help: ? | Back: <Enter> | Window: +/- "
+    assert view._footer_hint() == "Help: ? | Back: <Esc> | Window: +/- "
+
+
+def test_esc_returns_from_the_thread_detail_as_from_the_object_details(controller, theme):
+    view = ThreadDetailView(controller, theme)
+    assert view.handle_input(SpecialCode.ESCAPE) == ZViewState.THREAD_LIST_VIEW
 
 
 def test_heap_detail_footer_matches_the_other_object_views(controller, theme):

@@ -5,6 +5,10 @@
 import curses
 
 from zview.frontend.tui.views.base import (
+    DETAIL_KEYS,
+    INVERT_KEYS,
+    MUTE_KEYS,
+    SORT_KEYS,
     Any,
     BaseStateView,
     Keybind,
@@ -223,11 +227,11 @@ class KernelObjectListView(BaseStateView):
 
     def keybindings(self) -> list[Keybind]:
         return [
-            Keybind("<Enter>", "Detail", "Open detail view for the selected object"),
+            DETAIL_KEYS,
             Keybind("k", "Threads", "Switch back to the threads view"),
-            Keybind("s", "Sort", "Cycle through sort keys"),
-            Keybind("i", "Invert", "Reverse the current sort order"),
-            Keybind("x", "Mute", "Mute or unmute the selected object, kept dimmed as last read"),
+            SORT_KEYS,
+            INVERT_KEYS,
+            MUTE_KEYS,
         ]
 
     def handle_input(self, key: int) -> ZViewState | None:

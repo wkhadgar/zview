@@ -83,7 +83,13 @@ class SpecialCode:
     DELETE = 127
 
 
-# The bindings of the polls the CPU and load shares are summed over, in both thread views.
+# The bindings several views share.
+DETAIL_KEYS = Keybind("<Enter>", "Detail", "Open the selected row's detail view")
+BACK_KEYS = Keybind("<Esc>", "Back", "Return to the list, as <Enter> does")
+BACK_CODES = (curses.KEY_ENTER, SpecialCode.NEWLINE, SpecialCode.RETURN, SpecialCode.ESCAPE)
+SORT_KEYS = Keybind("s", "Sort", "Cycle through sort keys")
+INVERT_KEYS = Keybind("i", "Invert", "Reverse the current sort order")
+MUTE_KEYS = Keybind("x", "Mute", "Mute or unmute the selected row, kept dimmed as last read")
 USAGE_WINDOW_KEYS = Keybind(
     "+/-", "Window", "Sum the CPU and load shares over twice or half the polls"
 )
