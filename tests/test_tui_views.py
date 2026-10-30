@@ -416,7 +416,7 @@ def test_the_bottom_bar_names_the_patterns_and_the_rows_muted_in_its_view(contro
     view = ThreadListView(controller, theme)
 
     assert view._bar_count("Threads: 1-2 of 2", 80) == (
-        " Threads: 1-2 of 2 | Patterns: !main | 1 muted "
+        " Threads: 1-2 of 2 | Patterns: *, !main | 1 muted "
     )
     assert view._bar_count("Threads: 1-2 of 2", 30) == " Threads: 1-2 of 2 | Pattern… "
     controller.selection = Selection()

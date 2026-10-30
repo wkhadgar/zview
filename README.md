@@ -107,10 +107,11 @@ ZView is invoked through one of four commands. Bare `zview` with no command runs
 | `--frequency` | `live`, `record`, `dump` | SWD clock of `-r pyocd` and `-r jlink`, in Hz or with a `k` or `M` suffix (default: `4M` on pyocd, the J-Link's own on jlink). Lower it if long wires give read errors. |
 | `--period` | `live`, `record`, `dump` | Minimum polling period in seconds (default: `0.10`). A frame that takes longer is followed by the next one right away. |
 | `--usage-window` | `live`, `replay` | Sum the CPU and load shares over the last N polls, up to 64 (default: `1`, each poll alone). |
-| `--only` | `live`, `record`, `dump` | Read only these groups, comma separated, such as `threads,mutexes`. The groups are `threads`, `heaps`, `semaphores`, `mutexes`, `msgqs`, `mem_slabs` and `workqs`. |
-| `--match` | `live`, `record`, `dump` | Read only the rows this line matches, the same line **/** edits: `GLOB`, `GROUP:GLOB` within one group, or `!GLOB` to skip, comma separated, such as `--match 'threads:gate*, !*_old'`. |
+| `--match` | all | Read only the rows this line matches, the line **/** edits (default: `*`). `--match '*, heaps:!*'` reads everything but the heaps. |
 
-Reading fewer rows makes each frame shorter. A recording keeps the selection it was made with, and a replay reads the same rows. On `dump -i` the two flags filter only what is shown. A pattern that matches no row is reported, in the message log on `live` and on stderr otherwise.
+Patterns follow two rules. Excludes always win: `threads:worker*, !worker_3` skips `worker_3`. A group's own includes replace the bare ones: `*, heaps:min_*` narrows only the heaps.
+
+The groups are `threads`, `heaps`, `semaphores`, `mutexes`, `msgqs`, `mem_slabs` and `workqs`. Reading fewer rows makes each frame shorter. A recording keeps the selection it was made with, and a replay reads the same rows. On `replay` and `dump -i` the line filters only what is shown, and `replay` starts from the recording's own line. A pattern that matches no row is reported, in the message log on `live` and `replay`, and on stderr otherwise.
 
 ### Command-specific arguments
 
@@ -169,14 +170,13 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
 * **ENTER**: Get details for the selected thread or kernel object (hit ENTER again, or **Esc**, to return).
 * **S / I**: Sort the data and invert the sorting order.
 * **k**: Access the **Kernel Objects** view listing semaphores, mutexes, message queues, memory slabs, heaps and work queues (hit k again to return).
-* **x**: Mute the selected thread or object. It stays listed, dimmed, with its last values, and is no longer read. A muted thread's usage counter still is, since each CPU share is of every thread's cycles.
-* **/**: Edit the row patterns on the line `--match` takes: `GLOB`, `GROUP:GLOB`, or `!GLOB` to exclude, comma separated. **ENTER** applies the line, **Esc** drops it.
+* **x**: Mute the selected thread or object. It stays listed, dimmed, with its last values, and is no longer read. A muted thread's usage counter still is, since each CPU share is of every thread's cycles. **ENTER** on a muted row unmutes it, so its detail view is tracked.
+* **/**: Edit the row patterns on the line `--match` takes: `GLOB`, `GROUP:GLOB`, or `!GLOB` and `GROUP:!GLOB` to exclude, comma separated. **ENTER** applies the line, **Esc** drops it.
 * **+ / -**: In the thread views, sum the CPU and load shares over twice or half the polls, from 1 up to 64. The bottom bar shows the count above 1.
-* **g**: Pick the groups read (threads, heaps, semaphores and the rest) from a checklist, where **Space** toggles one.
 * **r**: Soft refresh, re-walks the kernel thread list and clears runtime baselines.
 * **R**: Full reload, tears down the polling thread, disconnects the probe, re-parses the ELF, reconnects, checks the target runs that ELF, and resumes. After a rebuild, press it once the target runs the new image. It also unmutes every row.
 
-The bottom bar names the groups turned off, the patterns and the muted rows. On a replay, **x**, **/** and **g** change what is shown, not what is read.
+The bottom bar names the groups turned off, the patterns and the muted rows. On a replay, **x** and **/** change what is shown, not what is read.
 
 ### See your threads
 
@@ -200,7 +200,7 @@ Press **k** for every statically declared `k_sem`, `k_mutex`, `k_msgq`, `k_mem_s
 `k_heap` and `k_work_q`: semaphore counts with their waiter lists, mutexes with the thread
 that holds each lock, queues with their fill level, slabs and heaps with what they have
 handed out, and work queues with the work waiting to run. The aggregate row on top sums
-the objects listed, and takes a type's own wording when **g** leaves only that type read.
+the objects listed, and takes a type's own wording when **/** leaves only that type read.
 
 ![Kernel objects list](docs/assets/kernel_objects.gif)
 

@@ -83,10 +83,8 @@ def app() -> ZView:
     a._theme = ZViewTUIAttributes.create_mono()
     a._log_popup = TUIPopup(" Messages ", 0, 0, {}, keep_tail=True)
     a._help_popup = TUIPopup(" Help ", 0, 0, {})
-    a._groups_popup = TUIPopup(" Groups ", 0, 0, {})
     a._overlay = None
     a._prompt = None
-    a._group_cursor = 0
     return a
 
 

@@ -42,8 +42,11 @@ from zview.selection import Selection
 _GLOBAL_KEYBINDINGS: list[Keybind] = [
     Keybind("?", "Help", "Toggle this help overlay"),
     Keybind("m", "Messages", "Toggle the message log"),
-    Keybind("/", "Patterns", "Edit the row patterns: GLOB, GROUP:GLOB, !GLOB, comma separated"),
-    Keybind("g", "Groups", "Pick the groups read"),
+    Keybind(
+        "/",
+        "Patterns",
+        "Edit the row patterns: GLOB, GROUP:GLOB, !GLOB, GROUP:!GLOB, comma separated",
+    ),
     Keybind("R", "Reload", "Re-parse the ELF and reattach the probe (full cycle)"),
     Keybind("q", "Quit", "Exit ZView"),
 ]
@@ -98,20 +101,21 @@ class ZView:
     and updates the display with real-time thread statistics from a connected MCU.
     """
 
-    def __init__(self, scraper: ZScraper, stdscr):
+    def __init__(self, scraper: ZScraper, stdscr, selection: Selection):
         """
         Initializes the ZView application.
 
         Args:
             stdscr: The main curses window object provided by curses.wrapper.
+            selection: What the lists show, and all a live target reads.
         """
         self.min_dimensions = (14, 85)
         self.stdscr: curses.window = stdscr
         self.scraper: ZScraper = scraper
         self.running = True
         self.frames = FrameHistory()
-        # What the lists show: the session's selection, then what the keys change.
-        self.selection: Selection = scraper.selection
+        # What the lists show: the launch's selection, then what the keys change.
+        self.select(selection)
         self.status_message: str = ""
         # One entry per reported message, newest last.
         self.messages: deque[LogEntry] = deque(maxlen=_MESSAGE_LOG_SIZE)
@@ -126,10 +130,8 @@ class ZView:
         self.detailing: tuple[str, int] | None = None
         # Wait queues are walkable only in the dlist (simple) flavor.
         self.waiters_unknown: bool = scraper.waitq_flavor != "simple"
-        # Name of the open overlay ("help", "messages" or "groups"), or None.
+        # Name of the open overlay ("help" or "messages"), or None.
         self._overlay: str | None = None
-        # The row of the groups popup under its cursor.
-        self._group_cursor = 0
         # The pattern line being edited, or None.
         self._prompt: TUILineEdit | None = None
 
@@ -151,13 +153,6 @@ class ZView:
         # Keys carry their own color: the frame and the headings are already
         # cyan, and the key is what the reader is looking for.
         self._help_popup = TUIPopup(" Help ", theme.ACTIVE, theme.PROGRESS_BAR_LOW, levels)
-        self._groups_popup = TUIPopup(
-            " Groups ",
-            theme.ACTIVE,
-            theme.PROGRESS_BAR_LOW,
-            {"info": theme.INACTIVE, "cursor": theme.CURSOR},
-            hint=" Space: toggle | Esc: close ",
-        )
 
         self.views: dict[ZViewState, BaseStateView] = {
             ZViewState.FATAL_ERROR: FatalErrorView(self, theme),
@@ -363,39 +358,9 @@ class ZView:
     def _draw_overlay(self, height: int, width: int) -> None:
         popup, rows = {
             "messages": (self._log_popup, self._message_rows),
-            "groups": (self._groups_popup, self._group_rows),
             "help": (self._help_popup, self._help_rows),
         }[self._overlay]
         popup.draw(self.stdscr, height, width, rows())
-
-    def _listed_groups(self) -> list[str]:
-        """The groups the session can read, in the order a frame reads them."""
-        return [key for key, available in self.scraper.available.items() if available]
-
-    def _group_rows(self) -> list[PopupRow]:
-        """One checkbox per group, the one under the cursor marked."""
-        return [PopupRow("Select to read", heading=True)] + [
-            PopupRow(
-                "[x]" if self.selection.reads_group(key) else "[ ]",
-                key,
-                "cursor" if row == self._group_cursor else "info",
-            )
-            for row, key in enumerate(self._listed_groups())
-        ]
-
-    def _pick_group(self, key: int) -> None:
-        """Move through the groups popup, toggle the group under its cursor, or close it."""
-        groups = self._listed_groups()
-        match key:
-            case curses.KEY_UP:
-                self._group_cursor = max(0, self._group_cursor - 1)
-            case curses.KEY_DOWN:
-                self._group_cursor = max(0, min(len(groups) - 1, self._group_cursor + 1))
-            case SpecialCode.SPACE if groups:
-                self.toggle_group(groups[self._group_cursor])
-            case SpecialCode.ESCAPE | SpecialCode.GROUPS:
-                self._overlay = None
-                self.stdscr.clear()
 
     def _message_rows(self) -> list[PopupRow]:
         """The log, oldest first."""
@@ -428,6 +393,11 @@ class ZView:
         muted = self.selection.muted ^ {(group, name)}
         self.select(dataclasses.replace(self.selection, muted=muted))
 
+    def unmute(self, group: str, name: str) -> None:
+        """Read the row again, if it is muted, as the detail view opening on it tracks it."""
+        if (group, name) in self.selection.muted:
+            self.toggle_mute(group, name)
+
     @property
     def usage_window(self) -> int:
         """
@@ -443,15 +413,6 @@ class ZView:
         window = threads.usage_window * 2 if wider else threads.usage_window // 2
         threads.usage_window = max(1, min(USAGE_WINDOW_MAX, window))
 
-    def toggle_group(self, group: str) -> None:
-        """Read the group, or stop reading it if it is read."""
-        on = {key for key in self.scraper.groups if self.selection.reads_group(key)} ^ {group}
-        self.select(
-            dataclasses.replace(
-                self.selection, groups=frozenset(on), skipped=self.selection.skipped - {group}
-            )
-        )
-
     def _edit_prompt(self, key: int) -> None:
         """Type into the pattern line: Enter selects it, Esc drops it."""
         match key:
@@ -464,9 +425,12 @@ class ZView:
                 self._prompt.edit(key)
 
     def _select_patterns(self, line: str) -> None:
-        """Select the patterns of ``line``, unless it names a group the session lacks."""
-        selection = self.selection.with_pattern_line(line)
+        """
+        Select the patterns of ``line``, unless it is malformed or names a group
+        the session lacks.
+        """
         try:
+            selection = self.selection.with_pattern_line(line)
             self.scraper.check_selection(selection)
         except ValueError as e:
             self.report(f"Error: {e}")
@@ -494,6 +458,8 @@ class ZView:
         view = self.views[new_state]
         if not view.can_open():
             return
+        if row := view.row():
+            self.unmute(*row)
 
         # Replay backends cannot absorb polling-shape mutations without drifting
         # against the recording. Views still transition; the display filters
@@ -520,10 +486,6 @@ class ZView:
             self._edit_prompt(key)
             return
 
-        if self._overlay == "groups":
-            self._pick_group(key)
-            return
-
         if self._overlay:
             self._overlay = None
             self.stdscr.clear()
@@ -543,12 +505,6 @@ class ZView:
 
         if key == SpecialCode.PATTERNS:
             self._prompt = TUILineEdit(self.selection.pattern_line())
-            return
-
-        if key == SpecialCode.GROUPS:
-            # A reload or a refresh can leave fewer groups than the cursor last stood on.
-            self._group_cursor = min(self._group_cursor, max(0, len(self._listed_groups()) - 1))
-            self._overlay = "groups"
             return
 
         new_state = self.views[self.state].handle_input(key)
@@ -583,7 +539,7 @@ class ZView:
             self.scraper.discover()
         except RuntimeError as e:
             self.report(f"Unable to update available threads [{e}]")
-        for notice in self.scraper.unmatched(self.scraper.selection):
+        for notice in self.scraper.unmatched(self.selection):
             self.report(notice)
 
         self.scraper.start_polling_thread(self.data_queue, self.stop_event, inspection_period)
@@ -602,7 +558,7 @@ class ZView:
             time.sleep(0.01)
 
 
-def tui_run(stdscr, scraper: ZScraper, inspection_period):
+def tui_run(stdscr, scraper: ZScraper, inspection_period, selection: Selection):
     """
     The entry point for the curses application.
 
@@ -613,8 +569,9 @@ def tui_run(stdscr, scraper: ZScraper, inspection_period):
         :param stdscr: Standard screen window object provided by `curses.wrapper`.
         :param scraper: ZScraper instance for data gathering.
         :param inspection_period: Period for inspection, in seconds.
+        :param selection: What the lists show, and all a live target reads.
     """
-    app = ZView(scraper, stdscr)
+    app = ZView(scraper, stdscr, selection)
     for notice in scraper.absent_features():
         app.report(notice)
 

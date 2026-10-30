@@ -20,9 +20,9 @@ from zview.selection import Selection
 
 logger = logging.getLogger("zview.recording")
 
-# /3 added the header's ``features`` list, /4 the reads that raised, and /5 the
-# header's ``selection``.
-SCHEMA_VERSION = "zview-recording/5"
+# /3 added the header's ``features`` list, /4 the reads that raised, /5 the
+# header's ``selection``, and /6 patterns that imply nothing.
+SCHEMA_VERSION = "zview-recording/6"
 
 
 class RecordingScraper(AbstractScraper):

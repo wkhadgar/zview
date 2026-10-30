@@ -110,30 +110,19 @@ def _add_usage_window(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _groups(value: str) -> frozenset[str]:
-    """``--only``'s comma-separated groups. The session checks them against its own."""
-    return frozenset(group.strip() for group in value.split(",") if group.strip())
-
-
 def _add_selection(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--only",
-        type=_groups,
-        default=None,
-        metavar="GROUPS",
-        help="Read only these groups, comma-separated, such as threads,mutexes.",
-    )
+    every_row = Selection().pattern_line()
     parser.add_argument(
         "--match",
-        default="",
+        default=every_row,
         metavar="LINE",
-        help="Read only the rows this line matches, as / edits it: GLOB, GROUP:GLOB within one "
-        "group, or !GLOB to skip, comma-separated.",
+        help="Read only the rows this line matches, as / edits it, such as '*, heaps:!*' for "
+        f"all but the heaps (default: {every_row}).",
     )
 
 
 def _selection(args: argparse.Namespace) -> Selection:
-    return Selection(groups=args.only).with_pattern_line(args.match)
+    return Selection().with_pattern_line(args.match)
 
 
 def register_commands(
@@ -193,6 +182,11 @@ def register_commands(
         help="Drain the recording as fast as possible instead of honoring its wall-clock cadence.",
     )
     _add_usage_window(p_replay)
+    p_replay.add_argument(
+        "--match",
+        metavar="LINE",
+        help="Show only the rows this line matches, as / edits it (default: the recording's line).",
+    )
 
     p_dump = _sub("dump", "Capture a single polling frame and exit (no TUI).")
     _add_elf(p_dump)
@@ -384,11 +378,10 @@ def _do_live(args) -> int:
         scraper = ZScraper(backend, args.elf_file)
         selection = _selection(args)
         scraper.check_selection(selection)
-        scraper.selection = selection
         scraper.groups["threads"].usage_window = args.usage_window
         for notice in scraper.absent_features():
             print(notice, file=sys.stderr)
-        curses.wrapper(tui_run, scraper, args.period)
+        curses.wrapper(tui_run, scraper, args.period, selection)
     return 0
 
 
@@ -417,8 +410,10 @@ def _do_replay(args) -> int:
     with backend:
         scraper = ZScraper(backend, args.elf_file)
         scraper.groups["threads"].usage_window = args.usage_window
+        selection = scraper.selection if args.match is None else _selection(args)
+        scraper.check_selection(selection)
         # Pacing comes from the recording; the polling-thread sleep is just a floor.
-        curses.wrapper(tui_run, scraper, 0.05)
+        curses.wrapper(tui_run, scraper, 0.05, selection)
     return 0
 
 

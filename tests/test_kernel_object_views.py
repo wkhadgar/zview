@@ -111,7 +111,7 @@ def _put(controller, **groups) -> None:
 
 
 def _read_only(view: KernelObjectListView, kind) -> None:
-    """Read only ``kind``'s group, as the groups popup leaves it."""
+    """Read only ``kind``'s group, as a line such as ``semaphores:*`` leaves it."""
     view.controller.selection = Selection(groups=frozenset({kind.key}))
 
 
@@ -375,7 +375,7 @@ def test_empty_message_tells_an_empty_kind_from_groups_turned_off(controller, th
     assert "No ALL objects." in view._empty_message("ALL")
 
     controller.has_kernel_objects.return_value = False
-    assert "g picks the groups" in view._empty_message("ALL")
+    assert "/ edits the patterns" in view._empty_message("ALL")
 
 
 def test_enter_on_a_mutex_opens_the_detail_view(controller, theme):

@@ -66,8 +66,7 @@ class ZViewCommand(WestCommand):
             frequency=None,
             period=0.10,
             usage_window=1,
-            only=None,
-            match="",
+            match="*",
         )
         return parser
 

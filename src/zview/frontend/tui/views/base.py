@@ -9,7 +9,7 @@ from abc import abstractmethod
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 
-from zview.selection import Selection
+from zview.selection import EVERY_ROW, Selection
 
 
 class Keybind(NamedTuple):
@@ -77,8 +77,6 @@ class SpecialCode:
     PATTERNS = ord("/")
     WIDER = ord("+")
     NARROWER = ord("-")
-    GROUPS = ord("g")
-    SPACE = ord(" ")
     BACKSPACE = ord("\b")
     DELETE = 127
 
@@ -164,6 +162,10 @@ class BaseStateView:
     def can_open(self) -> bool:
         return True
 
+    def row(self) -> tuple[str, str] | None:
+        """The ``(group, name)`` of the one row the view shows, if it shows one."""
+        return None
+
     def opened(self) -> None:  # noqa: B027
         """Called as the view opens on a live target."""
 
@@ -188,7 +190,10 @@ class BaseStateView:
             note
             for shown, note in (
                 (off, f"Off: {', '.join(off)}"),
-                (selection.include or selection.exclude, f"Patterns: {selection.pattern_line()}"),
+                (
+                    selection.include != EVERY_ROW or selection.exclude,
+                    f"Patterns: {selection.pattern_line()}",
+                ),
                 (muted, f"{muted} muted"),
                 (reads.reads_group("threads") and window > 1, f"CPU over {window} polls"),
             )
