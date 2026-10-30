@@ -202,7 +202,11 @@ class ZScraper:
         frame: dict = {}
         session = self._session()
         for group in self.groups.values():
-            if not self.available[group.key] or not self._reads_group(group.key):
+            if not self.available[group.key]:
+                continue
+            if not self._reads_group(group.key):
+                # Read again, the group seeds its baselines afresh, not from before the gap.
+                group.reset()
                 continue
 
             # Matched against the labels the rows will carry.

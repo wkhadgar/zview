@@ -6,6 +6,11 @@ import curses
 
 from zview.backend.base import ThreadInfo, ThreadRuntime
 from zview.frontend.tui.views.base import (
+    DETAIL_KEYS,
+    INVERT_KEYS,
+    MUTE_KEYS,
+    SORT_KEYS,
+    USAGE_WINDOW_KEYS,
     Any,
     BaseStateView,
     Keybind,
@@ -198,11 +203,12 @@ class ThreadListView(BaseStateView):
 
     def keybindings(self) -> list[Keybind]:
         bindings = [
-            Keybind("<Enter>", "Detail", "Open detail view for the selected thread"),
+            DETAIL_KEYS,
             Keybind("r", "Refresh", "Re-walk the kernel thread list and resync baselines"),
-            Keybind("s", "Sort", "Cycle through sort keys"),
-            Keybind("i", "Invert", "Reverse the current sort order"),
-            Keybind("x", "Mute", "Mute or unmute the selected thread, kept dimmed as last read"),
+            SORT_KEYS,
+            INVERT_KEYS,
+            MUTE_KEYS,
+            USAGE_WINDOW_KEYS,
         ]
         # The footer shows the first three bindings only, so the view switches
         # come ahead of Refresh.
@@ -234,6 +240,9 @@ class ThreadListView(BaseStateView):
 
             case SpecialCode.INVERSE:
                 self._invert_sorting = not self._invert_sorting
+
+            case SpecialCode.WIDER | SpecialCode.NARROWER:
+                self.controller.scale_usage_window(key == SpecialCode.WIDER)
 
             case SpecialCode.REFRESH:
                 if not self.controller.scraper._m_scraper.is_live:

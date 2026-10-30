@@ -292,6 +292,32 @@ def test_a_replayed_row_hidden_or_muted_shows_again_after_the_replay_ends(app):
     assert [t.stack_size for t in listed_threads(app)] == [1024, 1024, 1024]
 
 
+def test_the_usage_window_keys_double_and_halve_it_within_its_bounds(app):
+    threads = app.scraper.groups["threads"]
+    threads.usage_window = 1
+
+    app.scale_usage_window(wider=False)
+    assert threads.usage_window == 1
+
+    for _ in range(8):
+        app.scale_usage_window(wider=True)
+    assert threads.usage_window == 64
+
+    app.scale_usage_window(wider=False)
+    assert threads.usage_window == 32
+
+
+def test_a_recording_from_before_the_snapshot_sums_no_window(app):
+    """Its shares are of each poll alone, so the bar must not claim a window."""
+    app.scraper.groups["threads"].usage_window = 8
+
+    app.scraper.parts = set()
+    assert app.usage_window == 1
+
+    app.scraper.parts = {"usage_snapshot"}
+    assert app.usage_window == 8
+
+
 def test_a_muted_object_opens_on_its_last_read(app):
     from zview.frontend.tui.views.base import ZViewTUIAttributes
     from zview.frontend.tui.views.semaphore_detail import SemaphoreDetailView

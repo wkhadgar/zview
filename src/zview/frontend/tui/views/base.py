@@ -75,10 +75,24 @@ class SpecialCode:
     MESSAGES = ord("m")
     MUTE = ord("x")
     PATTERNS = ord("/")
+    WIDER = ord("+")
+    NARROWER = ord("-")
     GROUPS = ord("g")
     SPACE = ord(" ")
     BACKSPACE = ord("\b")
     DELETE = 127
+
+
+# The bindings several views share.
+DETAIL_KEYS = Keybind("<Enter>", "Detail", "Open the selected row's detail view")
+BACK_KEYS = Keybind("<Esc>", "Back", "Return to the list, as <Enter> does")
+BACK_CODES = (curses.KEY_ENTER, SpecialCode.NEWLINE, SpecialCode.RETURN, SpecialCode.ESCAPE)
+SORT_KEYS = Keybind("s", "Sort", "Cycle through sort keys")
+INVERT_KEYS = Keybind("i", "Invert", "Reverse the current sort order")
+MUTE_KEYS = Keybind("x", "Mute", "Mute or unmute the selected row, kept dimmed as last read")
+USAGE_WINDOW_KEYS = Keybind(
+    "+/-", "Window", "Sum the CPU and load shares over twice or half the polls"
+)
 
 
 class ZViewState(enum.Enum):
@@ -158,11 +172,12 @@ class BaseStateView:
 
     def _bar_count(self, count: str, room: int) -> str:
         """
-        ``count``, then the groups off, the patterns and the rows muted in this
-        view, cut to ``room`` columns.
+        ``count``, then the groups off, the patterns, the rows muted in this
+        view and the polls its CPU shares are summed over, cut to ``room`` columns.
         """
         selection = self.controller.selection
         reads = self.reads()
+        window = self.controller.usage_window
         off = [
             group
             for group, available in self.controller.scraper.available.items()
@@ -175,6 +190,7 @@ class BaseStateView:
                 (off, f"Off: {', '.join(off)}"),
                 (selection.include or selection.exclude, f"Patterns: {selection.pattern_line()}"),
                 (muted, f"{muted} muted"),
+                (reads.reads_group("threads") and window > 1, f"CPU over {window} polls"),
             )
             if shown
         ]

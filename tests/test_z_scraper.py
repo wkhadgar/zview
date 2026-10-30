@@ -208,6 +208,40 @@ def test_a_muted_thread_is_not_scanned_but_its_cycles_still_count(elf_path):
     assert mock.calculate_dynamic_watermark.call_count == 2
 
 
+def test_a_thread_that_ran_earlier_in_the_window_keeps_its_share_but_is_not_active(elf_path):
+    main, idle = _thread(_MAIN, "main"), _thread(_IDLE, "idle")
+    now = {_MAIN: 10, _IDLE: 10}
+    scraper, _ = _usage_scraper(elf_path, [main, idle], before={_MAIN: 0, _IDLE: 0}, now=now)
+    scraper.groups["threads"].usage_window = 2
+    _one_frame(scraper)
+
+    now[_IDLE] = 30
+    runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
+
+    # 10 of the 40 cycles of both polls, though main ran only in the first.
+    assert runtimes["main"].cpu_normalized == pytest.approx(25.0)
+    assert not runtimes["main"].active
+
+
+def test_threads_read_again_after_a_gap_seed_their_counters_afresh(elf_path):
+    """The first delta back would hold every cycle of the gap."""
+    from zview.selection import Selection
+
+    now = {_MAIN: 10, _IDLE: 10}
+    scraper, _ = _usage_scraper(
+        elf_path, [_thread(_MAIN, "main"), _thread(_IDLE, "idle")], before={}, now=now
+    )
+    _one_frame(scraper)
+    scraper.selection = Selection(skipped=frozenset({"threads"}))
+    _one_frame(scraper)
+
+    now.update({_MAIN: 500, _IDLE: 20})
+    scraper.selection = Selection()
+    runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
+
+    assert runtimes["main"].cpu_normalized == 0.0
+
+
 def test_a_recording_from_before_the_snapshot_reads_counters_beside_the_stacks(elf_path):
     """It read the kernel-wide counter first, and each thread's own after the one before's stack."""
     scraper, mock = _usage_scraper(

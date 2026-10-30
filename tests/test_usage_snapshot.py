@@ -102,3 +102,17 @@ def test_a_build_without_the_stamps_reads_the_counters_once_and_cannot_tell():
     assert counters == {_IDLE: 9000, _WORKER: 300}
     assert coherent is None
     assert target.reads == [_IDLE + _USAGE, _WORKER + _USAGE]
+
+
+def test_the_shares_are_summed_over_the_last_usage_window_frames():
+    """The worker runs through the later frames, counted only as it switches out."""
+    from zview.kernel.threads import Threads
+
+    threads = Threads()
+    assert threads._windowed({_IDLE: 0, _WORKER: 100}) == {_IDLE: 0, _WORKER: 100}
+    assert threads._windowed({_IDLE: 50, _WORKER: 0}) == {_IDLE: 50, _WORKER: 0}
+
+    # A wider window takes the frames already read.
+    threads.usage_window = 3
+    assert threads._windowed({_IDLE: 50, _WORKER: 0}) == {_IDLE: 100, _WORKER: 100}
+    assert threads._windowed({_IDLE: 7, _WORKER: 3}) == {_IDLE: 107, _WORKER: 3}

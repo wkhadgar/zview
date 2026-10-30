@@ -15,6 +15,7 @@ from zview.backend.nrfutil import NrfutilScraper
 from zview.backend.pyocd import PyOCDScraper
 from zview.backend.replay import ReplayScraper
 from zview.frontend.zview_tui import tui_run
+from zview.kernel.threads import USAGE_WINDOW_MAX
 from zview.kinds import KINDS
 from zview.logging_setup import configure as configure_logging
 from zview.orchestrator import ZScraper
@@ -98,6 +99,17 @@ def _add_period(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_usage_window(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--usage-window",
+        type=int,
+        default=1,
+        metavar="POLLS",
+        help=f"Sum the CPU and load shares over the last POLLS polls, up to {USAGE_WINDOW_MAX} "
+        "(default: 1, each poll alone).",
+    )
+
+
 def _groups(value: str) -> frozenset[str]:
     """``--only``'s comma-separated groups. The session checks them against its own."""
     return frozenset(group.strip() for group in value.split(",") if group.strip())
@@ -147,6 +159,7 @@ def register_commands(
     _add_elf(p_live)
     _add_live_target(p_live)
     _add_period(p_live)
+    _add_usage_window(p_live)
     _add_selection(p_live)
 
     p_record = _sub("record", "Capture a live session to a .ndjson.gz recording file.")
@@ -179,6 +192,7 @@ def register_commands(
         action="store_true",
         help="Drain the recording as fast as possible instead of honoring its wall-clock cadence.",
     )
+    _add_usage_window(p_replay)
 
     p_dump = _sub("dump", "Capture a single polling frame and exit (no TUI).")
     _add_elf(p_dump)
@@ -301,6 +315,9 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     if getattr(args, "frames", None) is not None and args.frames < 1:
         parser.error(f"{args.cmd}: --frames must be >= 1.")
 
+    if not 1 <= getattr(args, "usage_window", 1) <= USAGE_WINDOW_MAX:
+        parser.error(f"{args.cmd}: --usage-window must be from 1 to {USAGE_WINDOW_MAX}.")
+
     if args.cmd == "dump":
         if args.input and (args.runner or args.runner_target):
             parser.error("dump: --input is mutually exclusive with --runner/--runner-target.")
@@ -368,6 +385,7 @@ def _do_live(args) -> int:
         selection = _selection(args)
         scraper.check_selection(selection)
         scraper.selection = selection
+        scraper.groups["threads"].usage_window = args.usage_window
         for notice in scraper.absent_features():
             print(notice, file=sys.stderr)
         curses.wrapper(tui_run, scraper, args.period)
@@ -398,6 +416,7 @@ def _do_replay(args) -> int:
     backend = ReplayScraper(args.input, honor_timing=not args.no_pacing)
     with backend:
         scraper = ZScraper(backend, args.elf_file)
+        scraper.groups["threads"].usage_window = args.usage_window
         # Pacing comes from the recording; the polling-thread sleep is just a floor.
         curses.wrapper(tui_run, scraper, 0.05)
     return 0
