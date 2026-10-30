@@ -140,7 +140,7 @@ class KernelObjectListView(BaseStateView):
             if curr_x >= width:
                 break
             header = col_header + (order_symbol if column == sorted_column else "")
-            stdscr.addstr(1, curr_x, f"{header:^{col_width}}"[: width - curr_x])
+            self._draw_header(stdscr, curr_x, header, col_width, width)
             curr_x += col_width + 1
 
         self._info.draw_cells(

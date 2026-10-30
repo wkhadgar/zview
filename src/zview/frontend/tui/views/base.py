@@ -172,6 +172,16 @@ class BaseStateView:
     def closed(self) -> None:  # noqa: B027
         """Called as another view replaces it on a live target."""
 
+    @staticmethod
+    def _draw_header(stdscr: curses.window, x: int, header: str, room: int, width: int) -> None:
+        """
+        ``header`` centred in ``room`` columns at ``x`` on the header row, moved
+        left into the space before it when a sort mark would pass the screen's edge.
+        """
+        cell = f"{header:^{room}}"
+        x = max(0, min(x, width - len(cell)))
+        stdscr.addstr(1, x, cell[: width - x])
+
     def _bar_count(self, count: str, room: int) -> str:
         """
         ``count``, then the groups off, the patterns, the rows muted in this

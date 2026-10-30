@@ -39,6 +39,15 @@ def test_thread_list_footer_truncates_at_max_with_ellipsis(controller, theme):
     assert parts[-1] == "…"
 
 
+def test_a_sorted_header_at_the_screen_edge_keeps_its_mark():
+    """The last column ends at the edge, so its sort mark would be cut off."""
+    stdscr = MagicMock()
+
+    BaseStateView._draw_header(stdscr, 70, "Watermark Bytes ▲", 15, 85)
+
+    stdscr.addstr.assert_called_once_with(1, 68, "Watermark Bytes ▲")
+
+
 def test_thread_detail_footer_minimal(controller, theme):
     view = ThreadDetailView(controller, theme)
     assert view._footer_hint() == "Help: ? | Back: <Esc> | Window: +/- "

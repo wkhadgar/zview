@@ -128,8 +128,7 @@ class ThreadListView(BaseStateView):
             if col_header == sorting_header:
                 col_header += order_symbol
 
-            txt = f"{col_header:^{h_width}}"[: width - curr_x]
-            stdscr.addstr(1, curr_x, txt)
+            self._draw_header(stdscr, curr_x, col_header, h_width, width)
             curr_x += h_width + 1
 
         scroll_indicator = self._bar_count(
