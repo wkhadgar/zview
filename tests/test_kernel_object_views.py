@@ -53,14 +53,7 @@ def distinct_theme() -> ZViewTUIAttributes:
 @pytest.fixture
 def controller(app: ZView) -> ZView:
     c = app
-    # The ELF answers for a site; these objects come from nowhere on disk.
-    c.scraper.decl_site.return_value = None
-    c.scraper.function_site.return_value = None
-    c.scraper.has_semaphores = True
-    c.scraper.has_mutexes = True
-    c.scraper.has_msgqs = True
-    c.scraper.has_mem_slabs = True
-    c.is_waiters_unknown = False
+    c.core.scraper.available = dict.fromkeys(BY_KEY, True)
     c.status_message = "Running"
     c.core.frames = FrameHistory()
     c.state = ZViewState.KERNEL_OBJECT_LIST_VIEW
@@ -366,7 +359,7 @@ def test_an_exhausted_slab_counts_as_contended(controller, theme):
 
 
 def test_summary_flags_unobservable_wait_queues(controller, theme):
-    controller.is_waiters_unknown = True
+    controller.core.build = replace(controller.core.build, is_waitq_walkable=False)
     view = KernelObjectListView(controller, theme)
 
     assert "not observable" in view._summary(view._rows(), view._only_kind())
@@ -376,10 +369,10 @@ def test_empty_message_tells_an_empty_kind_from_groups_turned_off(controller, th
     view = KernelObjectListView(controller, theme)
     _put(controller, semaphores=[], mutexes=[], msgqs=[], mem_slabs=[])
 
-    controller.scraper.available = {"threads": True, "semaphores": True}
+    controller.core.scraper.available = {"threads": True, "semaphores": True}
     assert "No ALL objects." in view._empty_message("ALL")
 
-    controller.scraper.available = {"threads": True, "semaphores": False}
+    controller.core.scraper.available = {"threads": True, "semaphores": False}
     assert "/ edits the patterns" in view._empty_message("ALL")
 
 
@@ -1363,7 +1356,8 @@ def test_a_narrow_terminal_draws_the_queue_under_the_graph(controller, theme):
 
 
 def test_a_detail_view_names_where_the_object_is_declared(controller, theme):
-    controller.scraper.decl_site.return_value = ("/home/dev/ws/app/src/main.c", 264)
+    site = ("/home/dev/ws/app/src/main.c", 264)
+    _put(controller, semaphores=[SemaphoreInfo("data_ready", 0x2000, 0, 4, (), decl_site=site)])
     controller.detailing = ("semaphores", 0x2000)
     view = SemaphoreDetailView(controller, theme)
 

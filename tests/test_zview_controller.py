@@ -22,7 +22,7 @@ from zview.selection import Selection
 
 def _feed(app: ZView, frame: Frame) -> None:
     """Poll ``frame`` through the core, as the TUI's poll does, and hand it to the controller."""
-    app.scraper.read_frame.return_value = frame.groups
+    app.core.scraper.read_frame.return_value = frame.groups
     app.core.poll()
     app.process_data(app.data_queue.get_nowait())
 
@@ -102,14 +102,27 @@ def test_a_thread_detail_scans_only_the_detailed_threads_stack(app):
         ZViewState.THREAD_DETAIL_VIEW: ThreadDetailView(app, MagicMock()),
     }
     app.detailing_thread = "main[0]"
-    app.scraper.rows = {"threads": {"main[0]": [0x1000]}}
-    app.scraper.is_live = True
+    app.frames.add(Frame({"threads": [ThreadInfo(0x1000, 0, 512, "main[0]", None)]}))
+    app.core.scraper.is_live = True
 
     app.transition_to(ZViewState.THREAD_DETAIL_VIEW)
 
-    assert app.scraper.selection.reads("threads", "main[0]")
-    assert not app.scraper.selection.reads("threads", "main0")
-    assert not app.scraper.selection.reads_group("semaphores")
+    assert app.core.scraper.selection.reads("threads", "main[0]")
+    assert not app.core.scraper.selection.reads("threads", "main0")
+    assert not app.core.scraper.selection.reads_group("semaphores")
+
+
+def test_a_line_excluding_the_detailed_thread_goes_back_to_the_list(app):
+    """The detail would otherwise go on reading a thread the patterns leave out."""
+    app.frames.add(Frame({"threads": [ThreadInfo(1, 0, 512, "worker", None)]}))
+    app.core.scraper.is_live = True
+    app.detailing_thread = "worker"
+    app.transition_to(ZViewState.THREAD_DETAIL_VIEW)
+
+    app._select_patterns("*, threads:!worker")
+
+    assert app.state is ZViewState.THREAD_LIST_VIEW
+    assert not app.core.scraper.selection.reads("threads", "worker")
 
 
 def test_process_data_heaps_payload_captured(app):
@@ -229,8 +242,8 @@ def reloading_app(app):
     app.core.stop = MagicMock()
     app.core.period = 0.1
     app.frames.add(Frame({"semaphores": [SemaphoreInfo("s", 0x10, 1, 4, ())]}))
-    app.scraper.is_live = True
-    app.scraper.absent_features.return_value = ()
+    app.core.scraper.is_live = True
+    app.core.scraper.absent_features.return_value = ()
     app.draw_frame = MagicMock()
     app.transition_to = MagicMock()
     return app
@@ -240,7 +253,7 @@ def test_reload_reports_its_stderr_and_restarts_polling(reloading_app):
     def reattach():
         print("Loaded cached ELF @ cache.bin", file=sys.stderr)
 
-    reloading_app.scraper.reattach.side_effect = reattach
+    reloading_app.core.scraper.reattach.side_effect = reattach
 
     reloading_app.attempt_reconnect()
 
@@ -264,7 +277,7 @@ def test_a_reload_reads_the_muted_rows_again(reloading_app):
 
 def test_a_replayed_row_hidden_or_muted_shows_again_after_the_replay_ends(app):
     """Until then a muted row stays at its last read."""
-    app.scraper.is_live = False
+    app.core.scraper.is_live = False
 
     def frame(size: int) -> Frame:
         return Frame({"threads": [ThreadInfo(a, 0, size, n, None) for a, n in enumerate("abc", 1)]})
@@ -281,8 +294,8 @@ def test_a_replayed_row_hidden_or_muted_shows_again_after_the_replay_ends(app):
 
 
 def test_the_usage_window_keys_double_and_halve_it_within_its_bounds(app):
-    app.scraper.parts = {"usage_snapshot"}
-    threads = app.scraper.groups["threads"]
+    app.core.scraper.parts = {"usage_snapshot"}
+    threads = app.core.scraper.groups["threads"]
     threads.usage_window = 1
 
     app.scale_usage_window(is_wider=False)
@@ -298,12 +311,12 @@ def test_the_usage_window_keys_double_and_halve_it_within_its_bounds(app):
 
 def test_a_recording_from_before_the_snapshot_sums_no_window(app):
     """Its shares are of each poll alone, so the bar must not claim a window."""
-    app.scraper.groups["threads"].usage_window = 8
+    app.core.scraper.groups["threads"].usage_window = 8
 
-    app.scraper.parts = set()
+    app.core.scraper.parts = set()
     assert app.core.usage_window == 1
 
-    app.scraper.parts = {"usage_snapshot"}
+    app.core.scraper.parts = {"usage_snapshot"}
     assert app.core.usage_window == 8
 
 
@@ -351,7 +364,7 @@ def test_a_muted_threads_detail_reads_it_again_once_it_opens(app):
         ZViewState.THREAD_LIST_VIEW: ThreadListView(app, theme),
         ZViewState.THREAD_DETAIL_VIEW: ThreadDetailView(app, theme),
     }
-    app.scraper.rows = {"threads": {"worker": [1]}}
+    app.frames.add(Frame({"threads": [ThreadInfo(1, 0, 512, "worker", None)]}))
     app.toggle_mute("threads", "worker")
     app.toggle_mute("threads", "gone")
 
@@ -367,7 +380,8 @@ def test_a_muted_threads_detail_reads_it_again_once_it_opens(app):
 
 
 def test_reload_onto_a_target_running_another_image_is_fatal(reloading_app):
-    reloading_app.scraper.reattach.side_effect = ImageMismatch("the target is not running this ELF")
+    mismatch = ImageMismatch("the target is not running this ELF")
+    reloading_app.core.scraper.reattach.side_effect = mismatch
 
     reloading_app.attempt_reconnect()
 
@@ -399,7 +413,7 @@ def test_escape_drops_the_pattern_line_and_enter_selects_it(app):
 
 
 def test_a_pattern_line_naming_an_unknown_group_keeps_the_patterns(app):
-    app.scraper.check_selection.side_effect = ValueError("Unknown group thread")
+    app.core.scraper.check_selection.side_effect = ValueError("Unknown group thread")
 
     app._select_patterns("thread:main")
 

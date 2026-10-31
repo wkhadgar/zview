@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import struct
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -208,7 +209,11 @@ def _heap_session(words: dict[int, int], *, wait_q: int | None, flavor: str = "s
         thread_qnode=0,
     )
     return Session(
-        FakeHeapMemory(words), None, layout, waitq_flavor=flavor, parts=frozenset({"heap_waiters"})
+        FakeHeapMemory(words),
+        MagicMock(decl_site=MagicMock(return_value=None)),
+        layout,
+        waitq_flavor=flavor,
+        parts=frozenset({"heap_waiters"}),
     )
 
 

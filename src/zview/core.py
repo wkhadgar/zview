@@ -10,6 +10,7 @@ import logging
 import queue
 import threading
 import time
+from dataclasses import dataclass
 
 from zview.backend.replay import ReplayComplete
 from zview.frames import Fatal, Frame, FrameHistory, Notice, ReplayEnd
@@ -38,11 +39,25 @@ class Status(enum.Enum):
     ENDED = "ended"
 
 
+@dataclass(frozen=True)
+class Build:
+    """What the firmware fixes: the Kconfig it leaves out, and its wait queue layout."""
+
+    # One notice per capability the Kconfig leaves out.
+    missing: tuple[str, ...]
+    is_waitq_walkable: bool
+
+    @classmethod
+    def of(cls, scraper: ZScraper) -> "Build":
+        return cls(tuple(scraper.absent_features()), scraper.waitq_flavor == "simple")
+
+
 class Core:
     """The poll of one target or recording, its state, and the events it hands the frontend."""
 
     def __init__(self, scraper: ZScraper):
         self.scraper = scraper
+        self.build = Build.of(scraper)
         self.status = Status.IDLE
         # The text of the poll's latest fault, transient or fatal.
         self.last_fault: str | None = None
@@ -67,6 +82,24 @@ class Core:
         self.selection = selection
         if self.scraper.is_live:
             self.scraper.selection = selection
+
+    @property
+    def is_live(self) -> bool:
+        """A target is read, not a recording."""
+        return self.scraper.is_live
+
+    @property
+    def groups(self) -> tuple[str, ...]:
+        """The groups the latest discovery found rows of."""
+        return tuple(key for key, available in self.scraper.available.items() if available)
+
+    def check(self, selection: Selection) -> tuple[str, ...]:
+        """
+        One warning per pattern of ``selection`` the latest discovery found no
+        row for. Raises ``ValueError`` when it names a group no frame holds.
+        """
+        self.scraper.check_selection(selection)
+        return self.scraper.unmatched(selection)
 
     @property
     def usage_window(self) -> int:
@@ -176,6 +209,7 @@ class Core:
         """
         self.frames = FrameHistory()
         self.scraper.reattach()
+        self.build = Build.of(self.scraper)
         self.refresh()
         self.status, self.last_fault = Status.IDLE, None
 

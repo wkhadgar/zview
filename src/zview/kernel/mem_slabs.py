@@ -88,6 +88,7 @@ class MemSlabs(Group):
                 num_used=words[used_idx],
                 max_used=max_used,
                 waiters=waiters,
+                decl_site=session.elf.decl_site(address),
             )
 
         return slabs

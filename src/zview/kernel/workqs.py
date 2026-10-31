@@ -153,6 +153,7 @@ class Workqs(Group):
                 is_pending_truncated=truncated,
                 thread_name=(thread_names or {}).get(thread),
                 waiters=waiters,
+                decl_site=session.elf.decl_site(address),
             )
 
         return workqs

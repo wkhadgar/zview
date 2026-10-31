@@ -85,11 +85,11 @@ class KernelObjectListView(BaseStateView):
 
     def _only_kind(self) -> Kind | None:
         """The kind listed while it is the only one read and available, or ``None``."""
+        groups = self.controller.core.groups
         listed = [
             kind
             for kind in self._kinds
-            if self.controller.scraper.available.get(kind.key)
-            and self.controller.selection.reads_group(kind.key)
+            if kind.key in groups and self.controller.selection.reads_group(kind.key)
         ]
         return listed[0] if len(listed) == 1 else None
 
@@ -216,7 +216,7 @@ class KernelObjectListView(BaseStateView):
 
         word = "contended" if only is None else only.pressure
         summary = f" {len(rows)} objects | {contended} {word} | {queued} with waiters"
-        if self.controller.is_waiters_unknown:
+        if not self.controller.core.build.is_waitq_walkable:
             # Stated once here instead of per row.
             summary += " | wait queues not observable (scalable waitq)"
 

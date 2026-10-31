@@ -548,6 +548,7 @@ class Threads(Group):
             "user_options": None,
             "entry_point": None,
             "entry_symbol": None,
+            "entry_site": None,
         }
         try:
             meta.update(
@@ -565,6 +566,7 @@ class Threads(Group):
         if entry is not None:
             meta["entry_point"] = entry
             meta["entry_symbol"] = self._entry_symbol(session.elf, entry)
+            meta["entry_site"] = session.elf.function_site(entry)
         return meta
 
     def _read_meta_span(self, session: Session, thread: ThreadInfo) -> dict:
@@ -675,6 +677,7 @@ class Threads(Group):
                     user_options=meta.get("user_options"),
                     entry_point=meta.get("entry_point"),
                     entry_symbol=meta.get("entry_symbol"),
+                    entry_site=meta.get("entry_site"),
                     is_idle=data["info"].address in self.idle_addresses,
                 )
             )

@@ -64,6 +64,7 @@ class Msgqs(Group):
                 max_msgs=words[max_idx],
                 msg_size=words[size_idx],
                 waiters=waiters,
+                decl_site=session.elf.decl_site(address),
             )
 
         return msgqs

@@ -30,4 +30,5 @@ def app() -> ZView:
     scraper = MagicMock()
     scraper.selection = Selection()
     scraper.groups = {"threads": MagicMock()}
+    scraper.waitq_flavor = "simple"
     return ZView(Core(scraper), MagicMock(), theme=ZViewTUIAttributes.create_mono())

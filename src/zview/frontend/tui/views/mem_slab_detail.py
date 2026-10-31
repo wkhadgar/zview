@@ -42,7 +42,7 @@ class MemSlabDetailView(KernelObjectDetailView):
             self._INFO_ROW,
             width,
             [
-                self._site(slab.address),
+                self._site(slab),
                 f"{slab.block_size} B ({slab.total_bytes} B total)",
                 self._peak_text(slab),
             ],

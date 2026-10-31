@@ -193,8 +193,8 @@ class BaseStateView:
         window = self.controller.core.usage_window
         off = [
             group
-            for group, available in self.controller.scraper.available.items()
-            if available and reads.reads_group(group) and not selection.reads_group(group)
+            for group in self.controller.core.groups
+            if reads.reads_group(group) and not selection.reads_group(group)
         ]
         muted = sum(1 for group, _ in self.controller.muted if reads.reads_group(group))
         notes = [

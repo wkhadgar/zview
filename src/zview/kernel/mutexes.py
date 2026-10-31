@@ -63,6 +63,7 @@ class Mutexes(Group):
                 owner_address=owner_address,
                 owner_name=(thread_names or {}).get(owner_address) if owner_address else None,
                 waiters=waiters,
+                decl_site=session.elf.decl_site(address),
             )
 
         return mutexes

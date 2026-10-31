@@ -52,7 +52,7 @@ class HeapDetailView(KernelObjectDetailView):
             stdscr,
             self._INFO_ROW,
             width,
-            [self._site(heap.address), f"{heap.free_bytes} B", f"{heap.allocated_bytes} B"],
+            [self._site(heap), f"{heap.free_bytes} B", f"{heap.allocated_bytes} B"],
         )
 
         panels = self._panels(height, width, self._MAP_ROW)

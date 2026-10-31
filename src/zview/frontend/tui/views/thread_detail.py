@@ -71,25 +71,23 @@ class ThreadDetailView(BaseStateView):
 
     def can_open(self) -> bool:
         name = self.controller.detailing_thread
-        return name is not None and name in self.controller.scraper.rows["threads"]
+        return any(t.name == name for t in self.controller.rows("threads"))
 
     def row(self) -> tuple[str, str] | None:
         return "threads", self.controller.detailing_thread
 
     def reads(self, patterns: Selection) -> Selection:
-        # The patterns read the thread for it to be listed. Every thread's cycles
-        # are still read, so the view names only the stack to scan.
-        return Selection(
-            groups=frozenset({"threads"}),
-            include=(("threads", glob.escape(self.controller.detailing_thread)),),
-        )
+        # Every thread's cycles are still read, so the view names only the stack to scan.
+        name = self.controller.detailing_thread
+        if not patterns.reads("threads", name):
+            return Selection(groups=frozenset())
+        return Selection(groups=frozenset({"threads"}), include=(("threads", glob.escape(name)),))
 
     def _entry_cell(self, thread: ThreadInfo) -> str | SiteValue:
         """The entry function, with the source site the ELF gives for it."""
         if not thread.entry_point:
             return "-"
-        site = self.controller.scraper.function_site(thread.entry_point)
-        return SiteValue(site, thread.entry_point, thread.entry_symbol)
+        return SiteValue(thread.entry_site, thread.entry_point, thread.entry_symbol)
 
     def _draw_info_boxes(
         self, stdscr: curses.window, y: int, width: int, thread: ThreadInfo

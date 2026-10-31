@@ -206,6 +206,7 @@ class Heaps(Group):
                 (allocated / total * 100) if total > 0 else 0.0,
                 chunks,
                 waiters,
+                session.elf.decl_site(heap_struct),
             )
 
         return heaps

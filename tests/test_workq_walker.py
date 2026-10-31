@@ -32,6 +32,9 @@ class FakeElf:
     def __init__(self, symbols: dict[int, str] | None = None):
         self._symbols = symbols or {}
 
+    def decl_site(self, address: int) -> None:
+        return None
+
     def get_symbol_name_at(self, addr: int) -> str | None:
         return self._symbols.get(addr)
 

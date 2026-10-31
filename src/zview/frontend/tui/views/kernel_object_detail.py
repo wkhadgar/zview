@@ -127,9 +127,9 @@ class KernelObjectDetailView(BaseStateView):
                 stdscr.addstr(y + 1, x + 2, text.ljust(inner_w)[:inner_w])
             x += box_w
 
-    def _site(self, address: int) -> SiteValue:
+    def _site(self, obj) -> SiteValue:
         """The object's address, with the source site the ELF gives for it."""
-        return SiteValue(self.controller.scraper.decl_site(address), address)
+        return SiteValue(obj.decl_site, obj.address)
 
     def _panels(self, height: int, width: int, top: int) -> Panels:
         """

@@ -24,8 +24,7 @@ def theme() -> ZViewTUIAttributes:
 
 @pytest.fixture
 def controller(app: ZView) -> ZView:
-    app.scraper.has_heaps = True
-    app.scraper.available = {"threads": True, "heaps": True}
+    app.core.scraper.available = {"threads": True, "heaps": True}
     return app
 
 
@@ -434,7 +433,7 @@ def test_the_bottom_bar_names_the_patterns_and_the_rows_muted_in_its_view(contro
     controller.select(Selection())
     assert view._bar_count("Threads: 1-2 of 2", 80) == " Threads: 1-2 of 2 "
 
-    controller.scraper.available = {"threads": True, "semaphores": True}
+    controller.core.scraper.available = {"threads": True, "semaphores": True}
     controller.select(Selection(groups=frozenset()))
     assert view._bar_count("Threads: 0-0 of 0", 80) == " Threads: 0-0 of 0 | Off: threads "
 
@@ -444,9 +443,9 @@ def test_the_bottom_bar_names_the_polls_the_cpu_shares_are_summed_over(controlle
     from zview.selection import Selection
 
     controller.select(Selection())
-    controller.scraper.available = {}
-    controller.scraper.parts = {"usage_snapshot"}
-    threads = controller.scraper.groups["threads"]
+    controller.core.scraper.available = {}
+    controller.core.scraper.parts = {"usage_snapshot"}
+    threads = controller.core.scraper.groups["threads"]
     threads.usage_window = 1
     view = ThreadListView(controller, theme)
     assert view._bar_count("Threads: 1-2 of 2", 80) == " Threads: 1-2 of 2 "

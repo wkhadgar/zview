@@ -61,6 +61,7 @@ class Semaphores(Group):
                 count=words[count_idx],
                 limit=words[limit_idx],
                 waiters=waiters,
+                decl_site=session.elf.decl_site(address),
             )
 
         return semaphores

@@ -333,7 +333,7 @@ def _probe(args) -> Target:
 def _do_live(args) -> int:
     with _probe(args).open(_selection(args)) as core:
         core.usage_window = args.usage_window
-        for notice in core.scraper.absent_features():
+        for notice in core.build.missing:
             print(notice, file=sys.stderr)
         curses.wrapper(tui_run, core, args.period)
     return 0

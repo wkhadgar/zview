@@ -50,7 +50,7 @@ def dump_single_frame(
         timeout = max(5.0, frame * max(period, 0.1) * 5.0)
 
     with target.open(selection) as core:
-        for notice in core.scraper.unmatched(selection):
+        for notice in core.check(selection):
             print(notice, file=sys.stderr)
         core.start(period)
         deadline = time.monotonic() + timeout

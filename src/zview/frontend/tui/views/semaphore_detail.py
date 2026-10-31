@@ -40,7 +40,7 @@ class SemaphoreDetailView(KernelObjectDetailView):
             stdscr,
             self._INFO_ROW,
             width,
-            [self._site(sem.address), self._limit_text(sem)],
+            [self._site(sem), self._limit_text(sem)],
         )
 
         panels = self._panels(height, width, self._GRAPH_ROW)

@@ -33,7 +33,6 @@ from zview.frontend.tui.views.thread_detail import ThreadDetailView
 from zview.frontend.tui.views.thread_list import ThreadListView
 from zview.frontend.tui.views.workq_detail import WorkqDetailView
 from zview.frontend.tui.widgets import PopupRow, TUILineEdit, TUIPopup
-from zview.orchestrator import ZScraper
 from zview.selection import Selection
 
 _GLOBAL_KEYBINDINGS: list[Keybind] = [
@@ -125,8 +124,6 @@ class ZView:
         self.detailing_thread: str | None = None
         # The group key and address of the object the detail view shows.
         self.detailing: tuple[str, int] | None = None
-        # Wait queues are walkable only in the dlist (simple) flavor.
-        self.is_waiters_unknown: bool = self.scraper.waitq_flavor != "simple"
         # Name of the open overlay ("help" or "messages"), or None.
         self._overlay: str | None = None
         # The pattern line being edited, or None.
@@ -264,7 +261,7 @@ class ZView:
 
     def attempt_reconnect(self):
         """Reload the ELF, reattach the probe and restart the data pipeline."""
-        if not self.scraper.is_live:
+        if not self.core.is_live:
             self.report("Reconnect is not available in replay mode.")
             return
 
@@ -298,7 +295,7 @@ class ZView:
                 self.report(line)
             self._overlay = overlay
 
-        for notice in self.scraper.absent_features():
+        for notice in self.core.build.missing:
             self.report(notice)
 
     def draw_frame(self) -> None:
@@ -368,10 +365,6 @@ class ZView:
         return rows
 
     @property
-    def scraper(self) -> ZScraper:
-        return self.core.scraper
-
-    @property
     def data_queue(self) -> queue.Queue:
         return self.core.events
 
@@ -436,26 +429,26 @@ class ZView:
     def _select_patterns(self, line: str) -> None:
         """
         Select the patterns of ``line``, unless it is malformed or names a group
-        the session lacks.
+        the session lacks. A view left with nothing to show goes back to the threads.
         """
         try:
             selection = self.selection.with_pattern_line(line)
-            self.scraper.check_selection(selection)
+            notices = self.core.check(selection)
         except ValueError as e:
             self.report(f"Error: {e}")
             return
 
         self.select(selection)
-        for notice in self.scraper.unmatched(selection):
+        if not self.views[self.state].can_open():
+            self.transition_to(ZViewState.THREAD_LIST_VIEW)
+        for notice in notices:
             self.report(notice)
 
     def has_kernel_objects(self) -> bool:
         """True while a group the objects view and the selection read is available."""
         return any(
-            available
-            and KernelObjectListView.OBJECTS.reads_group(key)
-            and self.selection.reads_group(key)
-            for key, available in self.scraper.available.items()
+            KernelObjectListView.OBJECTS.reads_group(key) and self.selection.reads_group(key)
+            for key in self.core.groups
         )
 
     def transition_to(self, new_state: ZViewState):
@@ -470,7 +463,7 @@ class ZView:
         if row := view.row():
             self.unmute(*row)
 
-        if self.scraper.is_live:
+        if self.core.is_live:
             self.views[self.state].closed()
             view.opened()
         self.state = new_state
@@ -538,7 +531,7 @@ class ZView:
         """
         self.report("Initializing...")
 
-        for notice in self.scraper.unmatched(self.selection):
+        for notice in self.core.check(self.selection):
             self.report(notice)
 
         self.core.start(inspection_period)
@@ -570,7 +563,7 @@ def tui_run(stdscr, core: Core, inspection_period):
         :param inspection_period: Period for inspection, in seconds.
     """
     app = ZView(core, stdscr)
-    for notice in core.scraper.absent_features():
+    for notice in core.build.missing:
         app.report(notice)
 
     try:

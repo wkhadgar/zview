@@ -51,7 +51,7 @@ class WorkqDetailView(KernelObjectDetailView):
             stdscr,
             self._INFO_ROW,
             width,
-            [self._site(workq.address), workq.thread_name or "-", ",".join(workq.states) or "-"],
+            [self._site(workq), workq.thread_name or "-", ",".join(workq.states) or "-"],
         )
 
         panels = self._panels(height, width, self._GRAPH_ROW)
