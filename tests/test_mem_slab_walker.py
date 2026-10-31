@@ -31,6 +31,9 @@ class FakeElf:
     def __init__(self, size: int = 28):
         self._size = size
 
+    def decl_site(self, address: int) -> None:
+        return None
+
     def get_struct_size(self, name: str) -> int:
         if name != "k_mem_slab":
             raise LookupError(name)

@@ -155,9 +155,9 @@ class BaseStateView:
         """View-specific bindings, ordered most-important first."""
         return []
 
-    def reads(self) -> Selection:
-        """What the view needs read from a live target, within the session's selection."""
-        return Selection()
+    def reads(self, patterns: Selection) -> Selection:
+        """What the view reads of the rows ``patterns`` read, as the core is told to."""
+        return patterns
 
     def can_open(self) -> bool:
         return True
@@ -172,20 +172,31 @@ class BaseStateView:
     def closed(self) -> None:  # noqa: B027
         """Called as another view replaces it on a live target."""
 
+    @staticmethod
+    def _draw_header(stdscr: curses.window, x: int, header: str, room: int, width: int) -> None:
+        """
+        ``header`` centred in ``room`` columns at ``x`` on the header row, moved
+        left into the space before it when a sort mark would pass the screen's edge.
+        """
+        cell = f"{header:^{room}}"
+        x = max(0, min(x, width - len(cell)))
+        stdscr.addstr(1, x, cell[: width - x])
+
     def _bar_count(self, count: str, room: int) -> str:
         """
         ``count``, then the groups off, the patterns, the rows muted in this
         view and the polls its CPU shares are summed over, cut to ``room`` columns.
         """
         selection = self.controller.selection
-        reads = self.reads()
-        window = self.controller.usage_window
+        # What the view reads of every row.
+        reads = self.reads(Selection())
+        window = self.controller.core.usage_window
         off = [
             group
-            for group, available in self.controller.scraper.available.items()
-            if available and reads.reads_group(group) and not selection.reads_group(group)
+            for group in self.controller.core.groups
+            if reads.reads_group(group) and not selection.reads_group(group)
         ]
-        muted = sum(1 for group, _ in selection.muted if reads.reads_group(group))
+        muted = sum(1 for group, _ in self.controller.muted if reads.reads_group(group))
         notes = [
             note
             for shown, note in (

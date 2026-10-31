@@ -6,7 +6,7 @@
 
 import curses
 from dataclasses import replace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -27,6 +27,7 @@ from zview.frontend.tui.views.msgq_detail import MsgqDetailView
 from zview.frontend.tui.views.mutex_detail import MutexDetailView
 from zview.frontend.tui.views.semaphore_detail import SemaphoreDetailView
 from zview.frontend.tui.views.workq_detail import WorkqDetailView
+from zview.frontend.zview_tui import ZView
 from zview.kinds import BY_KEY
 from zview.selection import Selection
 
@@ -50,18 +51,13 @@ def distinct_theme() -> ZViewTUIAttributes:
 
 
 @pytest.fixture
-def controller() -> MagicMock:
-    c = MagicMock()
-    # The ELF answers for a site; these objects come from nowhere on disk.
-    c.scraper.decl_site.return_value = None
-    c.scraper.function_site.return_value = None
-    c.scraper.has_semaphores = True
-    c.scraper.has_mutexes = True
-    c.scraper.has_msgqs = True
-    c.scraper.has_mem_slabs = True
-    c.waiters_unknown = False
+def controller(app: ZView) -> ZView:
+    c = app
+    c.core.scraper.available = dict.fromkeys(BY_KEY, True)
     c.status_message = "Running"
-    c.frames = FrameHistory()
+    c.core.frames = FrameHistory()
+    c.state = ZViewState.KERNEL_OBJECT_LIST_VIEW
+    c.select(c.patterns)
     _put(
         c,
         semaphores=[
@@ -112,7 +108,7 @@ def _put(controller, **groups) -> None:
 
 def _read_only(view: KernelObjectListView, kind) -> None:
     """Read only ``kind``'s group, as a line such as ``semaphores:*`` leaves it."""
-    view.controller.selection = Selection(groups=frozenset({kind.key}))
+    view.controller.select(Selection(groups=frozenset({kind.key})))
 
 
 def test_rows_include_every_type(controller, theme):
@@ -233,7 +229,9 @@ def test_a_work_queue_names_the_states_its_bar_cannot(controller, distinct_theme
     """A queue never started, and a walk cut short, say so in the label."""
     view = KernelObjectListView(controller, distinct_theme)
     unstarted = WorkqInfo(name="q", address=0x1, flags=0)
-    cut = WorkqInfo(name="q", address=0x1, flags=0b11, pending=("a",) * 16, pending_truncated=True)
+    cut = WorkqInfo(
+        name="q", address=0x1, flags=0b11, pending=("a",) * 16, is_pending_truncated=True
+    )
 
     assert view._info.row_values(WORKQ, unstarted)[1] == "NOT STARTED"
     assert view._info.row_values(WORKQ, cut)[1] == "BUSY ● 16+ pending"
@@ -361,7 +359,7 @@ def test_an_exhausted_slab_counts_as_contended(controller, theme):
 
 
 def test_summary_flags_unobservable_wait_queues(controller, theme):
-    controller.waiters_unknown = True
+    controller.core.build = replace(controller.core.build, is_waitq_walkable=False)
     view = KernelObjectListView(controller, theme)
 
     assert "not observable" in view._summary(view._rows(), view._only_kind())
@@ -371,10 +369,10 @@ def test_empty_message_tells_an_empty_kind_from_groups_turned_off(controller, th
     view = KernelObjectListView(controller, theme)
     _put(controller, semaphores=[], mutexes=[], msgqs=[], mem_slabs=[])
 
-    controller.has_kernel_objects.return_value = True
+    controller.core.scraper.available = {"threads": True, "semaphores": True}
     assert "No ALL objects." in view._empty_message("ALL")
 
-    controller.has_kernel_objects.return_value = False
+    controller.core.scraper.available = {"threads": True, "semaphores": False}
     assert "/ edits the patterns" in view._empty_message("ALL")
 
 
@@ -420,7 +418,7 @@ def test_quit_stops_the_controller(controller, theme):
 
     view.handle_input(SpecialCode.QUIT)
 
-    assert controller.running is False
+    assert controller.is_running is False
 
 
 def test_footer_lists_the_view_bindings(controller, theme):
@@ -760,7 +758,7 @@ def test_detail_layout_holds_as_the_wait_queue_grows(controller, theme):
 
     rows_by_size = []
     for size in (0, 1, 5):
-        controller.frames = FrameHistory()
+        controller.core.frames = FrameHistory()
         for state in (MutexState.CONTENDED, MutexState.FREE):
             _put(controller, mutexes=[_mutex_in(state)])
         _put(controller, mutexes=[_lock_with(tuple(f"waiter_{i}" for i in range(size)))])
@@ -778,7 +776,7 @@ def test_contention_strip_colors_contended_frames(controller, distinct_theme):
         curses.ACS_S3 = ord("-")
 
     controller.detailing = ("mutexes", 0x3000)
-    controller.frames = FrameHistory()
+    controller.core.frames = FrameHistory()
     for state in (
         MutexState.FREE,
         MutexState.FREE,
@@ -1082,7 +1080,7 @@ def test_pending_items_sit_above_the_drain_waiters(controller, theme):
 
 
 def test_a_cut_walk_ends_the_pending_panel_in_an_ellipsis(controller, theme):
-    _put(controller, workqs=[_busy_workq(pending_truncated=True)])
+    _put(controller, workqs=[_busy_workq(is_pending_truncated=True)])
     controller.detailing = ("workqs", 0x7000)
     view = WorkqDetailView(controller, theme)
 
@@ -1358,7 +1356,8 @@ def test_a_narrow_terminal_draws_the_queue_under_the_graph(controller, theme):
 
 
 def test_a_detail_view_names_where_the_object_is_declared(controller, theme):
-    controller.scraper.decl_site.return_value = ("/home/dev/ws/app/src/main.c", 264)
+    site = ("/home/dev/ws/app/src/main.c", 264)
+    _put(controller, semaphores=[SemaphoreInfo("data_ready", 0x2000, 0, 4, (), decl_site=site)])
     controller.detailing = ("semaphores", 0x2000)
     view = SemaphoreDetailView(controller, theme)
 

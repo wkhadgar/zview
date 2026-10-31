@@ -13,7 +13,7 @@ from pathlib import Path
 _ROOT_LOGGER_NAME = "zview"
 _MAX_BYTES = 2 * 1024 * 1024
 _BACKUP_COUNT = 3
-_configured = False
+_is_configured = False
 
 
 def _resolve_log_dir() -> Path:
@@ -30,13 +30,13 @@ def configure(level: int = logging.INFO) -> Path:
     Install a rotating file handler on the ZView root logger.
     Idempotent. Returns the absolute path of the log file.
     """
-    global _configured
+    global _is_configured
 
     log_dir = _resolve_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     log_path = log_dir / "zview.log"
 
-    if _configured:
+    if _is_configured:
         return log_path
 
     logger = logging.getLogger(_ROOT_LOGGER_NAME)
@@ -57,5 +57,5 @@ def configure(level: int = logging.INFO) -> Path:
     )
     logger.addHandler(handler)
 
-    _configured = True
+    _is_configured = True
     return log_path

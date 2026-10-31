@@ -150,7 +150,7 @@ def test_threads_that_share_a_name_or_have_none_are_kept_apart():
         return walk_thread_list(scraper, FakeElf(), HEAD_ADDR, LAYOUT, "little", True, **kwargs)
 
     assert set(walk()) == {"wrk", "wrk @ 0x1020", "thread @ 0x1040"}
-    assert set(walk(distinct=False)) == {"wrk", ""}
+    assert set(walk(is_distinct=False)) == {"wrk", ""}
 
 
 def test_a_build_without_stack_info_walks_threads_with_no_geometry():

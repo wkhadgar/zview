@@ -29,6 +29,9 @@ class FakeElf:
             raise LookupError(name)
         return 16
 
+    def decl_site(self, address: int) -> None:
+        return None
+
 
 # Synthetic 16-byte k_sem: wait_q (head, tail), count, limit.
 LAYOUT = KernelLayout(

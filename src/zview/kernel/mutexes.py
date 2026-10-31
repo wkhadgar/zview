@@ -33,7 +33,7 @@ class Mutexes(Group):
         taken and released between two calls is not observed.
         """
         scraper, elf, layout = session.scraper, session.elf, session.layout
-        walk_waiters, thread_names = session.walks_waiters, session.thread_names
+        walk_waiters, thread_names = session.is_waitq_walkable, session.thread_names
         words_to_read = struct_words(elf, "k_mutex")
         owner_idx = layout.mutex_owner // 4
         lock_count_idx = layout.mutex_lock_count // 4
@@ -63,6 +63,7 @@ class Mutexes(Group):
                 owner_address=owner_address,
                 owner_name=(thread_names or {}).get(owner_address) if owner_address else None,
                 waiters=waiters,
+                decl_site=session.elf.decl_site(address),
             )
 
         return mutexes

@@ -6,31 +6,21 @@ import sys
 from collections.abc import Callable
 
 from pyocd.utility.cmdline import convert_frequency
-from yaml import YAMLError
 
-from zview.backend.gdb import GDBScraper
-from zview.backend.image import verify_target_image
-from zview.backend.jlink import JLinkScraper
-from zview.backend.nrfutil import NrfutilScraper
-from zview.backend.pyocd import PyOCDScraper
-from zview.backend.replay import ReplayScraper
 from zview.frontend.zview_tui import tui_run
 from zview.kernel.threads import USAGE_WINDOW_MAX
 from zview.kinds import KINDS
 from zview.logging_setup import configure as configure_logging
-from zview.orchestrator import ZScraper
-from zview.runner_config import BuildDirError, RunnerConfig, find_elf, image_dir, runners_yaml_path
+from zview.runner_config import BuildDirError, find_elf, image_dir
 from zview.selection import Selection
 from zview.snapshot import dump_single_frame, record_session, serialize_frame
+from zview.target import AVAILABLE_RUNNERS, CLOCKED_RUNNERS, Target
 
 logger = logging.getLogger("zview.cli")
 
-AVAILABLE_RUNNERS = ("gdb", "jlink", "nrfutil", "pyocd")
 KNOWN_COMMANDS = ("live", "record", "replay", "dump")
 PROBE_COMMANDS = ("live", "record")
 RUNNERS_NEEDING_TARGET = ("gdb", "jlink")
-# Runners whose probe clock --frequency sets.
-CLOCKED_RUNNERS = ("pyocd", "jlink")
 
 
 def _normalize_argv(argv: list[str]) -> list[str]:
@@ -242,48 +232,22 @@ def fill_from_build_dir(args: argparse.Namespace, warn: Callable[[str], None]) -
     if not needs_build_dir(args):
         return
 
-    image = image_dir(args.build_dir, args.domain)
-
-    if args.elf_file is None:
-        args.elf_file = str(find_elf(image))
-
     if not _wants_runner(args):
+        if args.elf_file is None:
+            args.elf_file = str(find_elf(image_dir(args.build_dir, args.domain)))
         return
 
-    if args.runner is not None and args.runner_target is not None:
-        return
-
-    yaml_path = runners_yaml_path(image)
-    try:
-        cfg = RunnerConfig(yaml_path)
-    except (OSError, YAMLError) as e:
-        raise BuildDirError(
-            f"Failed to parse '{yaml_path}': {e}. Please specify runner ('-r') and target ('-t')."
-        ) from e
-
-    runner, target_mcu = cfg.get_config(preferred_runner=args.runner)
-    if runner not in AVAILABLE_RUNNERS:
-        warn(
-            f"'{runner}' is not a valid runner for ZView. Try explicitly passing one of "
-            f"the following: {', '.join(AVAILABLE_RUNNERS)}"
-        )
-        warn("Trying to continue with PyOCD as runner...")
-        runner, target_mcu = cfg.get_config(preferred_runner="pyocd")
-
-    if args.runner is None:
-        args.runner = runner
-    if args.runner_target is None and target_mcu is not None:
-        args.runner_target = str(target_mcu)
-    if args.frequency is None and args.runner in CLOCKED_RUNNERS:
-        args.frequency = cfg.frequency(args.runner)
-
-    logger.debug(
-        "Runner '%s', target '%s', frequency %s from '%s'.",
-        args.runner,
-        args.runner_target,
-        args.frequency,
-        yaml_path,
+    probe = Target.from_build_dir(
+        args.build_dir,
+        args.domain,
+        elf=args.elf_file,
+        runner=args.runner,
+        target=args.runner_target,
+        frequency=args.frequency,
+        warn=warn,
     )
+    args.elf_file, args.runner = probe.elf, probe.runner
+    args.runner_target, args.frequency = probe.target, probe.frequency
 
 
 def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
@@ -359,34 +323,24 @@ def _warn(message: str) -> None:
     print(f"zview: warning: {message}", file=sys.stderr)
 
 
-def _build_live_backend(args):
-    scraper_map = {
-        "gdb": GDBScraper,
-        "jlink": JLinkScraper,
-        "nrfutil": NrfutilScraper,
-        "pyocd": PyOCDScraper,
-    }
-    cls = scraper_map.get(args.runner, PyOCDScraper)
-    if cls in (PyOCDScraper, JLinkScraper):
-        return cls(args.runner_target, args.frequency)
-    return cls(args.runner_target)
+def _probe(args) -> Target:
+    """The probe ``args`` name, with the ELF it is checked against."""
+    return Target(
+        args.elf_file, runner=args.runner, target=args.runner_target, frequency=args.frequency
+    )
 
 
 def _do_live(args) -> int:
-    with _build_live_backend(args) as backend:
-        verify_target_image(backend, args.elf_file)
-        scraper = ZScraper(backend, args.elf_file)
-        selection = _selection(args)
-        scraper.check_selection(selection)
-        scraper.groups["threads"].usage_window = args.usage_window
-        for notice in scraper.absent_features():
+    with _probe(args).open(_selection(args)) as core:
+        core.usage_window = args.usage_window
+        for notice in core.build.missing:
             print(notice, file=sys.stderr)
-        curses.wrapper(tui_run, scraper, args.period, selection)
+        curses.wrapper(tui_run, core, args.period)
     return 0
 
 
 def _do_record(args) -> int:
-    backend = _build_live_backend(args)
+    backend = _probe(args).backend()
     captured = record_session(
         backend,
         args.elf_file,
@@ -406,26 +360,24 @@ def _do_record(args) -> int:
 
 
 def _do_replay(args) -> int:
-    backend = ReplayScraper(args.input, honor_timing=not args.no_pacing)
-    with backend:
-        scraper = ZScraper(backend, args.elf_file)
-        scraper.groups["threads"].usage_window = args.usage_window
-        selection = scraper.selection if args.match is None else _selection(args)
-        scraper.check_selection(selection)
+    replay = Target(args.elf_file, recording=args.input, is_paced=not args.no_pacing)
+    # Without --match, the replay shows the recording's own line.
+    shown = None if args.match is None else _selection(args)
+    with replay.open(shown) as core:
+        core.usage_window = args.usage_window
         # Pacing comes from the recording; the polling-thread sleep is just a floor.
-        curses.wrapper(tui_run, scraper, 0.05, selection)
+        curses.wrapper(tui_run, core, 0.05)
     return 0
 
 
 def _do_dump(args) -> int:
     if args.input:
-        backend = ReplayScraper(args.input, honor_timing=False)
+        target = Target(args.elf_file, recording=args.input, is_paced=False)
     else:
-        backend = _build_live_backend(args)
+        target = _probe(args)
 
     frame = dump_single_frame(
-        backend,
-        args.elf_file,
+        target,
         period=args.period,
         frame=args.frame,
         selection=_selection(args),

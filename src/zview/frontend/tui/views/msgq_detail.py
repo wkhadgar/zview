@@ -41,7 +41,7 @@ class MsgqDetailView(KernelObjectDetailView):
             stdscr,
             self._INFO_ROW,
             width,
-            [self._site(msgq.address), str(msgq.max_msgs), f"{msgq.msg_size} B"],
+            [self._site(msgq), str(msgq.max_msgs), f"{msgq.msg_size} B"],
         )
 
         panels = self._panels(height, width, self._GRAPH_ROW)

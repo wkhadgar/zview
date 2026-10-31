@@ -54,13 +54,13 @@ class ThreadRuntime:
     # None on a build without runtime stats.
     cpu: float | None
     cpu_normalized: float | None
-    active: bool
+    is_active: bool
     # None on a build that does not fill its stacks.
     stack_watermark: int | None
     stack_watermark_percent: float | None
     # The counters behind cpu were read with no thread switch between them.
     # None where that is not known.
-    cpu_coherent: bool | None = None
+    is_cpu_coherent: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +78,10 @@ class ThreadInfo:
     user_options: int | None = None
     entry_point: int | None = None
     entry_symbol: str | None = None
+    # ``(path, line)`` where the entry function is defined, if the ELF knows.
+    entry_site: tuple[str, int] | None = None
+    # The idle thread of a CPU.
+    is_idle: bool = False
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,8 @@ class HeapInfo:
     chunks: list[dict] | None
     # ``None``: the wait queue is not walkable, or the heap is not a ``k_heap``.
     waiters: tuple[str, ...] | None = None
+    # ``(path, line)`` where it is declared, if the ELF knows.
+    decl_site: tuple[str, int] | None = None
 
     @property
     def total_bytes(self) -> int:
@@ -116,6 +122,7 @@ class SemaphoreInfo:
     limit: int
     # ``None``: the wait queue layout is not walkable. ``()``: nobody waiting.
     waiters: tuple[str, ...] | None = None
+    decl_site: tuple[str, int] | None = None
 
     @property
     def is_initialized(self) -> bool:
@@ -146,6 +153,7 @@ class MsgqInfo:
     # A ``k_msgq`` has one wait queue for both directions: senders queue on a
     # full one, receivers on an empty one.
     waiters: tuple[str, ...] | None = None
+    decl_site: tuple[str, int] | None = None
 
     @property
     def fill_percent(self) -> float:
@@ -169,6 +177,7 @@ class MemSlabInfo:
     # high-water mark, so it holds its peak between reads.
     max_used: int | None = None
     waiters: tuple[str, ...] | None = None
+    decl_site: tuple[str, int] | None = None
 
     @property
     def fill_percent(self) -> float:
@@ -204,9 +213,10 @@ class WorkqInfo:
     flags: int
     # The item being run has left the list.
     pending: tuple[str, ...] = ()
-    pending_truncated: bool = False
+    is_pending_truncated: bool = False
     thread_name: str | None = None
     waiters: tuple[str, ...] | None = None
+    decl_site: tuple[str, int] | None = None
 
     @property
     def depth(self) -> int:
@@ -263,6 +273,7 @@ class MutexInfo:
     # ``None`` when the mutex is free or the owner is not in the thread table.
     owner_name: str | None = None
     waiters: tuple[str, ...] | None = None
+    decl_site: tuple[str, int] | None = None
 
     @property
     def is_locked(self) -> bool:

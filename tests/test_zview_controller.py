@@ -5,17 +5,14 @@
 """Coverage for ``ZView`` controller logic that doesn't require real curses."""
 
 import curses
-import queue
 import sys
-from collections import deque
 from unittest.mock import MagicMock
 
 import pytest
 
 from zview.backend.base import HeapInfo, SemaphoreInfo, ThreadInfo, WorkqInfo
 from zview.backend.image import ImageMismatch
-from zview.frames import Fatal, Frame, FrameHistory, Notice, ReplayEnd
-from zview.frontend import zview_tui
+from zview.frames import Fatal, Frame, Notice, ReplayEnd
 from zview.frontend.tui.views.base import SpecialCode, ZViewState
 from zview.frontend.tui.views.thread_detail import ThreadDetailView
 from zview.frontend.tui.views.thread_list import listed_threads
@@ -23,23 +20,17 @@ from zview.frontend.zview_tui import ZView
 from zview.selection import Selection
 
 
-@pytest.fixture
-def app() -> ZView:
-    """``ZView`` instance without going through curses init."""
-    a = ZView.__new__(ZView)
-    a.frames = FrameHistory()
-    a.selection = Selection()
-    a.status_message = ""
-    a.messages = deque(maxlen=64)
-    a.update_count = 0
-    a.data_queue = queue.Queue()
-    a.scraper = MagicMock()
-    a.scraper.groups = {"threads": MagicMock(idle_addresses=(0xDEAD,))}
-    a.state = ZViewState.THREAD_LIST_VIEW
-    a.stdscr = MagicMock()
-    a._overlay = None
-    a._prompt = None
-    return a
+def _feed(app: ZView, frame: Frame) -> None:
+    """Poll ``frame`` through the core, as the TUI's poll does, and hand it to the controller."""
+    app.core.scraper.read_frame.return_value = frame.groups
+    app.core.poll()
+    app.process_data(app.data_queue.get_nowait())
+
+
+def _open_objects(app: ZView) -> None:
+    """Open the kernel objects view, so the core reads the objects."""
+    app.state = ZViewState.KERNEL_OBJECT_LIST_VIEW
+    app.select(app.patterns)
 
 
 def test_purge_queue_clears_pending_items(app):
@@ -76,7 +67,7 @@ def test_process_data_running_status_increments_with_threads_payload(app):
     threads = [
         ThreadInfo(address=0x1000, stack_start=0, stack_size=512, name="main", runtime=None),
     ]
-    app.process_data(Frame({"threads": threads}))
+    _feed(app, Frame({"threads": threads}))
     assert app.status_message.startswith("Running")
     assert listed_threads(app) == threads
     assert app.update_count == 1
@@ -86,8 +77,8 @@ def test_a_frame_with_work_queues_records_their_backlog(app):
     """A frame without the group keeps the last list and adds no sample."""
     workq = WorkqInfo(name="bench_workq", address=0x6000, flags=0b11, pending=("trail_work",))
 
-    app.process_data(Frame({"threads": [], "workqs": [workq]}))
-    app.process_data(Frame({"threads": []}))
+    _feed(app, Frame({"threads": [], "workqs": [workq]}))
+    _feed(app, Frame({"threads": []}))
 
     assert app.frames.latest("workqs") == [workq]
     assert [q.depth for q in app.frames.of("workqs", 0x6000)] == [1]
@@ -95,16 +86,11 @@ def test_a_frame_with_work_queues_records_their_backlog(app):
 
 def test_process_data_strips_every_idle_thread(app):
     """An SMP build idles on each CPU, and none of its idle threads is listed."""
-    app.scraper.groups = {"threads": MagicMock(idle_addresses=(0xDEAD, 0xBEEF))}
     main = ThreadInfo(address=0x1000, stack_start=0, stack_size=512, name="main", runtime=None)
-    idle_00 = ThreadInfo(
-        address=0xDEAD, stack_start=0, stack_size=128, name="idle 00", runtime=None
-    )
-    idle_01 = ThreadInfo(
-        address=0xBEEF, stack_start=0, stack_size=128, name="idle 01", runtime=None
-    )
+    idle_00 = ThreadInfo(0xDEAD, 0, 128, "idle 00", None, is_idle=True)
+    idle_01 = ThreadInfo(0xBEEF, 0, 128, "idle 01", None, is_idle=True)
 
-    app.process_data(Frame({"threads": [main, idle_00, idle_01]}))
+    _feed(app, Frame({"threads": [main, idle_00, idle_01]}))
 
     assert listed_threads(app) == [main]
 
@@ -116,14 +102,27 @@ def test_a_thread_detail_scans_only_the_detailed_threads_stack(app):
         ZViewState.THREAD_DETAIL_VIEW: ThreadDetailView(app, MagicMock()),
     }
     app.detailing_thread = "main[0]"
-    app.scraper.rows = {"threads": {"main[0]": [0x1000]}}
-    app.scraper._m_scraper.is_live = True
+    app.frames.add(Frame({"threads": [ThreadInfo(0x1000, 0, 512, "main[0]", None)]}))
+    app.core.scraper.is_live = True
 
     app.transition_to(ZViewState.THREAD_DETAIL_VIEW)
 
-    assert app.scraper.view.reads("threads", "main[0]")
-    assert not app.scraper.view.reads("threads", "main0")
-    assert not app.scraper.view.reads_group("semaphores")
+    assert app.core.scraper.selection.reads("threads", "main[0]")
+    assert not app.core.scraper.selection.reads("threads", "main0")
+    assert not app.core.scraper.selection.reads_group("semaphores")
+
+
+def test_a_line_excluding_the_detailed_thread_goes_back_to_the_list(app):
+    """The detail would otherwise go on reading a thread the patterns leave out."""
+    app.frames.add(Frame({"threads": [ThreadInfo(1, 0, 512, "worker", None)]}))
+    app.core.scraper.is_live = True
+    app.detailing_thread = "worker"
+    app.transition_to(ZViewState.THREAD_DETAIL_VIEW)
+
+    app._select_patterns("*, threads:!worker")
+
+    assert app.state is ZViewState.THREAD_LIST_VIEW
+    assert not app.core.scraper.selection.reads("threads", "worker")
 
 
 def test_process_data_heaps_payload_captured(app):
@@ -136,7 +135,7 @@ def test_process_data_heaps_payload_captured(app):
         usage_percent=33.0,
         chunks=None,
     )
-    app.process_data(Frame({"heaps": [heap]}))
+    _feed(app, Frame({"heaps": [heap]}))
     assert app.frames.latest("heaps") == [heap]
 
 
@@ -144,7 +143,7 @@ def test_process_data_empty_payload_does_not_clear_existing(app):
     """A no-op frame must not erase last-known data."""
     main = ThreadInfo(address=0x1000, stack_start=0, stack_size=512, name="main", runtime=None)
     app.frames.add(Frame({"threads": [main]}))
-    app.process_data(Frame({}))
+    _feed(app, Frame({}))
     assert listed_threads(app) == [main]
 
 
@@ -180,7 +179,7 @@ def test_process_data_stores_kernel_objects(app):
     sem = SemaphoreInfo(name="data_ready", address=0x2000, count=1, limit=4, waiters=())
     mutex = MutexInfo(name="spi_bus", address=0x3000, lock_count=0, owner_address=0)
 
-    app.process_data(Frame({"threads": [], "semaphores": [sem], "mutexes": [mutex]}))
+    _feed(app, Frame({"threads": [], "semaphores": [sem], "mutexes": [mutex]}))
 
     assert app.frames.latest("semaphores") == [sem]
     assert app.frames.latest("mutexes") == [mutex]
@@ -191,9 +190,9 @@ def test_process_data_without_kernel_objects_keeps_the_last_frame(app):
     from zview.backend.base import SemaphoreInfo
 
     sem = SemaphoreInfo(name="s", address=0x2000, count=1, limit=1, waiters=())
-    app.process_data(Frame({"threads": [], "semaphores": [sem]}))
+    _feed(app, Frame({"threads": [], "semaphores": [sem]}))
 
-    app.process_data(Frame({"threads": []}))
+    _feed(app, Frame({"threads": []}))
 
     assert app.frames.latest("semaphores") == [sem]
 
@@ -216,7 +215,7 @@ def test_contention_history_samples_once_per_frame(app):
     )
 
     for frame_mutex in (free, contended, held_uncontended):
-        app.process_data(Frame({"threads": [], "mutexes": [frame_mutex]}))
+        _feed(app, Frame({"threads": [], "mutexes": [frame_mutex]}))
 
     assert [m.state for m in app.frames.of("mutexes", 0x3000)] == [
         MutexState.FREE,
@@ -231,7 +230,7 @@ def test_contention_history_is_bounded(app):
 
     mutex = MutexInfo(name="m", address=0x3000, lock_count=0, owner_address=0, waiters=())
     for _ in range(600):
-        app.process_data(Frame({"threads": [], "mutexes": [mutex]}))
+        _feed(app, Frame({"threads": [], "mutexes": [mutex]}))
 
     assert len(app.frames.of("mutexes", 0x3000)) == 256
 
@@ -239,82 +238,106 @@ def test_contention_history_is_bounded(app):
 @pytest.fixture
 def reloading_app(app):
     """``app`` ready for ``R``: a live scraper, no drawing, every history present."""
-    app.stop_event = MagicMock()
+    app.core.start = MagicMock()
+    app.core.stop = MagicMock()
+    app.core.period = 0.1
     app.frames.add(Frame({"semaphores": [SemaphoreInfo("s", 0x10, 1, 4, ())]}))
-    app.scraper._m_scraper.is_live = True
-    app.scraper.absent_features.return_value = ()
+    app.core.scraper.is_live = True
+    app.core.scraper.absent_features.return_value = ()
     app.draw_frame = MagicMock()
     app.transition_to = MagicMock()
     return app
 
 
-def test_reload_reports_its_stderr_and_restarts_polling(reloading_app, monkeypatch):
-    def reload_elf():
+def test_reload_reports_its_stderr_and_restarts_polling(reloading_app):
+    def reattach():
         print("Loaded cached ELF @ cache.bin", file=sys.stderr)
 
-    reloading_app.scraper.reload_elf.side_effect = reload_elf
-    monkeypatch.setattr(zview_tui, "verify_target_image", lambda scraper, elf_path: None)
+    reloading_app.core.scraper.reattach.side_effect = reattach
 
     reloading_app.attempt_reconnect()
 
     assert any(entry.text == "Loaded cached ELF @ cache.bin" for entry in reloading_app.messages)
-    reloading_app.scraper.start_polling_thread.assert_called_once()
+    reloading_app.core.start.assert_called_once_with(0.1)
     assert reloading_app.frames.latest("semaphores") == []
     assert reloading_app.frames.of("semaphores", 0x10) == []
     assert reloading_app._overlay is None
 
 
-def test_a_reload_reads_the_muted_rows_again(reloading_app, monkeypatch):
+def test_a_reload_reads_the_muted_rows_again(reloading_app):
     """The history starts over, and a muted row would never be read into it."""
-    monkeypatch.setattr(zview_tui, "verify_target_image", lambda scraper, elf_path: None)
+    _open_objects(reloading_app)
     reloading_app.toggle_mute("semaphores", "s")
 
     reloading_app.attempt_reconnect()
 
-    assert reloading_app.selection.muted == frozenset()
-    assert reloading_app.scraper.selection.muted == frozenset()
+    assert reloading_app.muted == {}
+    assert reloading_app.core.selection.reads("semaphores", "s")
 
 
 def test_a_replayed_row_hidden_or_muted_shows_again_after_the_replay_ends(app):
     """Until then a muted row stays at its last read."""
-    app.scraper._m_scraper.is_live = False
+    app.core.scraper.is_live = False
 
     def frame(size: int) -> Frame:
         return Frame({"threads": [ThreadInfo(a, 0, size, n, None) for a, n in enumerate("abc", 1)]})
 
-    app.process_data(frame(512))
-    app.select(Selection(exclude=((None, "b"),), muted=frozenset({("threads", "c")})))
-    app.process_data(frame(1024))
+    _feed(app, frame(512))
+    app.toggle_mute("threads", "c")
+    app.select(Selection(exclude=((None, "b"),)))
+    _feed(app, frame(1024))
     assert [(t.name, t.stack_size) for t in listed_threads(app)] == [("a", 1024), ("c", 512)]
 
+    app.toggle_mute("threads", "c")
     app.select(Selection())
     assert [t.stack_size for t in listed_threads(app)] == [1024, 1024, 1024]
 
 
 def test_the_usage_window_keys_double_and_halve_it_within_its_bounds(app):
-    threads = app.scraper.groups["threads"]
+    app.core.scraper.parts = {"usage_snapshot"}
+    threads = app.core.scraper.groups["threads"]
     threads.usage_window = 1
 
-    app.scale_usage_window(wider=False)
+    app.scale_usage_window(is_wider=False)
     assert threads.usage_window == 1
 
     for _ in range(8):
-        app.scale_usage_window(wider=True)
+        app.scale_usage_window(is_wider=True)
     assert threads.usage_window == 64
 
-    app.scale_usage_window(wider=False)
+    app.scale_usage_window(is_wider=False)
     assert threads.usage_window == 32
 
 
 def test_a_recording_from_before_the_snapshot_sums_no_window(app):
     """Its shares are of each poll alone, so the bar must not claim a window."""
-    app.scraper.groups["threads"].usage_window = 8
+    app.core.scraper.groups["threads"].usage_window = 8
 
-    app.scraper.parts = set()
-    assert app.usage_window == 1
+    app.core.scraper.parts = set()
+    assert app.core.usage_window == 1
 
-    app.scraper.parts = {"usage_snapshot"}
-    assert app.usage_window == 8
+    app.core.scraper.parts = {"usage_snapshot"}
+    assert app.core.usage_window == 8
+
+
+def test_a_muted_row_stays_as_last_read_and_only_where_the_patterns_read(app):
+    """A replay's frames still hold it, and the patterns decide whether it is listed."""
+
+    def frame(count: int) -> Frame:
+        gate, slots = (
+            SemaphoreInfo("gate", 0x10, count, 4, ()),
+            SemaphoreInfo("slots", 0x20, count, 4, ()),
+        )
+        return Frame({"semaphores": [gate, slots]})
+
+    _open_objects(app)
+    _feed(app, frame(1))
+    app.toggle_mute("semaphores", "gate")
+    _feed(app, frame(2))
+    assert [(s.name, s.count) for s in app.rows("semaphores")] == [("slots", 2), ("gate", 1)]
+
+    app.select(Selection(include=(("semaphores", "slots"),)))
+    assert [s.name for s in app.rows("semaphores")] == ["slots"]
 
 
 def test_a_muted_object_opens_on_its_last_read(app):
@@ -322,9 +345,10 @@ def test_a_muted_object_opens_on_its_last_read(app):
     from zview.frontend.tui.views.semaphore_detail import SemaphoreDetailView
 
     sem = SemaphoreInfo("gate", 0x10, 1, 4, ())
-    app.process_data(Frame({"semaphores": [sem]}))
+    _open_objects(app)
+    _feed(app, Frame({"semaphores": [sem]}))
     app.toggle_mute("semaphores", "gate")
-    app.process_data(Frame({"semaphores": []}))
+    _feed(app, Frame({"semaphores": []}))
     app.detailing = ("semaphores", 0x10)
 
     assert SemaphoreDetailView(app, ZViewTUIAttributes.create_mono())._target() == sem
@@ -340,31 +364,30 @@ def test_a_muted_threads_detail_reads_it_again_once_it_opens(app):
         ZViewState.THREAD_LIST_VIEW: ThreadListView(app, theme),
         ZViewState.THREAD_DETAIL_VIEW: ThreadDetailView(app, theme),
     }
-    app.scraper.rows = {"threads": {"worker": [1]}}
-    app.select(Selection(muted=frozenset({("threads", "worker"), ("threads", "gone")})))
+    app.frames.add(Frame({"threads": [ThreadInfo(1, 0, 512, "worker", None)]}))
+    app.toggle_mute("threads", "worker")
+    app.toggle_mute("threads", "gone")
 
     app.detailing_thread = "gone"
     app.transition_to(ZViewState.THREAD_DETAIL_VIEW)
     assert app.state is ZViewState.THREAD_LIST_VIEW
-    assert ("threads", "gone") in app.selection.muted
+    assert ("threads", "gone") in app.muted
 
     app.detailing_thread = "worker"
     app.transition_to(ZViewState.THREAD_DETAIL_VIEW)
     assert app.state is ZViewState.THREAD_DETAIL_VIEW
-    assert app.selection.muted == frozenset({("threads", "gone")})
+    assert set(app.muted) == {("threads", "gone")}
 
 
-def test_reload_onto_a_target_running_another_image_is_fatal(reloading_app, monkeypatch):
-    def mismatch(scraper, elf_path):
-        raise ImageMismatch("the target is not running this ELF")
-
-    monkeypatch.setattr(zview_tui, "verify_target_image", mismatch)
+def test_reload_onto_a_target_running_another_image_is_fatal(reloading_app):
+    mismatch = ImageMismatch("the target is not running this ELF")
+    reloading_app.core.scraper.reattach.side_effect = mismatch
 
     reloading_app.attempt_reconnect()
 
     assert reloading_app.state is ZViewState.FATAL_ERROR
     assert "the target is not running this ELF" in reloading_app.status_message
-    reloading_app.scraper.start_polling_thread.assert_not_called()
+    reloading_app.core.start.assert_not_called()
 
 
 def test_escape_drops_the_pattern_line_and_enter_selects_it(app):
@@ -390,7 +413,7 @@ def test_escape_drops_the_pattern_line_and_enter_selects_it(app):
 
 
 def test_a_pattern_line_naming_an_unknown_group_keeps_the_patterns(app):
-    app.scraper.check_selection.side_effect = ValueError("Unknown group thread")
+    app.core.scraper.check_selection.side_effect = ValueError("Unknown group thread")
 
     app._select_patterns("thread:main")
 

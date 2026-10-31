@@ -53,7 +53,7 @@ class MemSlabs(Group):
         ``max_used`` is read only where the layout resolved it.
         """
         scraper, elf, layout = session.scraper, session.elf, session.layout
-        walk_waiters, thread_names = session.walks_waiters, session.thread_names
+        walk_waiters, thread_names = session.is_waitq_walkable, session.thread_names
         words_to_read = struct_words(elf, "k_mem_slab")
         blocks_idx = layout.mem_slab_num_blocks // 4
         size_idx = layout.mem_slab_block_size // 4
@@ -88,6 +88,7 @@ class MemSlabs(Group):
                 num_used=words[used_idx],
                 max_used=max_used,
                 waiters=waiters,
+                decl_site=session.elf.decl_site(address),
             )
 
         return slabs

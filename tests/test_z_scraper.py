@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import queue
-import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -19,6 +18,7 @@ from zview.backend.base import (
 )
 from zview.backend.gdb import GDBScraper
 from zview.backend.pyocd import PyOCDScraper
+from zview.core import Core
 from zview.frames import Fatal, Frame, Notice
 from zview.kernel.threads import Threads
 from zview.orchestrator import ZScraper
@@ -121,12 +121,10 @@ def _usage_scraper(elf_path, threads, before: dict[int, int], now: dict[int, int
 
 
 def _one_frame(scraper: ZScraper) -> dict:
-    """Run the polling loop for exactly one frame and return what it emitted."""
-    data_queue: queue.Queue = queue.Queue()
-    stop_event = threading.Event()
-    with patch("time.sleep", side_effect=lambda _: stop_event.set()):
-        scraper._poll_thread_worker(data_queue, stop_event, 0)
-    return data_queue.get(timeout=1.0).groups
+    """Poll exactly one frame and return what it emitted."""
+    core = Core(scraper)
+    core.poll()
+    return core.events.get(timeout=1.0).groups
 
 
 def test_shares_are_of_the_threads_own_cycles(elf_path):
@@ -162,11 +160,13 @@ def test_every_idle_thread_counts_as_idle(elf_path):
     )
     scraper.groups["threads"].idle_addresses = (_IDLE, second_idle)
 
-    runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
+    threads = _one_frame(scraper)["threads"]
+    runtimes = {t.name: t.runtime for t in threads}
 
     assert runtimes["main"].cpu == 100.0
     assert runtimes["idle 01"].cpu == 0.0
     assert runtimes["main"].cpu_normalized == pytest.approx(10.0)
+    assert {t.name for t in threads if t.is_idle} == {"idle 00", "idle 01"}
 
 
 def test_a_detail_view_shares_count_the_threads_it_does_not_scan(elf_path):
@@ -178,7 +178,7 @@ def test_a_detail_view_shares_count_the_threads_it_does_not_scan(elf_path):
         before={_MAIN: 0, _WORKER: 0, _IDLE: 0},
         now={_MAIN: 10, _WORKER: 30, _IDLE: 60},
     )
-    scraper.view = Selection(include=((None, "main"), (None, "idle")))
+    scraper.selection = Selection(include=((None, "main"), (None, "idle")))
 
     runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
 
@@ -187,8 +187,8 @@ def test_a_detail_view_shares_count_the_threads_it_does_not_scan(elf_path):
     assert mock.calculate_dynamic_watermark.call_count == 2
 
 
-def test_a_muted_thread_is_not_scanned_but_its_cycles_still_count(elf_path):
-    """Dropping its counter would hand its cycles to the threads still listed."""
+def test_a_thread_left_out_is_not_scanned_but_its_cycles_still_count(elf_path):
+    """A mute leaves one out, and dropping its counter would hand its cycles to the rest."""
     from zview.selection import Selection
 
     main, worker, idle = _thread(_MAIN, "main"), _thread(_WORKER, "worker"), _thread(_IDLE, "idle")
@@ -198,11 +198,11 @@ def test_a_muted_thread_is_not_scanned_but_its_cycles_still_count(elf_path):
         before={_MAIN: 0, _WORKER: 0, _IDLE: 0},
         now={_MAIN: 10, _WORKER: 30, _IDLE: 60},
     )
-    scraper.selection = Selection(muted=frozenset({("threads", "worker")}))
+    scraper.selection = Selection().excluding({("threads", "worker")})
 
     runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
 
-    # 10 of the 40 busy cycles, the muted worker's 30 included.
+    # 10 of the 40 busy cycles, the left-out worker's 30 included.
     assert set(runtimes) == {"main", "idle"}
     assert runtimes["main"].cpu == pytest.approx(25.0)
     assert mock.calculate_dynamic_watermark.call_count == 2
@@ -220,7 +220,7 @@ def test_a_thread_that_ran_earlier_in_the_window_keeps_its_share_but_is_not_acti
 
     # 10 of the 40 cycles of both polls, though main ran only in the first.
     assert runtimes["main"].cpu_normalized == pytest.approx(25.0)
-    assert not runtimes["main"].active
+    assert not runtimes["main"].is_active
 
 
 def test_threads_read_again_after_a_gap_seed_their_counters_afresh(elf_path):
@@ -296,11 +296,10 @@ def test_single_strike_emits_transient_error(elf_path):
     scraper, mock = _make_strike_scraper(elf_path)
     mock.calculate_dynamic_watermark.side_effect = RuntimeError("read fail")
 
-    q: queue.Queue = queue.Queue()
-    stop_event = threading.Event()
+    core = Core(scraper)
+    q = core.events
 
-    with patch("time.sleep", side_effect=lambda _: stop_event.set()):
-        scraper._poll_thread_worker(q, stop_event, 0)
+    core.poll()
 
     msg = q.get(timeout=1)
     assert isinstance(msg, Notice)
@@ -308,55 +307,17 @@ def test_single_strike_emits_transient_error(elf_path):
     assert "read fail" in msg.text
 
 
-def test_the_poller_ends_after_its_frames(elf_path):
-    """A recording bounded in frames gets no frame the poller would run ahead to."""
-    scraper, mock = _make_strike_scraper(elf_path)
-    mock.calculate_dynamic_watermark.return_value = 100
-
-    q: queue.Queue = queue.Queue()
-    with patch("time.sleep"):
-        scraper._poll_thread_worker(q, threading.Event(), 0, frames=3)
-
-    assert [type(q.get_nowait()) for _ in range(q.qsize())] == [Frame] * 3
-    assert mock.begin_batch.call_count == 3
-
-
-def test_finishing_the_poll_waits_for_the_frame_in_flight(elf_path):
-    """A pyOCD frame through a J-Link OB takes 1.4 s, and the probe closes after it."""
-    scraper, mock = _make_strike_scraper(elf_path)
-    in_frame, release = threading.Event(), threading.Event()
-
-    def slow_scan(*args, **kwargs):
-        in_frame.set()
-        release.wait()
-        return 100
-
-    mock.calculate_dynamic_watermark.side_effect = slow_scan
-    scraper.start_polling_thread(queue.Queue(), threading.Event(), 0)
-    assert in_frame.wait(timeout=1)
-
-    finisher = threading.Thread(target=scraper.finish_polling_thread)
-    finisher.start()
-    finisher.join(timeout=1.2)
-    waited = finisher.is_alive()
-    release.set()
-    finisher.join(timeout=1)
-
-    assert waited
-    assert not finisher.is_alive()
-
-
 def test_three_strikes_emit_fatal_and_break(elf_path):
     """Three consecutive failures emit ``fatal_error`` and terminate the loop."""
     scraper, mock = _make_strike_scraper(elf_path)
     mock.calculate_dynamic_watermark.side_effect = RuntimeError("persistent fail")
 
-    q: queue.Queue = queue.Queue()
-    stop_event = threading.Event()
+    core = Core(scraper)
+    q = core.events
 
     # The loop breaks itself on the 3rd strike; time.sleep should not need to stop it.
     with patch("time.sleep"):
-        scraper._poll_thread_worker(q, stop_event, 0)
+        core.poll(0)
 
     messages = []
     while not q.empty():
@@ -379,18 +340,18 @@ def test_strike_counter_resets_on_success(elf_path):
         250,  # success
     ]
 
-    q: queue.Queue = queue.Queue()
-    stop_event = threading.Event()
+    core = Core(scraper)
+    q = core.events
 
     frame_count = [0]
 
     def fake_sleep(_):
         frame_count[0] += 1
         if frame_count[0] >= 3:
-            stop_event.set()
+            core.stop()
 
     with patch("time.sleep", side_effect=fake_sleep):
-        scraper._poll_thread_worker(q, stop_event, 0)
+        core.poll(0)
 
     messages = []
     while not q.empty():
@@ -412,7 +373,8 @@ def test_queue_full_is_not_counted_as_strike(elf_path):
     q: queue.Queue = queue.Queue(maxsize=1)
     q.put({"sentinel": True})
 
-    stop_event = threading.Event()
+    core = Core(scraper)
+    core.events = q
 
     # Run a single frame; time.sleep stops the loop. If queue.Full were a strike,
     # a transient error message would be appended here, but the queue is full so
@@ -423,10 +385,10 @@ def test_queue_full_is_not_counted_as_strike(elf_path):
     def fake_sleep(_):
         iterations[0] += 1
         if iterations[0] >= 5:
-            stop_event.set()
+            core.stop()
 
     with patch("time.sleep", side_effect=fake_sleep):
-        scraper._poll_thread_worker(q, stop_event, 0)
+        core.poll(0)
 
     # Queue still holds only the sentinel: no transient or fatal_error emitted.
     assert q.get_nowait() == {"sentinel": True}
@@ -457,17 +419,10 @@ def test_broken_frame_resyncs_and_skips_emission(elf_path):
     )
     mock_meta_scraper.watermark_cache = {_MAIN: 100}
 
-    q: queue.Queue = queue.Queue()
-    stop_event = threading.Event()
-    iters = [0]
+    core = Core(scraper)
+    q = core.events
 
-    def fake_sleep(_):
-        iters[0] += 1
-        if iters[0] >= 1:
-            stop_event.set()
-
-    with patch("time.sleep", side_effect=fake_sleep):
-        scraper._poll_thread_worker(q, stop_event, 0)
+    core.poll()
 
     # Nothing was emitted (no frame, no error, no fatal_error).
     assert q.empty()
@@ -590,14 +545,12 @@ def test_reload_elf_rebuilds_features_and_keeps_tui_settings(elf_path):
     scraper = ZScraper(meta, elf_path=elf_path)
     has_heaps = scraper.available["heaps"]
     scraper.available["heaps"] = not has_heaps
-    scraper.view = Selection(groups=frozenset({"threads"}))
-    scraper.inspection_period = 1.5
+    scraper.selection = Selection(groups=frozenset({"threads"}))
 
     scraper.reload_elf()
 
     assert scraper.available["heaps"] is has_heaps
-    assert scraper.view == Selection(groups=frozenset({"threads"}))
-    assert scraper.inspection_period == 1.5
+    assert scraper.selection == Selection(groups=frozenset({"threads"}))
 
 
 def _serving(memory: dict[int, int], reply_cap: int | None = None):

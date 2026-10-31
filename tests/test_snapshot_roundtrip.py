@@ -5,6 +5,7 @@
 """Coverage for the headless snapshot module."""
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -13,17 +14,20 @@ from zview.backend.base import HeapInfo, MemSlabInfo, MsgqInfo, ThreadInfo, Thre
 from zview.backend.replay import ReplayScraper
 from zview.frames import Fatal
 from zview.snapshot import dump_single_frame, record_session, serialize_frame
+from zview.target import Target
 
 _TESTS_DIR = Path(__file__).parent
 _FIXTURE = _TESTS_DIR / "fixtures" / "recordings" / "sys_heap_v4.3.ndjson.gz"
 _ELF = _TESTS_DIR / "fixtures" / "zephyr.elf"
+# Each open replays the fixture from its start.
+_REPLAY = Target(str(_ELF), recording=str(_FIXTURE), is_paced=False)
 
 
 def test_serialize_frame_produces_json_safe_dict():
     runtime = ThreadRuntime(
         cpu=1.0,
         cpu_normalized=0.5,
-        active=True,
+        is_active=True,
         stack_watermark=100,
         stack_watermark_percent=25.0,
     )
@@ -106,8 +110,7 @@ def test_serialize_frame_handles_empty():
 
 
 def test_dump_single_frame_via_replay():
-    backend = ReplayScraper(_FIXTURE, honor_timing=False)
-    frame = dump_single_frame(backend, str(_ELF), period=0.001, timeout=3.0)
+    frame = dump_single_frame(_REPLAY, period=0.001, timeout=3.0)
 
     assert "threads" in frame
     names = {t.name for t in frame["threads"]}
@@ -122,9 +125,8 @@ def test_a_replayed_dump_shows_only_the_selected_groups():
     """The replay reads all its recording holds, so the selection filters the frame after."""
     from zview.selection import Selection
 
-    replay = ReplayScraper(_FIXTURE, honor_timing=False)
     frame = dump_single_frame(
-        replay, str(_ELF), period=0.001, selection=Selection(groups=frozenset({"heaps"}))
+        _REPLAY, period=0.001, selection=Selection(groups=frozenset({"heaps"}))
     )
 
     assert set(frame) == {"heaps"}
@@ -132,7 +134,7 @@ def test_a_replayed_dump_shows_only_the_selected_groups():
 
 def test_record_session_roundtrip(tmp_path):
     """ReplayScraper -> RecordingScraper produces a replayable recording."""
-    source = ReplayScraper(_FIXTURE, honor_timing=False)
+    source = ReplayScraper(_FIXTURE, is_paced=False)
     out_path = tmp_path / "roundtrip.ndjson.gz"
 
     captured = record_session(source, str(_ELF), out_path, duration=1.5, period=0.001)
@@ -140,28 +142,50 @@ def test_record_session_roundtrip(tmp_path):
     assert captured >= 1
 
     # Replay the recorded session: it must yield at least one valid frame.
-    replay2 = ReplayScraper(out_path, honor_timing=False)
-    frame2 = dump_single_frame(replay2, str(_ELF), period=0.001, timeout=3.0)
+    replay2 = Target(str(_ELF), recording=str(out_path), is_paced=False)
+    frame2 = dump_single_frame(replay2, period=0.001, timeout=3.0)
     assert "threads" in frame2
     assert {t.name for t in frame2["threads"]} == {"stress_id", "idle", "main"}
 
 
 def test_record_session_respects_frames_bound(tmp_path):
-    source = ReplayScraper(_FIXTURE, honor_timing=False)
+    source = ReplayScraper(_FIXTURE, is_paced=False)
     out_path = tmp_path / "bounded.ndjson.gz"
 
     captured = record_session(source, str(_ELF), out_path, frames=2, period=0.001)
     assert captured == 2
 
 
+def test_record_ends_with_a_poll_whose_frame_was_dropped(tmp_path, monkeypatch):
+    """A frame a full queue dropped would leave the record waiting for it."""
+    from zview.core import Core
+    from zview.frames import Frame
+
+    publish = Core._publish
+    dropped: list = []
+
+    def drop_the_first_frame(self, item):
+        if isinstance(item, Frame) and not dropped:
+            dropped.append(item)
+            return
+        publish(self, item)
+
+    monkeypatch.setattr(Core, "_publish", drop_the_first_frame)
+    source = ReplayScraper(_FIXTURE, is_paced=False)
+
+    captured = record_session(source, str(_ELF), tmp_path / "r.ndjson.gz", frames=3, period=0.001)
+
+    assert captured == 2
+
+
 def test_record_session_requires_a_bound(tmp_path):
-    source = ReplayScraper(_FIXTURE, honor_timing=False)
+    source = ReplayScraper(_FIXTURE, is_paced=False)
     with pytest.raises(ValueError, match="duration or frames"):
         record_session(source, str(_ELF), tmp_path / "no_bound.ndjson.gz")
 
 
 def test_record_session_duration_bound(tmp_path):
-    source = ReplayScraper(_FIXTURE, honor_timing=False)
+    source = ReplayScraper(_FIXTURE, is_paced=False)
     out_path = tmp_path / "duration.ndjson.gz"
 
     # period dominates frame spacing; duration=0.1s / period=0.05s yields ~2 frames.
@@ -173,7 +197,7 @@ def test_record_session_duration_bound(tmp_path):
 
 def test_record_session_dual_bound_first_to_hit_wins(tmp_path):
     """Duration terminates first when frames is much larger."""
-    source = ReplayScraper(_FIXTURE, honor_timing=False)
+    source = ReplayScraper(_FIXTURE, is_paced=False)
     out_path = tmp_path / "dual.ndjson.gz"
 
     captured = record_session(source, str(_ELF), out_path, duration=0.1, frames=100, period=0.05)
@@ -187,29 +211,40 @@ def test_record_session_dual_bound_first_to_hit_wins(tmp_path):
 def test_dump_single_frame_propagates_fatal_error(monkeypatch):
     """``fatal_error`` from the polling thread surfaces as ``RuntimeError``."""
 
-    def fake_start(self, data_queue, stop_event, period):
-        data_queue.put(Fatal("synthetic backend loss"))
+    def fake_poll(self, period=None, frames=None):
+        self._publish(Fatal("synthetic backend loss"))
 
-    monkeypatch.setattr("zview.orchestrator.ZScraper.start_polling_thread", fake_start)
+    monkeypatch.setattr("zview.core.Core.poll", fake_poll)
 
-    backend = ReplayScraper(_FIXTURE, honor_timing=False)
     with pytest.raises(RuntimeError, match="synthetic backend loss"):
-        dump_single_frame(backend, str(_ELF), period=0.001, timeout=1.0)
+        dump_single_frame(_REPLAY, period=0.001, timeout=1.0)
+
+
+def test_a_dump_says_when_discovery_failed(monkeypatch, capsys):
+    """It would otherwise print a frame with no rows, and say nothing."""
+    from zview.orchestrator import ZScraper
+
+    def discover(self):
+        raise RuntimeError("thread list unreadable")
+
+    monkeypatch.setattr(ZScraper, "discover", discover)
+
+    # The recording read the discovery this replay skips, so it drifts after.
+    with pytest.raises(RuntimeError):
+        dump_single_frame(_REPLAY, period=0.001, timeout=3.0)
+
+    assert "Unable to update available threads [thread list unreadable]" in capsys.readouterr().err
 
 
 def test_dump_single_frame_rejects_invalid_frame():
-    backend = ReplayScraper(_FIXTURE, honor_timing=False)
     with pytest.raises(ValueError, match="frame must be >= 1"):
-        dump_single_frame(backend, str(_ELF), frame=0)
+        dump_single_frame(_REPLAY, frame=0)
 
 
 def test_dump_single_frame_skips_to_requested_frame():
     """``frame=N`` returns the Nth valid data frame."""
-    backend = ReplayScraper(_FIXTURE, honor_timing=False)
-    f1 = dump_single_frame(backend, str(_ELF), period=0.001, frame=1, timeout=3.0)
-
-    backend2 = ReplayScraper(_FIXTURE, honor_timing=False)
-    f3 = dump_single_frame(backend2, str(_ELF), period=0.001, frame=3, timeout=3.0)
+    f1 = dump_single_frame(_REPLAY, period=0.001, frame=1, timeout=3.0)
+    f3 = dump_single_frame(_REPLAY, period=0.001, frame=3, timeout=3.0)
 
     assert {t.name for t in f1["threads"]} == {t.name for t in f3["threads"]}
     cpu_f1 = sorted(t.runtime.cpu_normalized for t in f1["threads"])
@@ -217,8 +252,42 @@ def test_dump_single_frame_skips_to_requested_frame():
     assert cpu_f1 != cpu_f3
 
 
+class _SlowFrames(ReplayScraper):
+    """A replay whose frames take over a second, as pyOCD's through a J-Link OB."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.calls: list[str] = []
+        self._batches = 0
+
+    def begin_batch(self):
+        self._batches += 1
+        # The walk at discovery comes quick.
+        if self._batches > 1:
+            time.sleep(1.5)
+        super().begin_batch()
+
+    def end_batch(self):
+        super().end_batch()
+        self.calls.append("end_batch")
+
+    def disconnect(self):
+        self.calls.append("disconnect")
+        super().disconnect()
+
+
+def test_dump_closes_the_probe_after_the_frame_in_flight(monkeypatch):
+    backend = _SlowFrames(_FIXTURE, is_paced=False)
+    monkeypatch.setattr(Target, "backend", lambda self: backend)
+
+    with pytest.raises(TimeoutError):
+        dump_single_frame(_REPLAY, period=0.001, frame=1, timeout=0.2)
+
+    # The walk at discovery, then the frame in flight, then the probe.
+    assert backend.calls == ["end_batch", "end_batch", "disconnect"]
+
+
 def test_dump_single_frame_raises_when_recording_too_short():
     """``frame`` past recording exhaustion raises ``RuntimeError``."""
-    backend = ReplayScraper(_FIXTURE, honor_timing=False)
     with pytest.raises(RuntimeError, match="out of range"):
-        dump_single_frame(backend, str(_ELF), period=0.001, frame=10_000, timeout=3.0)
+        dump_single_frame(_REPLAY, period=0.001, frame=10_000, timeout=3.0)

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import curses
+from dataclasses import replace
 
 from zview.frontend.tui.views.base import (
     DETAIL_KEYS,
@@ -55,7 +56,7 @@ class KernelObjectListView(BaseStateView):
         # The kinds this view lists.
         self._kinds = tuple(kind for kind in KINDS if self.OBJECTS.reads_group(kind.key))
         self._current_sort_idx: int = 0
-        self._invert_sorting: bool = False
+        self._is_sort_inverted: bool = False
 
         bar_theme = (theme.PROGRESS_BAR_LOW, theme.PROGRESS_BAR_MEDIUM, theme.PROGRESS_BAR_HIGH)
         self._info = TUIKernelObjectInfo(
@@ -74,29 +75,30 @@ class KernelObjectListView(BaseStateView):
         # Column each sort key orders by, for the header indicator.
         self._sort_columns = (0, 1, 3, 2)
 
-    def reads(self) -> Selection:
-        return self.OBJECTS
+    def reads(self, patterns: Selection) -> Selection:
+        return self.objects(patterns)
+
+    @classmethod
+    def objects(cls, patterns: Selection) -> Selection:
+        """The kernel objects ``patterns`` read, as the objects views read them."""
+        return replace(patterns, skipped=patterns.skipped | cls.OBJECTS.skipped)
 
     def _only_kind(self) -> Kind | None:
         """The kind listed while it is the only one read and available, or ``None``."""
+        groups = self.controller.core.groups
         listed = [
             kind
             for kind in self._kinds
-            if self.controller.scraper.available.get(kind.key)
-            and self.controller.selection.reads_group(kind.key)
+            if kind.key in groups and self.controller.selection.reads_group(kind.key)
         ]
         return listed[0] if len(listed) == 1 else None
 
     def _rows(self) -> list[tuple[Kind, Any]]:
         """Typed, filtered and sorted rows backing the table."""
-        rows = [
-            (kind, obj)
-            for kind in self._kinds
-            for obj in self.controller.frames.latest(kind.key, self.controller.selection)
-        ]
+        rows = [(kind, obj) for kind in self._kinds for obj in self.controller.rows(kind.key)]
 
         return sorted(
-            rows, key=self._sort_keys[self._current_sort_idx], reverse=self._invert_sorting
+            rows, key=self._sort_keys[self._current_sort_idx], reverse=self._is_sort_inverted
         )
 
     @classmethod
@@ -127,20 +129,20 @@ class KernelObjectListView(BaseStateView):
         pairs = self._rows()
         only = self._only_kind()
         name = "ALL" if only is None else only.label
-        muted = self.controller.selection.muted
+        muted = self.controller.muted
         # A muted object's last values would add stale numbers to the aggregate.
         read = [(kind, obj) for kind, obj in pairs if (kind.key, obj.name) not in muted]
         widths = self.compute_widths(width, [obj.name for _, obj in pairs])
         self._info.set_field_widths(*widths)
 
         curr_x = 0
-        order_symbol = " ▼" if self._invert_sorting else " ▲"
+        order_symbol = " ▼" if self._is_sort_inverted else " ▲"
         sorted_column = self._sort_columns[self._current_sort_idx]
         for column, (col_header, col_width) in enumerate(zip(self.COLUMNS, widths, strict=True)):
             if curr_x >= width:
                 break
             header = col_header + (order_symbol if column == sorted_column else "")
-            stdscr.addstr(1, curr_x, f"{header:^{col_width}}"[: width - curr_x])
+            self._draw_header(stdscr, curr_x, header, col_width, width)
             curr_x += col_width + 1
 
         self._info.draw_cells(
@@ -175,7 +177,7 @@ class KernelObjectListView(BaseStateView):
 
             selected = (self.top_line + idx) == self.cursor
             self._info.draw(
-                stdscr, target_y, 0, kind, obj, selected, muted=(kind.key, obj.name) in muted
+                stdscr, target_y, 0, kind, obj, selected, is_muted=(kind.key, obj.name) in muted
             )
 
         start_num = self.top_line + 1 if total else 0
@@ -205,7 +207,8 @@ class KernelObjectListView(BaseStateView):
 
     @staticmethod
     def _is_blocked(kind: Kind, obj: Any) -> bool:
-        return kind.state(obj).level is Level.BLOCKED
+        state = kind.state(obj)
+        return state is not None and state.level is Level.BLOCKED
 
     def _summary(self, rows: list[tuple[Kind, Any]], only: Kind | None) -> str:
         contended = sum(1 for kind, obj in rows if self._is_blocked(kind, obj))
@@ -213,7 +216,7 @@ class KernelObjectListView(BaseStateView):
 
         word = "contended" if only is None else only.pressure
         summary = f" {len(rows)} objects | {contended} {word} | {queued} with waiters"
-        if self.controller.waiters_unknown:
+        if not self.controller.core.build.is_waitq_walkable:
             # Stated once here instead of per row.
             summary += " | wait queues not observable (scalable waitq)"
 
@@ -258,13 +261,13 @@ class KernelObjectListView(BaseStateView):
                 self._current_sort_idx = (self._current_sort_idx + 1) % len(self._sort_keys)
 
             case SpecialCode.INVERSE:
-                self._invert_sorting = not self._invert_sorting
+                self._is_sort_inverted = not self._is_sort_inverted
 
             case SpecialCode.KERNEL_OBJECTS:
                 return ZViewState.THREAD_LIST_VIEW
 
             case SpecialCode.QUIT:
-                self.controller.running = False
+                self.controller.is_running = False
 
             case _:
                 return None

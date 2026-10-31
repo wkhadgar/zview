@@ -4,16 +4,14 @@
 
 import contextlib
 import curses
-import dataclasses
 import io
 import queue
-import threading
 import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 
-from zview.backend.image import verify_target_image
+from zview.core import Core
 from zview.frames import Fatal, Frame, FrameHistory, Notice, ReplayEnd
 from zview.frontend.tui.views.base import (
     Any,
@@ -35,8 +33,6 @@ from zview.frontend.tui.views.thread_detail import ThreadDetailView
 from zview.frontend.tui.views.thread_list import ThreadListView
 from zview.frontend.tui.views.workq_detail import WorkqDetailView
 from zview.frontend.tui.widgets import PopupRow, TUILineEdit, TUIPopup
-from zview.kernel.threads import USAGE_WINDOW_MAX
-from zview.orchestrator import ZScraper
 from zview.selection import Selection
 
 _GLOBAL_KEYBINDINGS: list[Keybind] = [
@@ -97,30 +93,30 @@ class ZView:
     """
     A curses-based application for viewing Zephyr RTOS thread runtime information.
 
-    This class manages the curses UI, starts a background thread for data polling,
-    and updates the display with real-time thread statistics from a connected MCU.
+    This class manages the curses UI, and draws the frames and events of the
+    core it is attached to.
     """
 
-    def __init__(self, scraper: ZScraper, stdscr, selection: Selection):
+    def __init__(self, core: Core, stdscr, theme: ZViewTUIAttributes | None = None):
         """
-        Initializes the ZView application.
+        Initializes the ZView application, the frontend of ``core``.
 
         Args:
             stdscr: The main curses window object provided by curses.wrapper.
-            selection: What the lists show, and all a live target reads.
+            theme: The colors to draw with. Given, the terminal is left as it
+                is, for a controller without curses.
         """
         self.min_dimensions = (14, 85)
         self.stdscr: curses.window = stdscr
-        self.scraper: ZScraper = scraper
-        self.running = True
-        self.frames = FrameHistory()
-        # What the lists show: the launch's selection, then what the keys change.
-        self.select(selection)
+        self.core = core
+        # What the lists show: the session's selection, then the / line's.
+        self.patterns: Selection = core.selection
+        # Each muted row, ``(group, name)``, and its info as last read.
+        self.muted: dict[tuple[str, str], Any] = {}
+        self.is_running = True
         self.status_message: str = ""
         # One entry per reported message, newest last.
         self.messages: deque[LogEntry] = deque(maxlen=_MESSAGE_LOG_SIZE)
-        self.data_queue = queue.Queue()
-        self.stop_event = threading.Event()
         self.update_count = 0
 
         self.state: ZViewState = ZViewState.THREAD_LIST_VIEW
@@ -128,14 +124,12 @@ class ZView:
         self.detailing_thread: str | None = None
         # The group key and address of the object the detail view shows.
         self.detailing: tuple[str, int] | None = None
-        # Wait queues are walkable only in the dlist (simple) flavor.
-        self.waiters_unknown: bool = scraper.waitq_flavor != "simple"
         # Name of the open overlay ("help" or "messages"), or None.
         self._overlay: str | None = None
         # The pattern line being edited, or None.
         self._prompt: TUILineEdit | None = None
 
-        theme = self._init_curses()
+        theme = theme or self._init_curses()
         self._theme = theme
 
         levels = {
@@ -148,7 +142,7 @@ class ZView:
             theme.ACTIVE,
             theme.INACTIVE | curses.A_DIM,
             levels,
-            keep_tail=True,
+            is_tail_kept=True,
         )
         # Keys carry their own color: the frame and the headings are already
         # cyan, and the key is what the reader is looking for.
@@ -176,10 +170,8 @@ class ZView:
             ),
         }
 
-        # The opening view is the thread list. A replay keeps polling whatever
-        # its recording holds.
-        if self.scraper._m_scraper.is_live:
-            self.scraper.view = self.views[self.state].reads()
+        # The opening view is the thread list.
+        self.select(self.patterns)
 
     def _init_curses(self) -> ZViewTUIAttributes:
         """
@@ -269,35 +261,27 @@ class ZView:
 
     def attempt_reconnect(self):
         """Reload the ELF, reattach the probe and restart the data pipeline."""
-        if not self.scraper._m_scraper.is_live:
+        if not self.core.is_live:
             self.report("Reconnect is not available in replay mode.")
             return
 
         self.report("Reloading the ELF and reconnecting...")
-        self.scraper.finish_polling_thread()
-        self.scraper._m_scraper.disconnect()
+        self.core.stop()
         self.purge_queue()
-        # A rebuilt ELF can reassign the addresses the rows are kept by.
-        self.frames = FrameHistory()
-        # A muted row has no last info left to show, so it is read again.
-        self.select(dataclasses.replace(self.selection, muted=frozenset()))
-
-        self.stop_event.clear()
 
         try:
             self._reload_and_verify()
-            self.scraper.discover()
-            self.scraper.reset_runtime_state()
-            self.scraper.start_polling_thread(
-                self.data_queue, self.stop_event, self.scraper.inspection_period
-            )
+            # The history started over, and a muted row would never be read into it.
+            self.muted.clear()
+            self.select(self.patterns)
+            self.core.start(self.core.period)
             self.transition_to(ZViewState.THREAD_LIST_VIEW)
             self.stdscr.clear()
         except Exception as e:
             self.process_data(Fatal(f"Reconnection failed: {e}"))
 
     def _reload_and_verify(self) -> None:
-        """Re-parse the ELF, reconnect, and check the target runs it; its stderr goes to the log."""
+        """Reattach the target, with its stderr going to the log."""
         overlay = self._overlay
         self._overlay = "messages"
         self.draw_frame()
@@ -305,15 +289,13 @@ class ZView:
         captured = io.StringIO()
         try:
             with contextlib.redirect_stderr(captured):
-                self.scraper.reload_elf()
-                self.scraper._m_scraper.connect()
-                verify_target_image(self.scraper._m_scraper, self.scraper.elf_path)
+                self.core.reattach()
         finally:
             for line in captured.getvalue().splitlines():
                 self.report(line)
             self._overlay = overlay
 
-        for notice in self.scraper.absent_features():
+        for notice in self.core.build.missing:
             self.report(notice)
 
     def draw_frame(self) -> None:
@@ -371,47 +353,67 @@ class ZView:
 
     def _help_rows(self) -> list[PopupRow]:
         """The global bindings, then the ones the current view adds."""
-        rows = [PopupRow("Global", heading=True)]
+        rows = [PopupRow("Global", is_heading=True)]
         rows += [PopupRow(f"  {b.key}", b.help_text) for b in _GLOBAL_KEYBINDINGS]
 
         view_bindings = self.views[self.state].keybindings()
         if view_bindings:
             rows.append(PopupRow(""))
-            rows.append(PopupRow("This view", heading=True))
+            rows.append(PopupRow("This view", is_heading=True))
             rows += [PopupRow(f"  {b.key}", b.help_text) for b in view_bindings]
 
         return rows
 
+    @property
+    def data_queue(self) -> queue.Queue:
+        return self.core.events
+
+    @property
+    def frames(self) -> FrameHistory:
+        return self.core.frames
+
+    @property
+    def selection(self) -> Selection:
+        return self.patterns
+
     def select(self, selection: Selection) -> None:
-        """Show what ``selection`` reads, and read only that from a live target."""
-        self.selection = selection
-        if self.scraper._m_scraper.is_live:
-            self.scraper.selection = selection
+        """
+        Show what ``selection`` reads, and have the core read what the open
+        view reads of it, but the muted rows.
+        """
+        self.patterns = selection
+        self.core.select(self.views[self.state].reads(selection).excluding(self.muted))
+
+    def rows(self, group: str) -> list:
+        """The group's rows as read, then each muted row the patterns read, as last read."""
+        muted = sorted((row, info) for row, info in self.muted.items() if info is not None)
+        return [
+            *self.frames.latest(group, self.core.selection),
+            *(info for (g, name), info in muted if g == group and self.patterns.reads(g, name)),
+        ]
+
+    def scale_usage_window(self, is_wider: bool) -> None:
+        """Double the polls the CPU and load shares are summed over, or halve them."""
+        polls = self.core.usage_window
+        self.core.usage_window = polls * 2 if is_wider else polls // 2
 
     def toggle_mute(self, group: str, name: str) -> None:
-        """Mute the row, or unmute it if it is muted."""
-        muted = self.selection.muted ^ {(group, name)}
-        self.select(dataclasses.replace(self.selection, muted=muted))
+        """
+        Mute the row, keeping its last info to show, or unmute it if it is
+        muted. A muted row is no longer read.
+        """
+        row = (group, name)
+        if row in self.muted:
+            del self.muted[row]
+        else:
+            listed = self.frames.latest(group, self.core.selection)
+            self.muted[row] = next((info for info in listed if info.name == name), None)
+        self.select(self.patterns)
 
     def unmute(self, group: str, name: str) -> None:
         """Read the row again, if it is muted, as the detail view opening on it tracks it."""
-        if (group, name) in self.selection.muted:
+        if (group, name) in self.muted:
             self.toggle_mute(group, name)
-
-    @property
-    def usage_window(self) -> int:
-        """
-        The polls the CPU and load shares are summed over, 1 on a recording
-        from before the usage snapshot, whose shares are of each poll alone.
-        """
-        summed = "usage_snapshot" in self.scraper.parts
-        return self.scraper.groups["threads"].usage_window if summed else 1
-
-    def scale_usage_window(self, wider: bool) -> None:
-        """Double the polls the CPU and load shares are summed over, or halve them."""
-        threads = self.scraper.groups["threads"]
-        window = threads.usage_window * 2 if wider else threads.usage_window // 2
-        threads.usage_window = max(1, min(USAGE_WINDOW_MAX, window))
 
     def _edit_prompt(self, key: int) -> None:
         """Type into the pattern line: Enter selects it, Esc drops it."""
@@ -427,30 +429,30 @@ class ZView:
     def _select_patterns(self, line: str) -> None:
         """
         Select the patterns of ``line``, unless it is malformed or names a group
-        the session lacks.
+        the session lacks. A view left with nothing to show goes back to the threads.
         """
         try:
             selection = self.selection.with_pattern_line(line)
-            self.scraper.check_selection(selection)
+            notices = self.core.check(selection)
         except ValueError as e:
             self.report(f"Error: {e}")
             return
 
         self.select(selection)
-        for notice in self.scraper.unmatched(selection):
+        if not self.views[self.state].can_open():
+            self.transition_to(ZViewState.THREAD_LIST_VIEW)
+        for notice in notices:
             self.report(notice)
 
     def has_kernel_objects(self) -> bool:
         """True while a group the objects view and the selection read is available."""
         return any(
-            available
-            and KernelObjectListView.OBJECTS.reads_group(key)
-            and self.selection.reads_group(key)
-            for key, available in self.scraper.available.items()
+            KernelObjectListView.OBJECTS.reads_group(key) and self.selection.reads_group(key)
+            for key in self.core.groups
         )
 
     def transition_to(self, new_state: ZViewState):
-        """Open ``new_state``'s view, reading on a live target what the view declares."""
+        """Open ``new_state``'s view, reading what it reads of the patterns."""
         if new_state not in self.views:
             self.report(f"Warning: {new_state.name} is not yet implemented.")
             return
@@ -461,16 +463,12 @@ class ZView:
         if row := view.row():
             self.unmute(*row)
 
-        # Replay backends cannot absorb polling-shape mutations without drifting
-        # against the recording. Views still transition; the display filters
-        # from the full frame on its own.
-        if self.scraper._m_scraper.is_live:
+        if self.core.is_live:
             self.views[self.state].closed()
-            self.scraper.view = view.reads()
             view.opened()
-        self.purge_queue()
-
         self.state = new_state
+        self.select(self.patterns)
+        self.purge_queue()
 
     def process_events(self):
         key = self.stdscr.getch()
@@ -523,28 +521,22 @@ class ZView:
             case Frame():
                 self.status_message = f"Running{'.' * (self.update_count % 4)}"
                 self.update_count += 1
-                # A replay's frame holds the muted rows too.
-                self.frames.add(data, muted=self.selection.muted)
 
     def run(self, inspection_period):
         """
         The main application loop.
 
-        This loop continuously checks for new data from the polling thread,
-        updates the UI, and processes user input (e.g., 'q' to quit).
+        This loop starts the core's poll, takes its events, updates the UI,
+        and processes user input (e.g., 'q' to quit).
         """
         self.report("Initializing...")
 
-        try:
-            self.scraper.discover()
-        except RuntimeError as e:
-            self.report(f"Unable to update available threads [{e}]")
-        for notice in self.scraper.unmatched(self.selection):
+        for notice in self.core.check(self.selection):
             self.report(notice)
 
-        self.scraper.start_polling_thread(self.data_queue, self.stop_event, inspection_period)
+        self.core.start(inspection_period)
 
-        while self.running:
+        while self.is_running:
             # Drain the queue completely on every frame
             while not self.data_queue.empty():
                 with contextlib.suppress(queue.Empty):
@@ -558,7 +550,7 @@ class ZView:
             time.sleep(0.01)
 
 
-def tui_run(stdscr, scraper: ZScraper, inspection_period, selection: Selection):
+def tui_run(stdscr, core: Core, inspection_period):
     """
     The entry point for the curses application.
 
@@ -567,15 +559,14 @@ def tui_run(stdscr, scraper: ZScraper, inspection_period, selection: Selection):
 
     Args:
         :param stdscr: Standard screen window object provided by `curses.wrapper`.
-        :param scraper: ZScraper instance for data gathering.
+        :param core: The session the TUI is the frontend of.
         :param inspection_period: Period for inspection, in seconds.
-        :param selection: What the lists show, and all a live target reads.
     """
-    app = ZView(scraper, stdscr, selection)
-    for notice in scraper.absent_features():
+    app = ZView(core, stdscr)
+    for notice in core.build.missing:
         app.report(notice)
 
     try:
         app.run(inspection_period)
     finally:
-        app.scraper.finish_polling_thread()
+        app.core.stop()

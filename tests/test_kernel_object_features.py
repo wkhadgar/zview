@@ -87,12 +87,12 @@ def _polling_scraper(**rows: dict[str, list[int]]) -> ZScraper:
 
 def _objects_shown(s: ZScraper) -> bool:
     """Whether the TUI's objects view has rows to draw over ``s``."""
+    from zview.core import Core
+    from zview.frontend.tui.views.base import ZViewTUIAttributes
     from zview.frontend.zview_tui import ZView
 
-    view = ZView.__new__(ZView)
-    view.scraper = s
-    view.selection = s.selection
-    return view.has_kernel_objects()
+    theme = ZViewTUIAttributes.create_mono()
+    return ZView(Core(s), MagicMock(), theme=theme).has_kernel_objects()
 
 
 def test_active_features_lists_only_what_is_polled():
@@ -224,11 +224,11 @@ def test_a_build_with_only_heaps_still_has_objects_to_show():
     assert _objects_shown(_scraper(heaps=True))
 
 
-def test_a_view_without_a_group_skips_its_reads():
+def test_a_selection_without_a_group_skips_its_reads():
     from zview.selection import Selection
 
     s = _polling_scraper(msgqs={"msgq": [0x100]})
-    s.view = Selection(groups=frozenset({"semaphores"}))
+    s.selection = Selection(groups=frozenset({"semaphores"}))
 
     assert s._poll_groups() == {}
     assert not s._m_scraper.method_calls
@@ -341,9 +341,7 @@ def test_a_group_walker_gets_only_the_selected_labels():
     from zview.selection import Selection
 
     s = _polling_scraper(semaphores={"sem_a": [0x100], "sem_b": [0x200, 0x300]})
-    s.selection = Selection(
-        exclude=((None, "sem_a"),), muted=frozenset({("semaphores", "sem_b@0x300")})
-    )
+    s.selection = Selection(exclude=((None, "sem_a"),)).excluding({("semaphores", "sem_b@0x300")})
     given: list[dict] = []
     s.groups["semaphores"].walk = lambda session, rows: given.append(rows) or {}
 

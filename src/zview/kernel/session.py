@@ -28,7 +28,7 @@ class Session:
     parts: frozenset[str] = frozenset()
 
     @property
-    def walks_waiters(self) -> bool:
+    def is_waitq_walkable(self) -> bool:
         """Wait queues are walkable only in the dlist (simple) flavor."""
         return self.waitq_flavor == "simple"
 

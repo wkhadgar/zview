@@ -4,33 +4,32 @@
 
 """Headless recording, replay, and single-frame helpers used by the CLI commands."""
 
-import dataclasses
 import queue
 import sys
-import threading
 import time
 
 from zview.backend.base import AbstractScraper
 from zview.backend.image import verify_target_image
 from zview.backend.recording import RecordingScraper
-from zview.frames import Fatal, Frame, ReplayEnd
-from zview.kernel.groups import GROUPS
+from zview.core import Core
+from zview.frames import Fatal, Frame, Notice, ReplayEnd
+from zview.kinds import KINDS
 from zview.orchestrator import ZScraper
 from zview.selection import Selection
+from zview.target import Target
 
 
 def serialize_frame(frame: dict) -> dict:
-    """Convert a polling frame's dataclasses into a JSON-serializable dict."""
-    out: dict = {}
-    for key in (group.key for group in GROUPS):
-        if key in frame:
-            out[key] = [dataclasses.asdict(entry) for entry in frame[key]]
-    return out
+    """A polling frame's rows, each as its kind writes it to JSON."""
+    return {
+        kind.key: [kind.to_json(info) for info in frame[kind.key]]
+        for kind in KINDS
+        if kind.key in frame
+    }
 
 
 def dump_single_frame(
-    backend: AbstractScraper,
-    elf_path,
+    target: Target,
     period: float = 0.1,
     frame: int = 1,
     timeout: float | None = None,
@@ -50,30 +49,23 @@ def dump_single_frame(
     if timeout is None:
         timeout = max(5.0, frame * max(period, 0.1) * 5.0)
 
-    with backend:
-        if backend.is_live:
-            verify_target_image(backend, elf_path)
-        scraper = ZScraper(backend, elf_path)
-        scraper.check_selection(selection)
-        if backend.is_live:
-            scraper.selection = selection
-        scraper.discover()
-        for notice in scraper.unmatched(selection):
+    with target.open(selection) as core:
+        for notice in core.check(selection):
             print(notice, file=sys.stderr)
-        data_queue: queue.Queue = queue.Queue()
-        stop = threading.Event()
-        scraper.start_polling_thread(data_queue, stop, period)
+        core.start(period)
         deadline = time.monotonic() + timeout
         seen = 0
         try:
             while time.monotonic() < deadline:
                 try:
-                    frame_data = data_queue.get(timeout=0.1)
+                    frame_data = core.events.get(timeout=0.1)
                 except queue.Empty:
                     continue
                 match frame_data:
                     case Fatal(text):
                         raise RuntimeError(text)
+                    case Notice(text):
+                        print(text, file=sys.stderr)
                     case ReplayEnd():
                         raise RuntimeError(
                             f"Recording has only {seen} frames; --frame {frame} out of range."
@@ -84,8 +76,7 @@ def dump_single_frame(
                             return selection.keep(groups)
             raise TimeoutError(f"No frame {frame} within {timeout} seconds")
         finally:
-            stop.set()
-            scraper.finish_polling_thread()
+            core.stop()
 
 
 def record_session(
@@ -118,10 +109,10 @@ def record_session(
     # Built before connect: the header is written there, and the constructor
     # only reads the ELF.
     scraper = ZScraper(recorder, elf_path)
+    core = Core(scraper)
     selection = selection or Selection()
     scraper.check_selection(selection)
-    if backend.is_live:
-        scraper.selection = selection
+    core.select(selection)
     recorder.declare_features(scraper.active_features())
     recorder.declare_selection(scraper.selection)
     recorder.declare_source({**(source or {}), "period": period})
@@ -132,19 +123,19 @@ def record_session(
             print(notice, file=sys.stderr)
         scraper.capture_all()
 
-        data_queue: queue.Queue = queue.Queue()
-        stop = threading.Event()
-        # The poller stops at the bound itself: it runs a frame ahead of this loop.
-        scraper.start_polling_thread(data_queue, stop, period, frames)
+        # The poll stops at the bound itself: it runs a frame ahead of this loop.
+        core.start(period, frames)
 
         captured = 0
         start = time.monotonic()
         try:
-            while not stop.is_set():
+            while True:
                 try:
-                    frame = data_queue.get(timeout=0.1)
+                    frame = core.events.get(timeout=0.1)
                 except queue.Empty:
-                    pass
+                    # A poll bounded in frames that ended has nothing more to hand out.
+                    if not core.is_polling and core.events.empty():
+                        break
                 else:
                     match frame:
                         case Fatal(text):
@@ -158,6 +149,5 @@ def record_session(
                 if duration is not None and (time.monotonic() - start) >= duration:
                     break
         finally:
-            stop.set()
-            scraper.finish_polling_thread()
+            core.stop()
         return captured

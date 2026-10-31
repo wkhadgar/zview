@@ -126,9 +126,9 @@ class Heaps(Group):
     parts = ("heap_waiters",)
 
     def __init__(self) -> None:
-        # Every heap's chunk map is read each frame while ``all_chunks`` is
+        # Every heap's chunk map is read each frame while ``is_capturing_all`` is
         # set, and the ``detailed`` one's is read for its detail view.
-        self.all_chunks = False
+        self.is_capturing_all = False
         self.detailed: int | None = None
 
     def capture_all(self) -> None:
@@ -136,7 +136,7 @@ class Heaps(Group):
         Read every heap's chunk map. A recording covers all of them or none,
         and a replay finds out on its first read and backs off if there is none.
         """
-        self.all_chunks = True
+        self.is_capturing_all = True
 
     def notices(self, session: Session) -> tuple[str, ...]:
         # Only a build that declares heaps misses their stats.
@@ -149,13 +149,13 @@ class Heaps(Group):
         Read every statically declared ``k_heap`` and return ``{label: HeapInfo}``.
 
         Each heap costs four reads for its statistics, its wait queue with the
-        ``heap_waiters`` part on, and its chunk map when ``all_chunks`` is set or
+        ``heap_waiters`` part on, and its chunk map when ``is_capturing_all`` is set or
         it is the ``detailed`` heap. A failed read raises, naming the heap.
         """
         scraper, layout = session.scraper, session.layout
         walk_waiters = (
             session.has_part("heap_waiters")
-            and session.walks_waiters
+            and session.is_waitq_walkable
             and layout.heap_wait_q is not None
             and layout.thread_qnode is not None
         )
@@ -184,14 +184,14 @@ class Heaps(Group):
                     raise RuntimeError(f"Error reading waiters for {label}: {e}") from e
 
             chunks = None
-            if self.all_chunks or self.detailed == heap_struct:
+            if self.is_capturing_all or self.detailed == heap_struct:
                 try:
                     chunks = walk_heap_fragmentation(scraper, heap_struct, layout.heap_end_chunk)
                 except ReplayMismatch:
                     # A recording taken without the chunk map has no such read
                     # to serve. A drift leaves the cursor untouched, so the
                     # session goes on without asking again.
-                    self.all_chunks = False
+                    self.is_capturing_all = False
                     self.detailed = None
                 except Exception as e:
                     raise RuntimeError(f"Error reading sparsity for {label}: {e}") from e
@@ -206,6 +206,7 @@ class Heaps(Group):
                 (allocated / total * 100) if total > 0 else 0.0,
                 chunks,
                 waiters,
+                session.elf.decl_site(heap_struct),
             )
 
         return heaps

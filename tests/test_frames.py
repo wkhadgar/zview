@@ -48,28 +48,8 @@ def test_a_history_keeps_its_last_frames_only():
     assert counts == list(range(5, HISTORY_LENGTH + 5))
 
 
-def test_a_muted_row_stays_as_last_read_while_the_others_move_on():
-    frames = FrameHistory()
-    muted = Selection(muted=frozenset({("threads", "worker")}))
-
-    frames.add(
-        Frame(
-            {
-                "threads": [
-                    Info(address=0x1000, name="main", count=1),
-                    Info(address=0x2000, name="worker", count=1),
-                ]
-            }
-        )
-    )
-    frames.add(Frame({"threads": [Info(address=0x1000, name="main", count=2)]}))
-
-    shown = frames.latest("threads", muted)
-    assert [(t.name, t.count) for t in shown] == [("main", 2), ("worker", 1)]
-
-
 def test_a_selection_changed_after_a_frame_applies_to_it():
-    """A replay that ended takes no other frame, and a row muted since is listed once."""
+    """A replay that ended takes no other frame."""
     frames = FrameHistory()
     frames.add(
         Frame(
@@ -82,15 +62,16 @@ def test_a_selection_changed_after_a_frame_applies_to_it():
             }
         )
     )
-    selection = Selection(exclude=((None, "logging"),), muted=frozenset({("threads", "worker")}))
+    selection = Selection(exclude=((None, "logging"),))
 
     assert [t.name for t in frames.latest("threads", selection)] == ["main", "worker"]
 
 
-def test_a_muted_row_the_patterns_leave_out_is_not_listed():
+def test_a_group_a_frame_leaves_out_keeps_the_time_it_was_last_read():
+    """The objects view reads no threads, so their rows grow old while the mutexes stay new."""
     frames = FrameHistory()
-    frames.add(Frame({"threads": [Info(address=0x2000, name="worker")]}))
-    muted = frozenset({("threads", "worker")})
+    frames.add(Frame({"threads": [], "mutexes": []}, at=100.0))
+    frames.add(Frame({"mutexes": []}, at=101.0))
 
-    assert frames.latest("threads", Selection(include=((None, "main"),), muted=muted)) == []
-    assert frames.latest("threads", Selection(groups=frozenset({"heaps"}), muted=muted)) == []
+    assert (frames.latest_at("threads"), frames.latest_at("mutexes")) == (100.0, 101.0)
+    assert frames.latest_at("heaps") is None

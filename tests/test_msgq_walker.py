@@ -31,6 +31,9 @@ class FakeElf:
             raise LookupError(name)
         return 24
 
+    def decl_site(self, address: int) -> None:
+        return None
+
 
 # Synthetic 24-byte k_msgq: wait_q (head, tail), msg_size, max_msgs,
 # used_msgs, and a trailing word standing in for the buffer pointer.

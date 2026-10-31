@@ -37,9 +37,9 @@ class GDBScraper(AbstractScraper):
         self.timeout: float = timeout
         self.sock: socket.SocketType | None = None
         # A 'c' is pending, the only state a stub takes the interrupt byte in.
-        self._running = False
+        self._is_running = False
         # The stub expects a '+' for each reply.
-        self._acks = True
+        self._is_acking = True
 
     def begin_batch(self):
         self._halt()
@@ -72,13 +72,13 @@ class GDBScraper(AbstractScraper):
 
         self._drain()
 
-        self._acks = True
+        self._is_acking = True
         self.sock.sendall(b'+')
         self._send_packet(b'QStartNoAckMode')
         try:
             # A stub without no-ack mode, such as QEMU's, answers empty and has
             # each of its replies acked.
-            self._acks = self._read_response() != b'OK'
+            self._is_acking = self._read_response() != b'OK'
         except OSError as e:
             self.sock.close()
             self.sock = None
@@ -86,7 +86,7 @@ class GDBScraper(AbstractScraper):
                 f"GDB server at {self.host}:{self.port} did not answer."
             ) from e
 
-        self._running = False
+        self._is_running = False
         self._is_connected = True
         print(f"Connected to GDB server at {self.host}:{self.port}", file=sys.stderr)
         logger.info("Connected to GDB server at %s:%d", self.host, self.port)
@@ -125,11 +125,11 @@ class GDBScraper(AbstractScraper):
         it. Consumes the resulting stop-reply (T05/S05); tolerates stubs that
         omit it.
         """
-        if self.sock is None or not self._running:
+        if self.sock is None or not self._is_running:
             return
 
         self.sock.sendall(b'\x03')
-        self._running = False
+        self._is_running = False
         with contextlib.suppress(socket.timeout):
             self._read_response()
 
@@ -138,7 +138,7 @@ class GDBScraper(AbstractScraper):
         if self.sock is None:
             return
         self._send_packet(b'c')
-        self._running = True
+        self._is_running = True
 
     def _send_packet(self, data: bytes):
         """Transmit one RSP packet: ``$<data>#<checksum>``."""
@@ -179,7 +179,7 @@ class GDBScraper(AbstractScraper):
             if len(buffer) < end + 3:
                 continue
 
-            if self._acks:
+            if self._is_acking:
                 self.sock.sendall(b'+')
             return buffer[start + 1 : end]
 

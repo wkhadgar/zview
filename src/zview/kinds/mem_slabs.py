@@ -19,7 +19,7 @@ class MemSlabs(Kind):
         return State(
             info.fill_percent,
             f"{info.num_used}/{info.num_blocks} × {info.block_size}B",
-            level(blocked=info.is_exhausted, busy=bool(info.waiters)),
+            level(is_blocked=info.is_exhausted, is_busy=bool(info.waiters)),
         )
 
     def dump(self, info: MemSlabInfo) -> str:

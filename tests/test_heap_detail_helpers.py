@@ -176,9 +176,9 @@ def _heap_controller(waiters=("worker",), used_chunks=8, free=256):
         waiters=waiters,
     )
     controller = MagicMock()
-    controller.scraper.decl_site.return_value = None
     controller.frames = FrameHistory()
     controller.frames.add(Frame({"heaps": [heap]}))
+    controller.rows = controller.frames.latest
     controller.detailing = ("heaps", 0x5000)
     controller.status_message = "Running"
     return controller

@@ -136,7 +136,7 @@ class ElfInspector:
         self._function_sites: dict[int, tuple[int, int, int]] = {}
         self._resolved_files: dict[tuple[int, int], str] = {}
         self._elfclass = 0
-        self._little_endian = True
+        self._is_little_endian = True
 
         if not self._load_cache():
             print("Loading ELF. This may take a while...", end="", flush=True, file=sys.stderr)
@@ -213,7 +213,7 @@ class ElfInspector:
             # nosec - marshal payload is HMAC-SHA256 verified above.
             data = marshal.load(buf)
 
-            self._little_endian = data["elf_le"]
+            self._is_little_endian = data["elf_le"]
             self._elfclass = data["elf_class"]
             self._symbols_address = data["sym_addr"]
             self._symbols_size = data["sym_size"]
@@ -243,7 +243,7 @@ class ElfInspector:
         """
         metadata = self._get_validation_metadata()
         data = {
-            "elf_le": self._little_endian,
+            "elf_le": self._is_little_endian,
             "elf_class": self._elfclass,
             "sym_addr": self._symbols_address,
             "sym_size": self._symbols_size,
@@ -388,7 +388,7 @@ class ElfInspector:
         expression = bytes(location.value)
         opcode = expression[0]
         if opcode == _DW_OP_ADDR and len(expression) == 1 + address_size:
-            order = "little" if self._little_endian else "big"
+            order = "little" if self._is_little_endian else "big"
             # The linker leaves the location of an object it dropped at zero.
             return int.from_bytes(expression[1:], order) or None, True
         if opcode == _DW_OP_FBREG or opcode in _DW_OP_REGISTER_RANGE:
@@ -425,7 +425,7 @@ class ElfInspector:
         """
         with open(self._path, "rb") as file:
             elf = ELFFile(file)
-            self._little_endian = elf.little_endian
+            self._is_little_endian = elf.little_endian
             self._elfclass = elf.elfclass
 
             symtab = elf.get_section_by_name(".symtab")
@@ -688,14 +688,14 @@ class ElfInspector:
             return None
 
     @staticmethod
-    def _directory_name(cu, header, dir_index: int, version_5: bool) -> str | None:
+    def _directory_name(cu, header, dir_index: int, is_version_5: bool) -> str | None:
         """The directory of a file table entry, by the indexing its version uses."""
         directories = header["include_directory"]
-        if not version_5 and dir_index == 0:
+        if not is_version_5 and dir_index == 0:
             comp_dir = cu.get_top_DIE().attributes.get("DW_AT_comp_dir")
             return comp_dir.value.decode(errors="ignore") if comp_dir else None
 
-        index = dir_index if version_5 else dir_index - 1
+        index = dir_index if is_version_5 else dir_index - 1
         if not 0 <= index < len(directories):
             return None
 

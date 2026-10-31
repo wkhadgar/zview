@@ -4,8 +4,10 @@
 
 """Which groups of a frame, and which of their rows, are read."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
+from glob import escape
 
 Pattern = tuple[str | None, str]
 
@@ -38,19 +40,16 @@ class Selection:
 
     A row is read when its group is in ``groups`` and not in ``skipped``, its
     name matches an ``include`` pattern that applies to the group, it matches
-    no ``exclude`` pattern that applies, and it is not ``muted``. Patterns are
-    ``(group, glob)`` pairs, and a pattern with no group is for every group:
-    a group's own includes replace those, while every exclude for it applies.
-    A group no include applies to, or that excludes ``*``, is not read at all.
-    ``muted`` holds exact ``(group, name)`` pairs, since a name such as
-    ``z_idle_threads[0]`` reads as a glob.
+    no ``exclude`` pattern that applies. Patterns are ``(group, glob)``
+    pairs, and a pattern with no group is for every group: a group's own
+    includes replace those, while every exclude for it applies. A group no
+    include applies to, or that excludes ``*``, is not read at all.
     """
 
     groups: frozenset[str] | None = None
     skipped: frozenset[str] = frozenset()
     include: tuple[Pattern, ...] = EVERY_ROW
     exclude: tuple[Pattern, ...] = ()
-    muted: frozenset[tuple[str, str]] = frozenset()
 
     def _listed(self, group: str) -> bool:
         """The group is in ``groups`` and not in ``skipped``."""
@@ -67,10 +66,7 @@ class Selection:
         return self._listed(group) and bool(includes) and "*" not in excludes
 
     def reads(self, group: str, name: str) -> bool:
-        return self.matches(group, name) and (group, name) not in self.muted
-
-    def matches(self, group: str, name: str) -> bool:
-        """The row's group is read and its name passes the patterns, muted or not."""
+        """The row's group is read and its name passes the patterns."""
         includes, excludes = self._globs(group)
         return (
             self._listed(group)
@@ -80,8 +76,8 @@ class Selection:
 
     def unmatched(self, names: dict[str, list[str]]) -> tuple[str, ...]:
         """
-        One notice per pattern or muted row that names no row in ``names``,
-        each group's row names, among the groups in ``groups`` and not in
+        One notice per pattern that names no row in ``names``, each group's
+        row names, among the groups in ``groups`` and not in
         ``skipped``, after one when the patterns read none of those groups.
         """
         read = {group: rows for group, rows in names.items() if self._listed(group)}
@@ -101,11 +97,6 @@ class Selection:
             for word, patterns in (("include", self.include), ("exclude", self.exclude))
             for scope, glob in patterns
             if not matches(scope, glob)
-        ]
-        notices += [
-            f"Warning: muted row {group}:{name} matches no row"
-            for group, name in sorted(self.muted)
-            if name not in read.get(group, ())
         ]
         return tuple(notices)
 
@@ -130,6 +121,14 @@ class Selection:
             exclude=tuple((scope, glob) for scope, glob, excluded in patterns if excluded),
         )
 
+    def excluding(self, rows: Iterable[tuple[str, str]]) -> "Selection":
+        """
+        This selection without the ``(group, name)`` rows, each name matched
+        exactly, since one such as ``z_idle_threads[0]`` reads as a glob.
+        """
+        exact = tuple((group, escape(name)) for group, name in rows)
+        return replace(self, exclude=(*self.exclude, *exact))
+
     def to_header(self) -> dict:
         """This selection as a recording header holds it."""
         return {
@@ -137,7 +136,6 @@ class Selection:
             "skipped": sorted(self.skipped),
             "include": [[scope, pattern] for scope, pattern in self.include],
             "exclude": [[scope, pattern] for scope, pattern in self.exclude],
-            "muted": sorted([group, name] for group, name in self.muted),
         }
 
     @classmethod
@@ -153,7 +151,6 @@ class Selection:
             skipped=frozenset(header.get("skipped", ())),
             include=tuple((scope, pattern) for scope, pattern in header.get("include", EVERY_ROW)),
             exclude=tuple((scope, pattern) for scope, pattern in header.get("exclude", ())),
-            muted=frozenset((group, name) for group, name in header.get("muted", ())),
         )
 
     def keep(self, frame: dict) -> dict:

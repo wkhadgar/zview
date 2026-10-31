@@ -213,14 +213,14 @@ class PopupRow(NamedTuple):
     label: str
     text: str = ""
     level: str = "info"
-    heading: bool = False
+    is_heading: bool = False
 
 
 class TUIPopup:
     """
     Centered popup listing two-column rows, blanking the area it covers.
 
-    ``keep_tail`` picks which rows survive when they do not all fit: the last
+    ``is_tail_kept`` picks which rows survive when they do not all fit: the last
     ones for a log, the first ones for a list that reads top down.
     """
 
@@ -236,13 +236,13 @@ class TUIPopup:
         frame_attr: int,
         label_attr: int,
         level_attrs: dict[str, int],
-        keep_tail: bool = False,
+        is_tail_kept: bool = False,
     ):
         self._title = title
         self._frame_attr = frame_attr
         self._label_attr = label_attr
         self._level_attrs = level_attrs
-        self._keep_tail = keep_tail
+        self._is_tail_kept = is_tail_kept
 
     def _wrap(self, rows: list[PopupRow], text_room: int) -> list[PopupRow]:
         """
@@ -256,7 +256,7 @@ class TUIPopup:
 
         wrapped: list[PopupRow] = []
         for row in rows:
-            if row.heading or len(row.text) <= text_room:
+            if row.is_heading or len(row.text) <= text_room:
                 wrapped.append(row)
                 continue
 
@@ -276,7 +276,7 @@ class TUIPopup:
         if max_rows < 1 or max_width < self._MIN_BOX_WIDTH:
             return
 
-        label_w = max(len(row.label) for row in rows if not row.heading)
+        label_w = max(len(row.label) for row in rows if not row.is_heading)
         text_w = max(len(row.text) for row in rows)
         needed = label_w + self._COLUMN_GAP + text_w + self._PADDING_COLS
         box_w = min(max(needed, self._MIN_BOX_WIDTH), max_width)
@@ -284,7 +284,7 @@ class TUIPopup:
         # Wrap before trimming: what has to fit the height is lines, not rows.
         text_room = box_w - self._PADDING_COLS - label_w - self._COLUMN_GAP
         rows = self._wrap(rows, text_room)
-        rows = rows[-max_rows:] if self._keep_tail else rows[:max_rows]
+        rows = rows[-max_rows:] if self._is_tail_kept else rows[:max_rows]
         box_h = len(rows) + self._BORDER_THICKNESS + self._PADDING_ROWS
 
         y0 = (height - box_h) // 2
@@ -303,7 +303,7 @@ class TUIPopup:
         for i, row in enumerate(rows):
             line_y = y0 + 2 + i
             with contextlib.suppress(curses.error):
-                if row.heading:
+                if row.is_heading:
                     stdscr.addstr(
                         line_y, x0 + 2, row.label[:inner_w], self._frame_attr | curses.A_BOLD
                     )
@@ -470,8 +470,8 @@ class TUIThreadInfo:
         y: int,
         x: int,
         thread_info: ThreadInfo,
-        selected: bool = False,
-        muted: bool = False,
+        is_selected: bool = False,
+        is_muted: bool = False,
     ):
         col_pos = x
         _, screen_w = stdscr.getmaxyx()
@@ -479,7 +479,7 @@ class TUIThreadInfo:
         runtime = thread_info.runtime or ThreadRuntime(
             cpu=None,
             cpu_normalized=None,
-            active=False,
+            is_active=False,
             stack_watermark=None,
             stack_watermark_percent=None,
         )
@@ -487,8 +487,8 @@ class TUIThreadInfo:
         # Thread name
         thread_name_attr = (
             self._selected_attribute
-            if selected
-            else (self._active_attribute if runtime.active else self._inactive_attribute)
+            if is_selected
+            else (self._active_attribute if runtime.is_active else self._inactive_attribute)
         )
         _addstr_clipped(
             stdscr,
@@ -527,9 +527,9 @@ class TUIThreadInfo:
         )
         _addstr_clipped(stdscr, y, col_pos, watermark_bytes_display, screen_w)
 
-        if muted:
+        if is_muted:
             # The cursor keeps the name cell.
-            start = x + self._thread_name_width + 1 if selected else x
+            start = x + self._thread_name_width + 1 if is_selected else x
             stdscr.chgat(y, start, -1, curses.A_DIM)
 
 
@@ -676,8 +676,8 @@ class TUIKernelObjectInfo:
         x: int,
         kind: Kind,
         obj,
-        selected: bool = False,
-        muted: bool = False,
+        is_selected: bool = False,
+        is_muted: bool = False,
     ) -> None:
         fill, label, waiters, attr = self.row_values(kind, obj)
         # Only a slab carries a peak, and only where the build tracks it. A
@@ -686,12 +686,12 @@ class TUIKernelObjectInfo:
         if mark == 0:
             mark = None
         self.draw_cells(
-            stdscr, y, x, kind.label, obj.name, fill, label, waiters, attr, selected, mark
+            stdscr, y, x, kind.label, obj.name, fill, label, waiters, attr, is_selected, mark
         )
 
-        if muted:
+        if is_muted:
             # The cursor keeps the type and name cells.
-            start = x + self._type_width + self._name_width + 2 if selected else x
+            start = x + self._type_width + self._name_width + 2 if is_selected else x
             stdscr.chgat(y, start, -1, curses.A_DIM)
 
     def draw_cells(
@@ -705,7 +705,7 @@ class TUIKernelObjectInfo:
         label: str,
         waiters: str,
         attr: int,
-        selected: bool = False,
+        is_selected: bool = False,
         mark: float | None = None,
     ) -> None:
         """
@@ -715,7 +715,7 @@ class TUIKernelObjectInfo:
         color. ``mark`` is a high-water percentage drawn across the bar.
         """
         _, screen_w = stdscr.getmaxyx()
-        selected_attr = self._selected_attr if selected else attr
+        selected_attr = self._selected_attr if is_selected else attr
 
         col_pos = x
         _addstr_clipped(

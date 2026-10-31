@@ -21,7 +21,9 @@ class Mutexes(Kind):
         text = f"LOCKED ● {owner}"
         if info.lock_count > 1:
             text += f" ×{info.lock_count}"
-        return State(100.0, text, level(blocked=info.state is MutexState.CONTENDED, busy=True))
+        return State(
+            100.0, text, level(is_blocked=info.state is MutexState.CONTENDED, is_busy=True)
+        )
 
     def in_use(self, info: MutexInfo) -> bool:
         return info.is_locked

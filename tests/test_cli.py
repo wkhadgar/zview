@@ -132,7 +132,7 @@ def test_dump_prints_an_unmeasured_watermark_as_a_dash(monkeypatch, capsys):
     unmeasured = ThreadRuntime(
         cpu=None,
         cpu_normalized=None,
-        active=False,
+        is_active=False,
         stack_watermark=None,
         stack_watermark_percent=None,
     )
@@ -346,16 +346,18 @@ def test_record_dispatches_with_frames_bound(monkeypatch, capsys, tmp_path):
 
 
 def test_replay_no_pacing_passes_to_scraper(monkeypatch, capsys):
-    """--no-pacing -> ReplayScraper(honor_timing=False)."""
+    """--no-pacing -> ReplayScraper(is_paced=False)."""
+    from zview import target
+
     captured: dict = {}
-    real_cls = cli.ReplayScraper
+    real_cls = target.ReplayScraper
 
     class SpyReplay(real_cls):
         def __init__(self, *args, **kwargs):
-            captured["honor_timing"] = kwargs.get("honor_timing", True)
+            captured["is_paced"] = kwargs.get("is_paced", True)
             super().__init__(*args, **kwargs)
 
-    monkeypatch.setattr(cli, "ReplayScraper", SpyReplay)
+    monkeypatch.setattr(target, "ReplayScraper", SpyReplay)
     monkeypatch.setattr(cli, "tui_run", lambda *a, **kw: None)
     monkeypatch.setattr(cli.curses, "wrapper", lambda fn, *a, **kw: fn(None, *a, **kw))
 
@@ -365,7 +367,7 @@ def test_replay_no_pacing_passes_to_scraper(monkeypatch, capsys):
         ["replay", "-e", str(_ELF), "-i", str(_FIXTURE), "--no-pacing"],
     )
     assert rc == 0
-    assert captured["honor_timing"] is False
+    assert captured["is_paced"] is False
 
 
 _RUNNERS_YAML = (

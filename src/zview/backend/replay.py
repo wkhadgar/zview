@@ -59,7 +59,7 @@ class ReplayScraper(AbstractScraper):
     """
     Replays a RecordingScraper file. Strict: every call's op and args must
     match the next recorded entry, else raises ReplayMismatch. Past the end
-    raises ReplayExhausted. ``honor_timing=True`` paces calls to the recorded
+    raises ReplayExhausted. ``is_paced=True`` paces calls to the recorded
     timestamps.
     """
 
@@ -68,7 +68,7 @@ class ReplayScraper(AbstractScraper):
     # drifting against the recording.
     is_live = False
 
-    def __init__(self, source_path: Path | str, honor_timing: bool = True):
+    def __init__(self, source_path: Path | str, is_paced: bool = True):
         super().__init__(target_mcu=None)
         self._source_path = Path(source_path)
         # Overwritten from the header on load.
@@ -76,8 +76,8 @@ class ReplayScraper(AbstractScraper):
         self._selection = Selection()
         self._entries: list[dict] = []
         self._cursor: int = 0
-        self._loaded: bool = False
-        self._honor_timing = honor_timing
+        self._is_loaded: bool = False
+        self._is_paced = is_paced
         self._anchor_wall: float | None = None
         self._anchor_recording: float | None = None
 
@@ -95,7 +95,7 @@ class ReplayScraper(AbstractScraper):
 
     def _load(self) -> None:
         """Parse header and buffer all entries. Idempotent. Raises UnsupportedSchema."""
-        if self._loaded:
+        if self._is_loaded:
             return
 
         with gzip.open(self._source_path, "rt", encoding="utf-8") as fp:
@@ -119,7 +119,7 @@ class ReplayScraper(AbstractScraper):
                     continue
                 self._entries.append(json.loads(line))
 
-        self._loaded = True
+        self._is_loaded = True
 
     def _next(self, op: str, args: dict):
         """
@@ -145,7 +145,7 @@ class ReplayScraper(AbstractScraper):
                 f"expected {entry['op']}({entry['args']}), got {op}({args})."
             )
 
-        if self._honor_timing:
+        if self._is_paced:
             self._pace_to(entry.get("t"))
 
         self._cursor += 1

@@ -75,8 +75,8 @@ class KernelObjectDetailView(BaseStateView):
         self._info_boxes = [TUIBox(title, "", 0) for title, _ in self._INFO_TITLES]
         self._queue = TUIWaitQueue(theme.INACTIVE)
 
-    def reads(self) -> Selection:
-        return KernelObjectListView.OBJECTS
+    def reads(self, patterns: Selection) -> Selection:
+        return KernelObjectListView.objects(patterns)
 
     def row(self) -> tuple[str, str] | None:
         obj = self._target()
@@ -88,7 +88,7 @@ class KernelObjectDetailView(BaseStateView):
             return None
 
         _, address = self.controller.detailing
-        listed = self.controller.frames.latest(self.kind.key, self.controller.selection)
+        listed = self.controller.rows(self.kind.key)
         return next((info for info in listed if info.address == address), None)
 
     def _draw_title(self, stdscr: curses.window, width: int, obj: Any) -> None:
@@ -127,9 +127,9 @@ class KernelObjectDetailView(BaseStateView):
                 stdscr.addstr(y + 1, x + 2, text.ljust(inner_w)[:inner_w])
             x += box_w
 
-    def _site(self, address: int) -> SiteValue:
+    def _site(self, obj) -> SiteValue:
         """The object's address, with the source site the ELF gives for it."""
-        return SiteValue(self.controller.scraper.decl_site(address), address)
+        return SiteValue(obj.decl_site, obj.address)
 
     def _panels(self, height: int, width: int, top: int) -> Panels:
         """
@@ -170,7 +170,7 @@ class KernelObjectDetailView(BaseStateView):
         if key in (*BACK_CODES, curses.KEY_LEFT, curses.KEY_EXIT, SpecialCode.KERNEL_OBJECTS):
             return ZViewState.KERNEL_OBJECT_LIST_VIEW
         if key == SpecialCode.QUIT:
-            self.controller.running = False
+            self.controller.is_running = False
         return None
 
 
@@ -194,8 +194,8 @@ class ObjectDetailView(BaseStateView):
         detailing = self.controller.detailing
         return detailing is not None and detailing[0] in self._views
 
-    def reads(self) -> Selection:
-        return self._view().reads()
+    def reads(self, patterns: Selection) -> Selection:
+        return self._view().reads(patterns)
 
     def row(self) -> tuple[str, str] | None:
         return self._view().row()

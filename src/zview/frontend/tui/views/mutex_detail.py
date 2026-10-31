@@ -77,7 +77,7 @@ class MutexDetailView(KernelObjectDetailView):
             stdscr,
             self._INFO_ROW,
             width,
-            [self._site(mutex.address), str(mutex.lock_count), owner],
+            [self._site(mutex), str(mutex.lock_count), owner],
         )
 
         self._draw_history(stdscr, width, mutex.address)

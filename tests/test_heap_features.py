@@ -1,13 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
-import queue
-import threading
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 from zview.backend.elf_inspector import ElfInspector
+from zview.core import Core
 from zview.kernel import compat
 from zview.kernel.heaps import HEAP_FIELDS
 from zview.orchestrator import ZScraper
@@ -53,11 +52,10 @@ def test_heap_warnings_and_polling(monkeypatch, tmp_path, fields_available, obje
     walked = []
     for group in scraper.groups.values():
         group.walk = lambda session, rows, key=group.key: walked.append(key) or {}
-    stop = threading.Event()
-    monkeypatch.setattr('zview.orchestrator.time.sleep', lambda _: stop.set())
-    data_queue = queue.Queue()
+    core = Core(scraper)
+    data_queue = core.events
 
-    scraper._poll_thread_worker(data_queue, stop, 0)
+    core.poll()
 
     assert walked.count('heaps') == int(can_poll)
     assert ('heaps' in data_queue.get_nowait().groups) == can_poll

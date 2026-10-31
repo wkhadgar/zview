@@ -4,6 +4,7 @@
 
 """What each group's infos mean to whoever shows them, declared once per group."""
 
+import dataclasses
 import enum
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -29,11 +30,15 @@ class State:
     level: Level
 
 
-def level(*, blocked: bool = False, busy: bool = False) -> Level:
+def level(*, is_blocked: bool = False, is_busy: bool = False) -> Level:
     """The first level that applies."""
     return next(
         lvl
-        for applies, lvl in ((blocked, Level.BLOCKED), (busy, Level.BUSY), (True, Level.QUIET))
+        for applies, lvl in (
+            (is_blocked, Level.BLOCKED),
+            (is_busy, Level.BUSY),
+            (True, Level.QUIET),
+        )
         if applies
     )
 
@@ -51,9 +56,10 @@ class Kind(ABC):
     One group's infos as a reader sees them, keyed like its kernel ``Group``.
 
     ``label`` and ``title`` name the kind in a table and on its aggregate row,
-    ``pressure`` is the word for an info that is ``BLOCKED``, and ``state``
-    reads one info at a glance. A view lists the kinds its selection reads, so
-    a kind no table lists leaves them unset.
+    ``pressure`` is the word for an info that is ``BLOCKED``, ``state`` reads
+    one info at a glance, and ``listed`` says whether a table lists it. A view
+    lists the kinds its selection reads, so a kind no table lists leaves them
+    unset.
     """
 
     key: ClassVar[str]
@@ -65,8 +71,27 @@ class Kind(ABC):
     def dump(self, info) -> str:
         """The info as one line of ``zview dump``."""
 
-    def state(self, info) -> State:
-        raise NotImplementedError(f"the {self.key} kind has no state")
+    def state(self, info) -> State | None:
+        """The info at a glance, or ``None`` for a kind or an info without one."""
+        return None
+
+    def listed(self, info) -> bool:
+        return True
+
+    def to_json(self, info) -> dict:
+        """
+        The info's fields, then its dump line as ``line`` and its state, where
+        it has one, as ``glance``: a thread already has a ``state`` field.
+        """
+        row = dataclasses.asdict(info)
+        row["line"] = self.dump(info)
+        if (state := self.state(info)) is not None:
+            row["glance"] = {
+                "fill": state.fill,
+                "text": state.text,
+                "level": state.level.name.lower(),
+            }
+        return row
 
     def in_use(self, info) -> bool:
         """Held or working, with or without threads queued on it."""

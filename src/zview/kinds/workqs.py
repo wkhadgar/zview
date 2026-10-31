@@ -27,14 +27,14 @@ class Workqs(Kind):
             if applies
         )
         if info.depth:
-            more = "+" if info.pending_truncated else ""
+            more = "+" if info.is_pending_truncated else ""
             text += f" ● {info.depth}{more} pending"
         return State(
             100.0 if info.is_busy else 0.0,
             text,
             level(
-                blocked=info.is_plugged or info.is_draining,
-                busy=bool(info.depth or info.waiters),
+                is_blocked=info.is_plugged or info.is_draining,
+                is_busy=bool(info.depth or info.waiters),
             ),
         )
 
@@ -42,7 +42,7 @@ class Workqs(Kind):
         return info.is_busy or bool(info.depth)
 
     def dump(self, info: WorkqInfo) -> str:
-        items = ",".join(info.pending) + (",..." if info.pending_truncated else "")
+        items = ",".join(info.pending) + (",..." if info.is_pending_truncated else "")
         return (
             f"wkq  {info.name:20s} {info.depth} pending flags={','.join(info.states) or '-'} "
             f"thread={info.thread_name or '-'} items={items or '-'} "

@@ -5,18 +5,15 @@
 """Coverage for the message log behind the ``m`` overlay."""
 
 import curses
-import queue
 import re
-from collections import deque
 from unittest.mock import MagicMock
 
 import pytest
 
-from zview.frames import Frame, FrameHistory, Notice
-from zview.frontend.tui.views.base import Keybind, SpecialCode, ZViewState, ZViewTUIAttributes
+from zview.frames import Frame, Notice
+from zview.frontend.tui.views.base import Keybind, SpecialCode
 from zview.frontend.tui.widgets import PopupRow, TUIPopup
-from zview.frontend.zview_tui import _MESSAGE_LOG_SIZE, LogEntry, ZView
-from zview.selection import Selection
+from zview.frontend.zview_tui import _MESSAGE_LOG_SIZE, LogEntry
 
 
 class _StrictWin:
@@ -63,29 +60,6 @@ class _RecordingWin:
 
     def getmaxyx(self):
         return 20, 60
-
-
-@pytest.fixture
-def app() -> ZView:
-    """``ZView`` instance without going through curses init."""
-    a = ZView.__new__(ZView)
-    a.min_dimensions = (14, 85)
-    a.frames = FrameHistory()
-    a.selection = Selection()
-    a.status_message = ""
-    a.messages = deque(maxlen=_MESSAGE_LOG_SIZE)
-    a.update_count = 0
-    a.data_queue = queue.Queue()
-    a.scraper = MagicMock()
-    a.scraper.idle_thread_addresses = (0xDEAD,)
-    a.state = ZViewState.THREAD_LIST_VIEW
-    a.stdscr = MagicMock()
-    a._theme = ZViewTUIAttributes.create_mono()
-    a._log_popup = TUIPopup(" Messages ", 0, 0, {}, keep_tail=True)
-    a._help_popup = TUIPopup(" Help ", 0, 0, {})
-    a._overlay = None
-    a._prompt = None
-    return a
 
 
 @pytest.fixture
@@ -225,7 +199,7 @@ def test_popup_clips_to_the_terminal_instead_of_vanishing():
     win = _RecordingWin()
     rows = [PopupRow(f"12:00:{i:02d}", "read timeout at 0x20000100 " * 20) for i in range(40)]
 
-    TUIPopup(" Messages ", 0, 0, {}, keep_tail=True).draw(win, 20, 60, rows)
+    TUIPopup(" Messages ", 0, 0, {}, is_tail_kept=True).draw(win, 20, 60, rows)
 
     assert win.writes, "the popup drew nothing"
     assert max(x + len(text) for _, x, text in win.writes) <= 60
@@ -263,7 +237,7 @@ def test_long_text_wraps_instead_of_being_cut(app):
 
 def test_wrapped_lines_carry_the_label_once(app):
     """Continuation lines are unlabelled, so one entry reads as one entry."""
-    window = TUIPopup(" Messages ", 0, 0, {}, keep_tail=True)
+    window = TUIPopup(" Messages ", 0, 0, {}, is_tail_kept=True)
     row = PopupRow("12:00:00.0", "a message far wider than the column it is drawn in")
 
     wrapped = window._wrap([row], 20)
@@ -294,7 +268,7 @@ def test_help_rows_are_grouped_under_headings(app):
 
     rows = app._help_rows()
 
-    assert [row.label for row in rows if row.heading] == ["Global", "This view"]
+    assert [row.label for row in rows if row.is_heading] == ["Global", "This view"]
     assert rows[-1].text == "Cycle sort keys"
 
 

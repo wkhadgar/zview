@@ -18,7 +18,7 @@ class Msgqs(Kind):
         return State(
             info.fill_percent,
             f"{info.used_msgs}/{info.max_msgs} × {info.msg_size}B",
-            level(blocked=info.is_full, busy=bool(info.waiters)),
+            level(is_blocked=info.is_full, is_busy=bool(info.waiters)),
         )
 
     def dump(self, info: MsgqInfo) -> str:

@@ -32,6 +32,9 @@ class FakeElf:
     def __init__(self, symbols: dict[int, str] | None = None):
         self._symbols = symbols or {}
 
+    def decl_site(self, address: int) -> None:
+        return None
+
     def get_symbol_name_at(self, addr: int) -> str | None:
         return self._symbols.get(addr)
 
@@ -93,7 +96,7 @@ def test_an_idle_queue_has_no_items():
 
     assert queue.pending == ()
     assert queue.depth == 0
-    assert not queue.pending_truncated
+    assert not queue.is_pending_truncated
     assert queue.is_started and not queue.is_busy
 
 
@@ -160,7 +163,7 @@ def test_a_list_longer_than_the_cap_reports_a_floor():
     )["q"]
 
     assert queue.depth == 4
-    assert queue.pending_truncated
+    assert queue.is_pending_truncated
 
 
 def test_a_list_that_loops_mid_walk_terminates():
@@ -177,7 +180,7 @@ def test_a_list_that_loops_mid_walk_terminates():
     ]
 
     assert queue.pending == ("flush_handler", "retry_handler")
-    assert queue.pending_truncated
+    assert queue.is_pending_truncated
 
 
 def test_a_declared_queue_that_never_started_says_so():
