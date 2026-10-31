@@ -121,7 +121,7 @@ def test_a_failed_read_replays_as_the_same_error_in_place(sample_path, sample_ba
     live = _FailingRead(sample_backend._memory, ProbeReadError("GDB error at 0x3000: E22"))
     _record_a_failing_read(sample_path, live)
 
-    replay = ReplayScraper(sample_path, honor_timing=False)
+    replay = ReplayScraper(sample_path, is_paced=False)
     replay.connect()
     replay.begin_batch()
     assert replay.read32(0x1000, 1) == (0xDEADBEEF,)
@@ -137,7 +137,7 @@ def test_a_failure_from_outside_the_probe_errors_replays_as_a_read_error(
     live = _FailingRead(sample_backend._memory, ConnectionError("GDB server closed"))
     _record_a_failing_read(sample_path, live)
 
-    replay = ReplayScraper(sample_path, honor_timing=False)
+    replay = ReplayScraper(sample_path, is_paced=False)
     replay.connect()
     replay.begin_batch()
     replay.read32(0x1000, 1)
@@ -173,7 +173,7 @@ def test_a_recorded_batch_replays_as_a_batch_or_one_read_at_a_time(sample_path, 
     with RecordingScraper(sample_backend, sample_path) as rec:
         list(rec.read_many(_BATCH))
 
-    replay = ReplayScraper(sample_path, honor_timing=False)
+    replay = ReplayScraper(sample_path, is_paced=False)
     replay.connect()
     assert replay.read32(0x1000, 1) == (0xDEADBEEF,)
     assert list(replay.read_many(_BATCH[1:])) == [(0x0123456789ABCDEF,), bytes(range(16))]
@@ -191,7 +191,7 @@ def test_a_read_failing_inside_a_batch_is_recorded_in_its_place(sample_path, sam
             next(results)
 
     assert [op for op, _, _ in _entries(sample_path)] == ["read32", "read64", "read_bytes"]
-    replay = ReplayScraper(sample_path, honor_timing=False)
+    replay = ReplayScraper(sample_path, is_paced=False)
     replay.connect()
     with pytest.raises(ProbeReadError, match="E22"):
         list(replay.read_many(batch))
@@ -212,7 +212,7 @@ def test_a_declared_selection_replays_as_it_was_recorded(tmp_path):
     with recorder:
         pass
 
-    assert ReplayScraper(path, honor_timing=False).selection == selection
+    assert ReplayScraper(path, is_paced=False).selection == selection
 
 
 def test_a_recording_from_before_selections_reads_everything(tmp_path):
@@ -223,7 +223,7 @@ def test_a_recording_from_before_selections_reads_everything(tmp_path):
         header = {"schema": "zview-recording/4", "endianess": "<", "features": ["threads"]}
         fp.write(json.dumps(header) + "\n")
 
-    assert ReplayScraper(path, honor_timing=False).selection == Selection()
+    assert ReplayScraper(path, is_paced=False).selection == Selection()
 
 
 def test_a_recording_from_before_failed_reads_still_replays(tmp_path):
@@ -237,7 +237,7 @@ def test_a_recording_from_before_failed_reads_still_replays(tmp_path):
             + "\n"
         )
 
-    replay = ReplayScraper(path, honor_timing=False)
+    replay = ReplayScraper(path, is_paced=False)
     replay.connect()
     assert replay.read32(16, 1) == (7,)
 
@@ -294,7 +294,7 @@ def test_begin_batch_at_trailing_disconnect_signals_completion(sample_path, samp
     """``begin_batch`` past the trailing ``disconnect`` raises ReplayComplete."""
     _record_session(sample_path, sample_backend)
 
-    replay = ReplayScraper(sample_path, honor_timing=False)
+    replay = ReplayScraper(sample_path, is_paced=False)
     replay.connect()
     replay.begin_batch()
     replay.read32(0x1000, 1)
@@ -376,13 +376,13 @@ def test_live_backends_advertise_is_live_by_default():
 
 
 def test_honor_timing_sleeps_to_recorded_wall_clock(tmp_path):
-    """``honor_timing=True`` paces calls to the recorded inter-op gap."""
+    """``is_paced=True`` paces calls to the recorded inter-op gap."""
     import time as _time
 
     path = tmp_path / "paced.ndjson.gz"
     _write_paced_recording(path, deltas_sec=[0.0, 0.25])
 
-    replay = ReplayScraper(path, honor_timing=True)
+    replay = ReplayScraper(path, is_paced=True)
     replay.connect()
     replay.read32(0, 1)
 
@@ -395,13 +395,13 @@ def test_honor_timing_sleeps_to_recorded_wall_clock(tmp_path):
 
 
 def test_honor_timing_false_drains_instantly(tmp_path):
-    """``honor_timing=False`` drains the recording without sleeping."""
+    """``is_paced=False`` drains the recording without sleeping."""
     import time as _time
 
     path = tmp_path / "fast.ndjson.gz"
     _write_paced_recording(path, deltas_sec=[1.0, 1.0])
 
-    replay = ReplayScraper(path, honor_timing=False)
+    replay = ReplayScraper(path, is_paced=False)
 
     start = _time.monotonic()
     replay.connect()
@@ -409,5 +409,5 @@ def test_honor_timing_false_drains_instantly(tmp_path):
     replay.read32(1, 1)
     elapsed = _time.monotonic() - start
 
-    # Recording spans 2 s; honor_timing=False drains it in a few ms.
+    # Recording spans 2 s; is_paced=False drains it in a few ms.
     assert elapsed < 0.1

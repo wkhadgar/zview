@@ -30,7 +30,7 @@ class Semaphores(Kind):
         return State(
             info.fill_percent,
             _count(info, " / unlimited", "NOT INITIALIZED"),
-            level(busy=bool(info.waiters)),
+            level(is_busy=bool(info.waiters)),
         )
 
     def dump(self, info: SemaphoreInfo) -> str:

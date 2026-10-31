@@ -166,7 +166,7 @@ def test_every_idle_thread_counts_as_idle(elf_path):
     assert runtimes["main"].cpu == 100.0
     assert runtimes["idle 01"].cpu == 0.0
     assert runtimes["main"].cpu_normalized == pytest.approx(10.0)
-    assert {t.name for t in threads if t.idle} == {"idle 00", "idle 01"}
+    assert {t.name for t in threads if t.is_idle} == {"idle 00", "idle 01"}
 
 
 def test_a_detail_view_shares_count_the_threads_it_does_not_scan(elf_path):
@@ -220,7 +220,7 @@ def test_a_thread_that_ran_earlier_in_the_window_keeps_its_share_but_is_not_acti
 
     # 10 of the 40 cycles of both polls, though main ran only in the first.
     assert runtimes["main"].cpu_normalized == pytest.approx(25.0)
-    assert not runtimes["main"].active
+    assert not runtimes["main"].is_active
 
 
 def test_threads_read_again_after_a_gap_seed_their_counters_afresh(elf_path):

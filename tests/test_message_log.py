@@ -199,7 +199,7 @@ def test_popup_clips_to_the_terminal_instead_of_vanishing():
     win = _RecordingWin()
     rows = [PopupRow(f"12:00:{i:02d}", "read timeout at 0x20000100 " * 20) for i in range(40)]
 
-    TUIPopup(" Messages ", 0, 0, {}, keep_tail=True).draw(win, 20, 60, rows)
+    TUIPopup(" Messages ", 0, 0, {}, is_tail_kept=True).draw(win, 20, 60, rows)
 
     assert win.writes, "the popup drew nothing"
     assert max(x + len(text) for _, x, text in win.writes) <= 60
@@ -237,7 +237,7 @@ def test_long_text_wraps_instead_of_being_cut(app):
 
 def test_wrapped_lines_carry_the_label_once(app):
     """Continuation lines are unlabelled, so one entry reads as one entry."""
-    window = TUIPopup(" Messages ", 0, 0, {}, keep_tail=True)
+    window = TUIPopup(" Messages ", 0, 0, {}, is_tail_kept=True)
     row = PopupRow("12:00:00.0", "a message far wider than the column it is drawn in")
 
     wrapped = window._wrap([row], 20)
@@ -268,7 +268,7 @@ def test_help_rows_are_grouped_under_headings(app):
 
     rows = app._help_rows()
 
-    assert [row.label for row in rows if row.heading] == ["Global", "This view"]
+    assert [row.label for row in rows if row.is_heading] == ["Global", "This view"]
     assert rows[-1].text == "Cycle sort keys"
 
 

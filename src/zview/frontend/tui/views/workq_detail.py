@@ -79,7 +79,7 @@ class WorkqDetailView(KernelObjectDetailView):
 
     def _draw_side_panels(self, stdscr: curses.window, panels: Panels, workq: WorkqInfo) -> None:
         """Pending items over the drain waiters, which take a third of the column."""
-        pending = workq.pending + (("...",) if workq.pending_truncated else ())
+        pending = workq.pending + (("...",) if workq.is_pending_truncated else ())
         drain_h = max(self._MIN_BOX_HEIGHT, panels.queue_h // 3)
         pending_h = panels.queue_h - drain_h
         x, y, w = panels.queue_x, panels.queue_y, panels.queue_w

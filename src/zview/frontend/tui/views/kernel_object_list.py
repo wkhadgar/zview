@@ -56,7 +56,7 @@ class KernelObjectListView(BaseStateView):
         # The kinds this view lists.
         self._kinds = tuple(kind for kind in KINDS if self.OBJECTS.reads_group(kind.key))
         self._current_sort_idx: int = 0
-        self._invert_sorting: bool = False
+        self._is_sort_inverted: bool = False
 
         bar_theme = (theme.PROGRESS_BAR_LOW, theme.PROGRESS_BAR_MEDIUM, theme.PROGRESS_BAR_HIGH)
         self._info = TUIKernelObjectInfo(
@@ -98,7 +98,7 @@ class KernelObjectListView(BaseStateView):
         rows = [(kind, obj) for kind in self._kinds for obj in self.controller.rows(kind.key)]
 
         return sorted(
-            rows, key=self._sort_keys[self._current_sort_idx], reverse=self._invert_sorting
+            rows, key=self._sort_keys[self._current_sort_idx], reverse=self._is_sort_inverted
         )
 
     @classmethod
@@ -136,7 +136,7 @@ class KernelObjectListView(BaseStateView):
         self._info.set_field_widths(*widths)
 
         curr_x = 0
-        order_symbol = " ▼" if self._invert_sorting else " ▲"
+        order_symbol = " ▼" if self._is_sort_inverted else " ▲"
         sorted_column = self._sort_columns[self._current_sort_idx]
         for column, (col_header, col_width) in enumerate(zip(self.COLUMNS, widths, strict=True)):
             if curr_x >= width:
@@ -177,7 +177,7 @@ class KernelObjectListView(BaseStateView):
 
             selected = (self.top_line + idx) == self.cursor
             self._info.draw(
-                stdscr, target_y, 0, kind, obj, selected, muted=(kind.key, obj.name) in muted
+                stdscr, target_y, 0, kind, obj, selected, is_muted=(kind.key, obj.name) in muted
             )
 
         start_num = self.top_line + 1 if total else 0
@@ -216,7 +216,7 @@ class KernelObjectListView(BaseStateView):
 
         word = "contended" if only is None else only.pressure
         summary = f" {len(rows)} objects | {contended} {word} | {queued} with waiters"
-        if self.controller.waiters_unknown:
+        if self.controller.is_waiters_unknown:
             # Stated once here instead of per row.
             summary += " | wait queues not observable (scalable waitq)"
 
@@ -261,13 +261,13 @@ class KernelObjectListView(BaseStateView):
                 self._current_sort_idx = (self._current_sort_idx + 1) % len(self._sort_keys)
 
             case SpecialCode.INVERSE:
-                self._invert_sorting = not self._invert_sorting
+                self._is_sort_inverted = not self._is_sort_inverted
 
             case SpecialCode.KERNEL_OBJECTS:
                 return ZViewState.THREAD_LIST_VIEW
 
             case SpecialCode.QUIT:
-                self.controller.running = False
+                self.controller.is_running = False
 
             case _:
                 return None

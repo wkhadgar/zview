@@ -211,9 +211,9 @@ def test_thread_list_handle_input_sort_cycles_index(controller, theme):
 
 def test_thread_list_handle_input_invert_flips_order(controller, theme):
     view = ThreadListView(controller, theme)
-    initial = view._invert_sorting
+    initial = view._is_sort_inverted
     view.handle_input(SpecialCode.INVERSE)
-    assert view._invert_sorting != initial
+    assert view._is_sort_inverted != initial
 
 
 def test_thread_list_handle_input_enter_with_no_threads_stays_put(controller, theme):
@@ -233,10 +233,10 @@ def test_thread_list_handle_input_enter_selects_and_transitions(controller, them
 
 
 def test_thread_list_handle_input_quit_sets_running_false(controller, theme):
-    controller.running = True
+    controller.is_running = True
     view = ThreadListView(controller, theme)
     view.handle_input(SpecialCode.QUIT)
-    assert controller.running is False
+    assert controller.is_running is False
 
 
 def test_thread_detail_handle_input_enter_returns_to_list(controller, theme):
@@ -245,10 +245,10 @@ def test_thread_detail_handle_input_enter_returns_to_list(controller, theme):
 
 
 def test_thread_detail_handle_input_quit(controller, theme):
-    controller.running = True
+    controller.is_running = True
     view = ThreadDetailView(controller, theme)
     view.handle_input(SpecialCode.QUIT)
-    assert controller.running is False
+    assert controller.is_running is False
 
 
 def test_heap_detail_handle_input_enter_returns_to_the_objects_list(controller, theme):
@@ -257,17 +257,17 @@ def test_heap_detail_handle_input_enter_returns_to_the_objects_list(controller, 
 
 
 def test_heap_detail_handle_input_quit(controller, theme):
-    controller.running = True
+    controller.is_running = True
     view = HeapDetailView(controller, theme)
     view.handle_input(SpecialCode.QUIT)
-    assert controller.running is False
+    assert controller.is_running is False
 
 
 def test_fatal_error_handle_input_quit(controller, theme):
-    controller.running = True
+    controller.is_running = True
     view = FatalErrorView(controller, theme)
     view.handle_input(SpecialCode.QUIT)
-    assert controller.running is False
+    assert controller.is_running is False
 
 
 def test_footer_hint_uses_label_for_compactness():
@@ -320,7 +320,11 @@ def test_thread_detail_history_never_exceeds_the_graph_columns(controller, theme
     from zview.backend.base import ThreadInfo, ThreadRuntime
 
     runtime = ThreadRuntime(
-        cpu=10.0, cpu_normalized=5.0, active=True, stack_watermark=64, stack_watermark_percent=25.0
+        cpu=10.0,
+        cpu_normalized=5.0,
+        is_active=True,
+        stack_watermark=64,
+        stack_watermark_percent=25.0,
     )
     thread = ThreadInfo(
         address=0x1000, stack_start=0x2000, stack_size=512, name="worker", runtime=runtime
@@ -380,7 +384,7 @@ def _unmeasured_thread() -> ThreadInfo:
     runtime = ThreadRuntime(
         cpu=None,
         cpu_normalized=None,
-        active=False,
+        is_active=False,
         stack_watermark=None,
         stack_watermark_percent=None,
     )
@@ -459,7 +463,7 @@ def test_the_all_threads_row_sums_only_the_threads_read(controller, theme):
         runtime = ThreadRuntime(
             cpu=load,
             cpu_normalized=1.0,
-            active=True,
+            is_active=True,
             stack_watermark=64,
             stack_watermark_percent=25.0,
         )

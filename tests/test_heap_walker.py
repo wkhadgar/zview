@@ -253,14 +253,14 @@ def test_a_recording_without_a_chunk_map_stops_asking_for_one(monkeypatch):
     quiet_queue = {_HEAP + _WAIT_Q: _HEAP + _WAIT_Q}
     session = _heap_session({**_STATS, **quiet_queue}, wait_q=_WAIT_Q)
     heaps = Heaps()
-    heaps.all_chunks = True
+    heaps.is_capturing_all = True
     monkeypatch.setattr("zview.kernel.heaps.walk_heap_fragmentation", drift)
 
     heap = _poll(session, heaps)[0]
 
     assert heap.chunks is None
     assert heap.free_bytes == 1536
-    assert not heaps.all_chunks
+    assert not heaps.is_capturing_all
 
 
 class LiveHeapRefusingChunkMap(FakeHeapMemory):
@@ -295,7 +295,7 @@ def test_a_chunk_map_the_live_stub_refused_replays_frame_after_frame(tmp_path):
     refused = "Error reading sparsity for bench_heap: GDB error at 0x9000: E22"
 
     live, live_heaps = _heap_session(words, wait_q=_WAIT_Q), Heaps()
-    live_heaps.all_chunks = True
+    live_heaps.is_capturing_all = True
     with RecordingScraper(LiveHeapRefusingChunkMap(words), path) as recorder:
         live.scraper = recorder
         for _ in range(3):
@@ -305,8 +305,8 @@ def test_a_chunk_map_the_live_stub_refused_replays_frame_after_frame(tmp_path):
             recorder.end_batch()
 
     replayed, replayed_heaps = _heap_session(words, wait_q=_WAIT_Q), Heaps()
-    replayed_heaps.all_chunks = True
-    with ReplayScraper(path, honor_timing=False) as replay:
+    replayed_heaps.is_capturing_all = True
+    with ReplayScraper(path, is_paced=False) as replay:
         replayed.scraper = replay
         for _ in range(3):
             replay.begin_batch()

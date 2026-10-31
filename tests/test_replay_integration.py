@@ -33,7 +33,7 @@ def _discover_fixtures() -> list[tuple[Path, Path]]:
 
 def _drive_replay(recording: Path) -> list:
     """Replay a fixture through a full polling loop; return captured frames."""
-    with Target(str(_ELF_PATH), recording=str(recording), pacing=False).open() as core:
+    with Target(str(_ELF_PATH), recording=str(recording), is_paced=False).open() as core:
         core.start(0.001)
         time.sleep(_REPLAY_BUDGET_SECS)
         core.stop()

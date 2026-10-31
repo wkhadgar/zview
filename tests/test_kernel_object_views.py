@@ -60,7 +60,7 @@ def controller(app: ZView) -> ZView:
     c.scraper.has_mutexes = True
     c.scraper.has_msgqs = True
     c.scraper.has_mem_slabs = True
-    c.waiters_unknown = False
+    c.is_waiters_unknown = False
     c.status_message = "Running"
     c.core.frames = FrameHistory()
     c.state = ZViewState.KERNEL_OBJECT_LIST_VIEW
@@ -236,7 +236,9 @@ def test_a_work_queue_names_the_states_its_bar_cannot(controller, distinct_theme
     """A queue never started, and a walk cut short, say so in the label."""
     view = KernelObjectListView(controller, distinct_theme)
     unstarted = WorkqInfo(name="q", address=0x1, flags=0)
-    cut = WorkqInfo(name="q", address=0x1, flags=0b11, pending=("a",) * 16, pending_truncated=True)
+    cut = WorkqInfo(
+        name="q", address=0x1, flags=0b11, pending=("a",) * 16, is_pending_truncated=True
+    )
 
     assert view._info.row_values(WORKQ, unstarted)[1] == "NOT STARTED"
     assert view._info.row_values(WORKQ, cut)[1] == "BUSY ● 16+ pending"
@@ -364,7 +366,7 @@ def test_an_exhausted_slab_counts_as_contended(controller, theme):
 
 
 def test_summary_flags_unobservable_wait_queues(controller, theme):
-    controller.waiters_unknown = True
+    controller.is_waiters_unknown = True
     view = KernelObjectListView(controller, theme)
 
     assert "not observable" in view._summary(view._rows(), view._only_kind())
@@ -423,7 +425,7 @@ def test_quit_stops_the_controller(controller, theme):
 
     view.handle_input(SpecialCode.QUIT)
 
-    assert controller.running is False
+    assert controller.is_running is False
 
 
 def test_footer_lists_the_view_bindings(controller, theme):
@@ -1085,7 +1087,7 @@ def test_pending_items_sit_above_the_drain_waiters(controller, theme):
 
 
 def test_a_cut_walk_ends_the_pending_panel_in_an_ellipsis(controller, theme):
-    _put(controller, workqs=[_busy_workq(pending_truncated=True)])
+    _put(controller, workqs=[_busy_workq(is_pending_truncated=True)])
     controller.detailing = ("workqs", 0x7000)
     view = WorkqDetailView(controller, theme)
 

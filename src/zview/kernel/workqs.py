@@ -105,7 +105,7 @@ class Workqs(Group):
         ``waiters`` is ``None``.
         """
         scraper, elf, layout = session.scraper, session.elf, session.layout
-        walk_waiters, thread_names = session.walks_waiters, session.thread_names
+        walk_waiters, thread_names = session.is_waitq_walkable, session.thread_names
         offsets = [layout.workq_pending, layout.workq_flags]
         offsets += [o for o in (layout.workq_thread_id, layout.workq_drainq) if o is not None]
 
@@ -150,7 +150,7 @@ class Workqs(Group):
                 address=address,
                 flags=word(words, layout.workq_flags),
                 pending=pending,
-                pending_truncated=truncated,
+                is_pending_truncated=truncated,
                 thread_name=(thread_names or {}).get(thread),
                 waiters=waiters,
             )

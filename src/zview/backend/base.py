@@ -54,13 +54,13 @@ class ThreadRuntime:
     # None on a build without runtime stats.
     cpu: float | None
     cpu_normalized: float | None
-    active: bool
+    is_active: bool
     # None on a build that does not fill its stacks.
     stack_watermark: int | None
     stack_watermark_percent: float | None
     # The counters behind cpu were read with no thread switch between them.
     # None where that is not known.
-    cpu_coherent: bool | None = None
+    is_cpu_coherent: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -79,7 +79,7 @@ class ThreadInfo:
     entry_point: int | None = None
     entry_symbol: str | None = None
     # The idle thread of a CPU.
-    idle: bool = False
+    is_idle: bool = False
 
 
 @dataclass(frozen=True)
@@ -206,7 +206,7 @@ class WorkqInfo:
     flags: int
     # The item being run has left the list.
     pending: tuple[str, ...] = ()
-    pending_truncated: bool = False
+    is_pending_truncated: bool = False
     thread_name: str | None = None
     waiters: tuple[str, ...] | None = None
 

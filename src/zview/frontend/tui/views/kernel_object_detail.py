@@ -170,7 +170,7 @@ class KernelObjectDetailView(BaseStateView):
         if key in (*BACK_CODES, curses.KEY_LEFT, curses.KEY_EXIT, SpecialCode.KERNEL_OBJECTS):
             return ZViewState.KERNEL_OBJECT_LIST_VIEW
         if key == SpecialCode.QUIT:
-            self.controller.running = False
+            self.controller.is_running = False
         return None
 
 

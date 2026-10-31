@@ -56,7 +56,7 @@ class ThreadListView(BaseStateView):
         super().__init__(controller, theme)
 
         self._current_sort_idx = 0
-        self._invert_sorting = False
+        self._is_sort_inverted = False
         self._sort_keys = [
             lambda t: t.name,
             _runtime_key("cpu"),
@@ -93,7 +93,7 @@ class ThreadListView(BaseStateView):
     def _sorted_threads(self) -> list[ThreadInfo]:
         """The listed threads in the table's order."""
         key_func = self._sort_keys[self._current_sort_idx]
-        return sorted(listed_threads(self.controller), key=key_func, reverse=self._invert_sorting)
+        return sorted(listed_threads(self.controller), key=key_func, reverse=self._is_sort_inverted)
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         """
@@ -122,7 +122,7 @@ class ThreadListView(BaseStateView):
         elif self.cursor < self.top_line:
             self.top_line = self.cursor
 
-        order_symbol = " ▼" if self._invert_sorting else " ▲"
+        order_symbol = " ▼" if self._is_sort_inverted else " ▲"
         sorting_header = self.COLLUMS[self._current_sort_idx]
 
         curr_x = 0
@@ -148,7 +148,7 @@ class ThreadListView(BaseStateView):
         runtimes = [t.runtime for t in read if t.runtime]
         stack_size_sum = _total([t.stack_size for t in read])
         stack_watermark_sum = _total([r.stack_watermark for r in runtimes])
-        is_any_thread_active = any(r.active for r in runtimes)
+        is_any_thread_active = any(r.is_active for r in runtimes)
         aggregate_stack_usage_pct = None
         if stack_watermark_sum is not None:
             aggregate_stack_usage_pct = (
@@ -165,7 +165,7 @@ class ThreadListView(BaseStateView):
             runtime=ThreadRuntime(
                 cpu=aggregate_load,
                 cpu_normalized=aggregate_cpu,
-                active=is_any_thread_active,
+                is_active=is_any_thread_active,
                 stack_watermark=stack_watermark_sum,
                 stack_watermark_percent=aggregate_stack_usage_pct,
             ),
@@ -186,8 +186,8 @@ class ThreadListView(BaseStateView):
                 target_y,
                 0,
                 thread,
-                selected=(absolute_idx == self.cursor),
-                muted=("threads", thread.name) in muted,
+                is_selected=(absolute_idx == self.cursor),
+                is_muted=("threads", thread.name) in muted,
             )
 
         if not threads:
@@ -243,7 +243,7 @@ class ThreadListView(BaseStateView):
                 self._current_sort_idx = (self._current_sort_idx + 1) % len(self._sort_keys)
 
             case SpecialCode.INVERSE:
-                self._invert_sorting = not self._invert_sorting
+                self._is_sort_inverted = not self._is_sort_inverted
 
             case SpecialCode.WIDER | SpecialCode.NARROWER:
                 self.controller.scale_usage_window(key == SpecialCode.WIDER)
@@ -270,7 +270,7 @@ class ThreadListView(BaseStateView):
                 return ZViewState.KERNEL_OBJECT_LIST_VIEW
 
             case SpecialCode.QUIT:
-                self.controller.running = False
+                self.controller.is_running = False
 
             case _:
                 return None

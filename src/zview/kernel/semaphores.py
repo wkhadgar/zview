@@ -33,7 +33,7 @@ class Semaphores(Group):
         queue layout that cannot be walked (scalable), ``waiters`` is ``None``.
         """
         scraper, elf, layout = session.scraper, session.elf, session.layout
-        walk_waiters, thread_names = session.walks_waiters, session.thread_names
+        walk_waiters, thread_names = session.is_waitq_walkable, session.thread_names
         words_to_read = struct_words(elf, "k_sem")
         count_idx = layout.sem_count // 4
         limit_idx = layout.sem_limit // 4

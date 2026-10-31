@@ -30,11 +30,15 @@ class State:
     level: Level
 
 
-def level(*, blocked: bool = False, busy: bool = False) -> Level:
+def level(*, is_blocked: bool = False, is_busy: bool = False) -> Level:
     """The first level that applies."""
     return next(
         lvl
-        for applies, lvl in ((blocked, Level.BLOCKED), (busy, Level.BUSY), (True, Level.QUIET))
+        for applies, lvl in (
+            (is_blocked, Level.BLOCKED),
+            (is_busy, Level.BUSY),
+            (True, Level.QUIET),
+        )
         if applies
     )
 

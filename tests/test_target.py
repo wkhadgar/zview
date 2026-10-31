@@ -22,7 +22,7 @@ def test_a_discovery_that_fails_is_an_event_on_the_core(monkeypatch):
 
     monkeypatch.setattr(ZScraper, "discover", discover)
 
-    with Target(str(_ELF), recording=str(_FIXTURE), pacing=False).open() as core:
+    with Target(str(_ELF), recording=str(_FIXTURE), is_paced=False).open() as core:
         event = core.events.get_nowait()
 
     assert event == Notice("Unable to update available threads [thread list unreadable]")
@@ -33,7 +33,7 @@ def test_leaving_the_session_stops_its_poll_before_the_disconnect(monkeypatch):
     disconnects = []
     monkeypatch.setattr(ReplayScraper, "disconnect", lambda self: disconnects.append(1))
 
-    with Target(str(_ELF), recording=str(_FIXTURE), pacing=False).open() as core:
+    with Target(str(_ELF), recording=str(_FIXTURE), is_paced=False).open() as core:
         core.start(0.01)
         poller = core._poller
         stop = core.stop

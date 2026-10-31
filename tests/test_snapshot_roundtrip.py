@@ -20,14 +20,14 @@ _TESTS_DIR = Path(__file__).parent
 _FIXTURE = _TESTS_DIR / "fixtures" / "recordings" / "sys_heap_v4.3.ndjson.gz"
 _ELF = _TESTS_DIR / "fixtures" / "zephyr.elf"
 # Each open replays the fixture from its start.
-_REPLAY = Target(str(_ELF), recording=str(_FIXTURE), pacing=False)
+_REPLAY = Target(str(_ELF), recording=str(_FIXTURE), is_paced=False)
 
 
 def test_serialize_frame_produces_json_safe_dict():
     runtime = ThreadRuntime(
         cpu=1.0,
         cpu_normalized=0.5,
-        active=True,
+        is_active=True,
         stack_watermark=100,
         stack_watermark_percent=25.0,
     )
@@ -134,7 +134,7 @@ def test_a_replayed_dump_shows_only_the_selected_groups():
 
 def test_record_session_roundtrip(tmp_path):
     """ReplayScraper -> RecordingScraper produces a replayable recording."""
-    source = ReplayScraper(_FIXTURE, honor_timing=False)
+    source = ReplayScraper(_FIXTURE, is_paced=False)
     out_path = tmp_path / "roundtrip.ndjson.gz"
 
     captured = record_session(source, str(_ELF), out_path, duration=1.5, period=0.001)
@@ -142,14 +142,14 @@ def test_record_session_roundtrip(tmp_path):
     assert captured >= 1
 
     # Replay the recorded session: it must yield at least one valid frame.
-    replay2 = Target(str(_ELF), recording=str(out_path), pacing=False)
+    replay2 = Target(str(_ELF), recording=str(out_path), is_paced=False)
     frame2 = dump_single_frame(replay2, period=0.001, timeout=3.0)
     assert "threads" in frame2
     assert {t.name for t in frame2["threads"]} == {"stress_id", "idle", "main"}
 
 
 def test_record_session_respects_frames_bound(tmp_path):
-    source = ReplayScraper(_FIXTURE, honor_timing=False)
+    source = ReplayScraper(_FIXTURE, is_paced=False)
     out_path = tmp_path / "bounded.ndjson.gz"
 
     captured = record_session(source, str(_ELF), out_path, frames=2, period=0.001)
@@ -171,7 +171,7 @@ def test_record_ends_with_a_poll_whose_frame_was_dropped(tmp_path, monkeypatch):
         publish(self, item)
 
     monkeypatch.setattr(Core, "_publish", drop_the_first_frame)
-    source = ReplayScraper(_FIXTURE, honor_timing=False)
+    source = ReplayScraper(_FIXTURE, is_paced=False)
 
     captured = record_session(source, str(_ELF), tmp_path / "r.ndjson.gz", frames=3, period=0.001)
 
@@ -179,13 +179,13 @@ def test_record_ends_with_a_poll_whose_frame_was_dropped(tmp_path, monkeypatch):
 
 
 def test_record_session_requires_a_bound(tmp_path):
-    source = ReplayScraper(_FIXTURE, honor_timing=False)
+    source = ReplayScraper(_FIXTURE, is_paced=False)
     with pytest.raises(ValueError, match="duration or frames"):
         record_session(source, str(_ELF), tmp_path / "no_bound.ndjson.gz")
 
 
 def test_record_session_duration_bound(tmp_path):
-    source = ReplayScraper(_FIXTURE, honor_timing=False)
+    source = ReplayScraper(_FIXTURE, is_paced=False)
     out_path = tmp_path / "duration.ndjson.gz"
 
     # period dominates frame spacing; duration=0.1s / period=0.05s yields ~2 frames.
@@ -197,7 +197,7 @@ def test_record_session_duration_bound(tmp_path):
 
 def test_record_session_dual_bound_first_to_hit_wins(tmp_path):
     """Duration terminates first when frames is much larger."""
-    source = ReplayScraper(_FIXTURE, honor_timing=False)
+    source = ReplayScraper(_FIXTURE, is_paced=False)
     out_path = tmp_path / "dual.ndjson.gz"
 
     captured = record_session(source, str(_ELF), out_path, duration=0.1, frames=100, period=0.05)
@@ -277,7 +277,7 @@ class _SlowFrames(ReplayScraper):
 
 
 def test_dump_closes_the_probe_after_the_frame_in_flight(monkeypatch):
-    backend = _SlowFrames(_FIXTURE, honor_timing=False)
+    backend = _SlowFrames(_FIXTURE, is_paced=False)
     monkeypatch.setattr(Target, "backend", lambda self: backend)
 
     with pytest.raises(TimeoutError):

@@ -360,7 +360,7 @@ def _do_record(args) -> int:
 
 
 def _do_replay(args) -> int:
-    replay = Target(args.elf_file, recording=args.input, pacing=not args.no_pacing)
+    replay = Target(args.elf_file, recording=args.input, is_paced=not args.no_pacing)
     # Without --match, the replay shows the recording's own line.
     shown = None if args.match is None else _selection(args)
     with replay.open(shown) as core:
@@ -372,7 +372,7 @@ def _do_replay(args) -> int:
 
 def _do_dump(args) -> int:
     if args.input:
-        target = Target(args.elf_file, recording=args.input, pacing=False)
+        target = Target(args.elf_file, recording=args.input, is_paced=False)
     else:
         target = _probe(args)
 

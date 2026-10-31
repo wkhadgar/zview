@@ -201,5 +201,5 @@ class ThreadDetailView(BaseStateView):
         elif key in (SpecialCode.WIDER, SpecialCode.NARROWER):
             self.controller.scale_usage_window(key == SpecialCode.WIDER)
         elif key == SpecialCode.QUIT:
-            self.controller.running = False
+            self.controller.is_running = False
         return None

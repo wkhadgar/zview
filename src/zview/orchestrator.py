@@ -54,7 +54,7 @@ class ZScraper:
         self.elf_path = elf_path
         self._elf_inspector: ElfInspector = ElfInspector(elf_path)
         self._endianess: Literal["little", "big"] = (
-            "little" if self._elf_inspector._little_endian else "big"
+            "little" if self._elf_inspector._is_little_endian else "big"
         )
         self._m_scraper.endianess = "<" if self._endianess == "little" else ">"
 

@@ -114,7 +114,7 @@ class ZView:
         self.patterns: Selection = core.selection
         # Each muted row, ``(group, name)``, and its info as last read.
         self.muted: dict[tuple[str, str], Any] = {}
-        self.running = True
+        self.is_running = True
         self.status_message: str = ""
         # One entry per reported message, newest last.
         self.messages: deque[LogEntry] = deque(maxlen=_MESSAGE_LOG_SIZE)
@@ -126,7 +126,7 @@ class ZView:
         # The group key and address of the object the detail view shows.
         self.detailing: tuple[str, int] | None = None
         # Wait queues are walkable only in the dlist (simple) flavor.
-        self.waiters_unknown: bool = self.scraper.waitq_flavor != "simple"
+        self.is_waiters_unknown: bool = self.scraper.waitq_flavor != "simple"
         # Name of the open overlay ("help" or "messages"), or None.
         self._overlay: str | None = None
         # The pattern line being edited, or None.
@@ -145,7 +145,7 @@ class ZView:
             theme.ACTIVE,
             theme.INACTIVE | curses.A_DIM,
             levels,
-            keep_tail=True,
+            is_tail_kept=True,
         )
         # Keys carry their own color: the frame and the headings are already
         # cyan, and the key is what the reader is looking for.
@@ -356,13 +356,13 @@ class ZView:
 
     def _help_rows(self) -> list[PopupRow]:
         """The global bindings, then the ones the current view adds."""
-        rows = [PopupRow("Global", heading=True)]
+        rows = [PopupRow("Global", is_heading=True)]
         rows += [PopupRow(f"  {b.key}", b.help_text) for b in _GLOBAL_KEYBINDINGS]
 
         view_bindings = self.views[self.state].keybindings()
         if view_bindings:
             rows.append(PopupRow(""))
-            rows.append(PopupRow("This view", heading=True))
+            rows.append(PopupRow("This view", is_heading=True))
             rows += [PopupRow(f"  {b.key}", b.help_text) for b in view_bindings]
 
         return rows
@@ -399,10 +399,10 @@ class ZView:
             *(info for (g, name), info in muted if g == group and self.patterns.reads(g, name)),
         ]
 
-    def scale_usage_window(self, wider: bool) -> None:
+    def scale_usage_window(self, is_wider: bool) -> None:
         """Double the polls the CPU and load shares are summed over, or halve them."""
         polls = self.core.usage_window
-        self.core.usage_window = polls * 2 if wider else polls // 2
+        self.core.usage_window = polls * 2 if is_wider else polls // 2
 
     def toggle_mute(self, group: str, name: str) -> None:
         """
@@ -543,7 +543,7 @@ class ZView:
 
         self.core.start(inspection_period)
 
-        while self.running:
+        while self.is_running:
             # Drain the queue completely on every frame
             while not self.data_queue.empty():
                 with contextlib.suppress(queue.Empty):

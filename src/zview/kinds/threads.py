@@ -16,12 +16,12 @@ class Threads(Kind):
         runtime = info.runtime
         if runtime is None or runtime.cpu_normalized is None:
             return None
-        text = "running" if runtime.active else "waiting"
-        return State(runtime.cpu_normalized, text, level(busy=runtime.active))
+        text = "running" if runtime.is_active else "waiting"
+        return State(runtime.cpu_normalized, text, level(is_busy=runtime.is_active))
 
     def listed(self, info: ThreadInfo) -> bool:
         """Every thread but the idle thread of each CPU."""
-        return not info.idle
+        return not info.is_idle
 
     def dump(self, info: ThreadInfo) -> str:
         watermark = getattr(info.runtime, "stack_watermark", None)

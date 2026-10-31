@@ -43,7 +43,7 @@ class Target:
     scraper, pyocd when unset, and ``target`` its MCU or, for gdb, the server's
     ``host:port``. ``frequency`` is the SWD clock of pyocd and jlink, in Hz.
     A ``recording`` is replayed in place of a probe, at its own cadence when
-    ``pacing``.
+    ``is_paced``.
     """
 
     elf: str
@@ -51,7 +51,7 @@ class Target:
     target: str | None = None
     frequency: int | None = None
     recording: str | None = None
-    pacing: bool = True
+    is_paced: bool = True
 
     @classmethod
     def from_build_dir(
@@ -112,7 +112,7 @@ class Target:
     def backend(self) -> AbstractScraper:
         """The scraper that reads this target, not yet connected."""
         if self.recording is not None:
-            return ReplayScraper(self.recording, honor_timing=self.pacing)
+            return ReplayScraper(self.recording, is_paced=self.is_paced)
         runner = self.runner if self.runner in _SCRAPERS else "pyocd"
         cls = _SCRAPERS[runner]
         if runner in CLOCKED_RUNNERS:

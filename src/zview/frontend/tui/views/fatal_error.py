@@ -37,6 +37,6 @@ class FatalErrorView(BaseStateView):
 
     def handle_input(self, key: int) -> ZViewState | None:
         if key == SpecialCode.QUIT:
-            self.controller.running = False
+            self.controller.is_running = False
 
         return None

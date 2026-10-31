@@ -19,7 +19,7 @@ class Heaps(Kind):
         return State(
             info.usage_percent,
             f"{info.allocated_bytes}/{info.total_bytes}B",
-            level(blocked=info.is_exhausted, busy=bool(info.waiters)),
+            level(is_blocked=info.is_exhausted, is_busy=bool(info.waiters)),
         )
 
     def dump(self, info: HeapInfo) -> str:

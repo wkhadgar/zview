@@ -125,14 +125,14 @@ def walk_thread_list(
     has_names: bool,
     max_threads: int = 64,
     *,
-    distinct: bool = True,
+    is_distinct: bool = True,
 ) -> dict[str, ThreadInfo]:
     """
     Walk the kernel thread linked list and return ``{name: ThreadInfo}``.
     Wrapped in a single ``begin_batch``/``end_batch``. Raises ``RuntimeError``,
     after the batch ends, when a read fails.
 
-    With ``distinct``, a thread with no name, or with one already taken, is
+    With ``is_distinct``, a thread with no name, or with one already taken, is
     named after its address. Without it, the later thread replaces the
     earlier, as a recording made before the ``distinct_names`` part reads.
     """
@@ -165,7 +165,7 @@ def walk_thread_list(
             thread_name = _name_at(thread_struct_words, layout.thread_name, endianess)
         else:
             thread_name = f"thread @ 0x{thread_ptr:X}"
-        if distinct:
+        if is_distinct:
             thread_name = thread_name or f"thread @ 0x{thread_ptr:X}"
             if thread_name in threads:
                 thread_name = f"{thread_name} @ 0x{thread_ptr:X}"
@@ -334,7 +334,7 @@ class Threads(Group):
                     for i in range(cpus)
                 )
 
-        endianess: Literal["little", "big"] = "little" if elf._little_endian else "big"
+        endianess: Literal["little", "big"] = "little" if elf._is_little_endian else "big"
         # user_options is a uint8_t through v4.3.0 and a uint16_t from v4.4.0.
         options_size = resolve_size(elf, THREAD_OPTIONS_FIELDS["thread_user_options"])
         self._meta_sizes = {"user_options": options_size or 1}
@@ -350,7 +350,7 @@ class Threads(Group):
                 endianess,
                 has_names,
                 self.max_threads,
-                distinct=session.has_part("distinct_names"),
+                is_distinct=session.has_part("distinct_names"),
             )
         else:
             # Without the kernel's list, the threads are the ones allocated statically.
@@ -631,11 +631,11 @@ class Threads(Group):
         session: Session,
         polled: list[dict],
         deltas: dict[int, int],
-        coherent: bool | None = None,
+        is_coherent: bool | None = None,
     ) -> list[ThreadInfo]:
         """
         Build ``ThreadInfo`` objects from raw polling state, computing CPU% and
-        load%, marked ``coherent`` when the counters hold as of one instant.
+        load%, marked ``is_coherent`` when the counters hold as of one instant.
         """
         has_usage = self._counts_usage(session)
         # A recording from before the snapshot has counters for the polled threads only.
@@ -657,10 +657,10 @@ class Threads(Group):
             runtime = ThreadRuntime(
                 cpu=load_pct if has_usage else None,
                 cpu_normalized=absolute_cpu if has_usage else None,
-                active=data["is_active"],
+                is_active=data["is_active"],
                 stack_watermark=data["watermark"],
                 stack_watermark_percent=data["stack_usage_pct"],
-                cpu_coherent=coherent if has_usage else None,
+                is_cpu_coherent=is_coherent if has_usage else None,
             )
             meta = data.get("meta") or {}
             final.append(
@@ -675,7 +675,7 @@ class Threads(Group):
                     user_options=meta.get("user_options"),
                     entry_point=meta.get("entry_point"),
                     entry_symbol=meta.get("entry_symbol"),
-                    idle=data["info"].address in self.idle_addresses,
+                    is_idle=data["info"].address in self.idle_addresses,
                 )
             )
         return final

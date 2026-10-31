@@ -87,8 +87,8 @@ def test_a_frame_with_work_queues_records_their_backlog(app):
 def test_process_data_strips_every_idle_thread(app):
     """An SMP build idles on each CPU, and none of its idle threads is listed."""
     main = ThreadInfo(address=0x1000, stack_start=0, stack_size=512, name="main", runtime=None)
-    idle_00 = ThreadInfo(0xDEAD, 0, 128, "idle 00", None, idle=True)
-    idle_01 = ThreadInfo(0xBEEF, 0, 128, "idle 01", None, idle=True)
+    idle_00 = ThreadInfo(0xDEAD, 0, 128, "idle 00", None, is_idle=True)
+    idle_01 = ThreadInfo(0xBEEF, 0, 128, "idle 01", None, is_idle=True)
 
     _feed(app, Frame({"threads": [main, idle_00, idle_01]}))
 
@@ -285,14 +285,14 @@ def test_the_usage_window_keys_double_and_halve_it_within_its_bounds(app):
     threads = app.scraper.groups["threads"]
     threads.usage_window = 1
 
-    app.scale_usage_window(wider=False)
+    app.scale_usage_window(is_wider=False)
     assert threads.usage_window == 1
 
     for _ in range(8):
-        app.scale_usage_window(wider=True)
+        app.scale_usage_window(is_wider=True)
     assert threads.usage_window == 64
 
-    app.scale_usage_window(wider=False)
+    app.scale_usage_window(is_wider=False)
     assert threads.usage_window == 32
 
 
