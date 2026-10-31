@@ -187,8 +187,8 @@ def test_a_detail_view_shares_count_the_threads_it_does_not_scan(elf_path):
     assert mock.calculate_dynamic_watermark.call_count == 2
 
 
-def test_a_muted_thread_is_not_scanned_but_its_cycles_still_count(elf_path):
-    """Dropping its counter would hand its cycles to the threads still listed."""
+def test_a_thread_left_out_is_not_scanned_but_its_cycles_still_count(elf_path):
+    """A mute leaves one out, and dropping its counter would hand its cycles to the rest."""
     from zview.selection import Selection
 
     main, worker, idle = _thread(_MAIN, "main"), _thread(_WORKER, "worker"), _thread(_IDLE, "idle")
@@ -198,11 +198,11 @@ def test_a_muted_thread_is_not_scanned_but_its_cycles_still_count(elf_path):
         before={_MAIN: 0, _WORKER: 0, _IDLE: 0},
         now={_MAIN: 10, _WORKER: 30, _IDLE: 60},
     )
-    scraper.selection = Selection(muted=frozenset({("threads", "worker")}))
+    scraper.selection = Selection().excluding({("threads", "worker")})
 
     runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
 
-    # 10 of the 40 busy cycles, the muted worker's 30 included.
+    # 10 of the 40 busy cycles, the left-out worker's 30 included.
     assert set(runtimes) == {"main", "idle"}
     assert runtimes["main"].cpu == pytest.approx(25.0)
     assert mock.calculate_dynamic_watermark.call_count == 2

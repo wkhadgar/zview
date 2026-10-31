@@ -5,7 +5,6 @@
 """One target or recording, polled for the frontend attached to it."""
 
 import contextlib
-import dataclasses
 import enum
 import logging
 import queue
@@ -169,12 +168,10 @@ class Core:
         """
         With the poll stopped, reattach the target and find its rows again.
         The history starts over, since a rebuilt ELF can reassign the
-        addresses rows are kept by, and so every row is unmuted, having no
-        last info left to show. The fault of the lost target is cleared once
-        it is reattached.
+        addresses rows are kept by. The fault of the lost target is cleared
+        once it is reattached.
         """
         self.frames = FrameHistory()
-        self.select(dataclasses.replace(self.selection, muted=frozenset()))
         self.scraper.reattach()
         self.refresh()
         self.status, self.last_fault = Status.IDLE, None
@@ -192,8 +189,7 @@ class Core:
         try:
             with self._reading:
                 frame = Frame(self.scraper.read_frame())
-            # A replay's frame holds the muted rows too.
-            self.frames.add(frame, muted=self.selection.muted)
+            self.frames.add(frame)
             self._publish(frame)
             self._frames_read += 1
             self._faults = 0

@@ -88,7 +88,7 @@ class KernelObjectDetailView(BaseStateView):
             return None
 
         _, address = self.controller.detailing
-        listed = self.controller.frames.latest(self.kind.key, self.controller.selection)
+        listed = self.controller.rows(self.kind.key)
         return next((info for info in listed if info.address == address), None)
 
     def _draw_title(self, stdscr: curses.window, width: int, obj: Any) -> None:

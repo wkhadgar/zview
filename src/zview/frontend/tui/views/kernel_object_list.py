@@ -89,11 +89,7 @@ class KernelObjectListView(BaseStateView):
 
     def _rows(self) -> list[tuple[Kind, Any]]:
         """Typed, filtered and sorted rows backing the table."""
-        rows = [
-            (kind, obj)
-            for kind in self._kinds
-            for obj in self.controller.frames.latest(kind.key, self.controller.selection)
-        ]
+        rows = [(kind, obj) for kind in self._kinds for obj in self.controller.rows(kind.key)]
 
         return sorted(
             rows, key=self._sort_keys[self._current_sort_idx], reverse=self._invert_sorting
@@ -127,7 +123,7 @@ class KernelObjectListView(BaseStateView):
         pairs = self._rows()
         only = self._only_kind()
         name = "ALL" if only is None else only.label
-        muted = self.controller.selection.muted
+        muted = self.controller.muted
         # A muted object's last values would add stale numbers to the aggregate.
         read = [(kind, obj) for kind, obj in pairs if (kind.key, obj.name) not in muted]
         widths = self.compute_widths(width, [obj.name for _, obj in pairs])

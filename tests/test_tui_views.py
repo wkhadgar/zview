@@ -418,21 +418,20 @@ def test_a_build_without_stack_info_draws_no_stack_size(controller, theme):
 def test_the_bottom_bar_names_the_patterns_and_the_rows_muted_in_its_view(controller, theme):
     """A muted semaphore narrows nothing in the thread list."""
 
-    controller.core.selection = Selection(
-        exclude=((None, "main"),),
-        muted=frozenset({("threads", "logging"), ("semaphores", "gate")}),
-    )
+    controller.muted = {("threads", "logging"): None, ("semaphores", "gate"): None}
+    controller.select(Selection(exclude=((None, "main"),)))
     view = ThreadListView(controller, theme)
 
     assert view._bar_count("Threads: 1-2 of 2", 80) == (
         " Threads: 1-2 of 2 | Patterns: *, !main | 1 muted "
     )
     assert view._bar_count("Threads: 1-2 of 2", 30) == " Threads: 1-2 of 2 | Pattern… "
-    controller.core.selection = Selection()
+    controller.muted = {}
+    controller.select(Selection())
     assert view._bar_count("Threads: 1-2 of 2", 80) == " Threads: 1-2 of 2 "
 
     controller.scraper.available = {"threads": True, "semaphores": True}
-    controller.core.selection = Selection(groups=frozenset())
+    controller.select(Selection(groups=frozenset()))
     assert view._bar_count("Threads: 0-0 of 0", 80) == " Threads: 0-0 of 0 | Off: threads "
 
 
@@ -440,7 +439,7 @@ def test_the_bottom_bar_names_the_polls_the_cpu_shares_are_summed_over(controlle
     """One poll alone is the default, and says nothing."""
     from zview.selection import Selection
 
-    controller.core.selection = Selection()
+    controller.select(Selection())
     controller.scraper.available = {}
     controller.scraper.parts = {"usage_snapshot"}
     threads = controller.scraper.groups["threads"]
@@ -469,7 +468,7 @@ def test_the_all_threads_row_sums_only_the_threads_read(controller, theme):
     controller.core.frames = _frames(
         threads=[thread("main", 0x1000, 30.0), thread("worker", 0x2000, 70.0)]
     )
-    controller.core.selection = Selection(muted=frozenset({("threads", "worker")}))
+    controller.toggle_mute("threads", "worker")
     controller.min_dimensions = (14, 85)
     win = _TextWin()
 

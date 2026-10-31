@@ -36,8 +36,7 @@ def _total(values: list) -> float | None:
 
 def listed_threads(controller: Any) -> list[ThreadInfo]:
     """The threads the thread kind lists, as the selection shows them."""
-    threads = controller.frames.latest("threads", controller.selection)
-    return [t for t in threads if BY_KEY["threads"].listed(t)]
+    return [t for t in controller.rows("threads") if BY_KEY["threads"].listed(t)]
 
 
 class ThreadListView(BaseStateView):
@@ -101,7 +100,7 @@ class ThreadListView(BaseStateView):
         self._render_frame(stdscr, hint, height, width)
 
         threads = self._sorted_threads()
-        muted = self.controller.selection.muted
+        muted = self.controller.muted
         widths = self._compute_widths(width, threads)
         self._tui_thread_info.set_field_widths(*widths)
 

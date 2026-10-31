@@ -113,7 +113,7 @@ def _put(controller, **groups) -> None:
 
 def _read_only(view: KernelObjectListView, kind) -> None:
     """Read only ``kind``'s group, as a line such as ``semaphores:*`` leaves it."""
-    view.controller.core.selection = Selection(groups=frozenset({kind.key}))
+    view.controller.select(Selection(groups=frozenset({kind.key})))
 
 
 def test_rows_include_every_type(controller, theme):

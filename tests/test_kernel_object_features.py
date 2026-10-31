@@ -341,9 +341,7 @@ def test_a_group_walker_gets_only_the_selected_labels():
     from zview.selection import Selection
 
     s = _polling_scraper(semaphores={"sem_a": [0x100], "sem_b": [0x200, 0x300]})
-    s.selection = Selection(
-        exclude=((None, "sem_a"),), muted=frozenset({("semaphores", "sem_b@0x300")})
-    )
+    s.selection = Selection(exclude=((None, "sem_a"),)).excluding({("semaphores", "sem_b@0x300")})
     given: list[dict] = []
     s.groups["semaphores"].walk = lambda session, rows: given.append(rows) or {}
 

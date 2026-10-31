@@ -55,36 +55,22 @@ class FrameHistory:
         self._latest: dict[str, list] = {}
         self._latest_at: dict[str, float] = {}
         self._history: dict[tuple[str, int], deque] = {}
-        self._named: dict[tuple[str, str], object] = {}
 
-    def add(self, frame: Frame, muted: frozenset[tuple[str, str]] = frozenset()) -> None:
-        """
-        Take a frame's infos. A group the frame leaves out keeps its last ones,
-        and a ``muted`` row keeps its last info and history.
-        """
+    def add(self, frame: Frame) -> None:
+        """Take a frame's infos. A group the frame leaves out keeps its last ones."""
         with self._lock:
             self._latest.update(frame.groups)
             self._latest_at.update(dict.fromkeys(frame.groups, frame.at))
             for group, infos in frame.groups.items():
-                for info in (i for i in infos if (group, i.name) not in muted):
+                for info in infos:
                     key = (group, info.address)
                     self._history.setdefault(key, deque(maxlen=HISTORY_LENGTH)).append(info)
-                    self._named[(group, info.name)] = info
 
     def latest(self, group: str, selection: Selection | None = None) -> list:
-        """
-        The group's infos from the last frame that read it, those ``selection``
-        reads, then each row it mutes and its patterns match, as last read.
-        """
+        """The group's infos from the last frame that read it, those ``selection`` reads."""
         selection = selection or Selection()
         with self._lock:
-            infos = [i for i in self._latest.get(group, []) if selection.reads(group, i.name)]
-            muted = [
-                self._named.get(row)
-                for row in sorted(selection.muted)
-                if row[0] == group and selection.matches(*row)
-            ]
-        return infos + [info for info in muted if info is not None]
+            return [i for i in self._latest.get(group, []) if selection.reads(group, i.name)]
 
     def latest_at(self, group: str) -> float | None:
         """When the last frame that read the group was read, or ``None`` if none has."""

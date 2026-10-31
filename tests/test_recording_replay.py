@@ -198,14 +198,13 @@ def test_a_read_failing_inside_a_batch_is_recorded_in_its_place(sample_path, sam
 
 
 def test_a_declared_selection_replays_as_it_was_recorded(tmp_path):
-    """Groups, patterns and the exact muted pairs survive the header."""
+    """Groups and patterns survive the header."""
     from zview.selection import Selection
 
     selection = Selection(
         groups=frozenset({"threads", "mutexes"}),
         include=(("threads", "gate*"),),
         exclude=((None, "log*"),),
-        muted=frozenset({("threads", "z_idle_threads[0]")}),
     )
     path = tmp_path / "selected.ndjson.gz"
     recorder = RecordingScraper(FakeBackend({}), path)

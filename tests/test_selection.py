@@ -99,7 +99,6 @@ def test_only_the_patterns_that_name_no_read_row_are_reported():
         groups=frozenset({"threads", "semaphores"}),
         include=(("threads", "gate*"), ("threads", "gtae*"), (None, "lock")),
         exclude=((None, "*_old"),),
-        muted=frozenset({("semaphores", "bench_gate"), ("threads", "gone")}),
     )
     names = {
         "threads": ["gate_keeper", "main"],
@@ -111,7 +110,6 @@ def test_only_the_patterns_that_name_no_read_row_are_reported():
         "Warning: include pattern threads:gtae* matches no row",
         "Warning: include pattern lock matches no row",
         "Warning: exclude pattern *_old matches no row",
-        "Warning: muted row threads:gone matches no row",
     )
 
 
@@ -137,9 +135,9 @@ def test_a_header_without_includes_reads_every_row_by_name():
     assert selection.reads("threads", "main")
 
 
-def test_a_muted_row_is_matched_by_its_exact_name():
+def test_an_excluded_row_is_matched_by_its_exact_name():
     """The brackets of an array element would read as a glob character class."""
-    selection = Selection(muted=frozenset({("threads", "z_idle_threads[0]")}))
+    selection = Selection().excluding({("threads", "z_idle_threads[0]")})
 
     assert not selection.reads("threads", "z_idle_threads[0]")
     assert selection.reads("threads", "z_idle_threads0")

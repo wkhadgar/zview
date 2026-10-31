@@ -4,7 +4,6 @@
 
 import contextlib
 import curses
-import dataclasses
 import io
 import queue
 import time
@@ -111,6 +110,10 @@ class ZView:
         self.min_dimensions = (14, 85)
         self.stdscr: curses.window = stdscr
         self.core = core
+        # What the lists show: the session's selection, then the / line's.
+        self.patterns: Selection = core.selection
+        # Each muted row, ``(group, name)``, and its info as last read.
+        self.muted: dict[tuple[str, str], Any] = {}
         self.running = True
         self.status_message: str = ""
         # One entry per reported message, newest last.
@@ -271,6 +274,9 @@ class ZView:
 
         try:
             self._reload_and_verify()
+            # The history started over, and a muted row would never be read into it.
+            self.muted.clear()
+            self.select(self.patterns)
             self.core.start(self.core.period)
             self.transition_to(ZViewState.THREAD_LIST_VIEW)
             self.stdscr.clear()
@@ -375,16 +381,37 @@ class ZView:
 
     @property
     def selection(self) -> Selection:
-        return self.core.selection
+        return self.patterns
+
+    def select(self, selection: Selection) -> None:
+        """Show what ``selection`` reads, and read that but the muted rows."""
+        self.patterns = selection
+        self.core.select(selection.excluding(self.muted))
+
+    def rows(self, group: str) -> list:
+        """The group's rows as read, then each muted row the patterns read, as last read."""
+        muted = sorted((row, info) for row, info in self.muted.items() if info is not None)
+        return [
+            *self.frames.latest(group, self.core.selection),
+            *(info for (g, name), info in muted if g == group and self.patterns.reads(g, name)),
+        ]
 
     def toggle_mute(self, group: str, name: str) -> None:
-        """Mute the row, or unmute it if it is muted."""
-        muted = self.selection.muted ^ {(group, name)}
-        self.core.select(dataclasses.replace(self.selection, muted=muted))
+        """
+        Mute the row, keeping its last info to show, or unmute it if it is
+        muted. A muted row is no longer read.
+        """
+        row = (group, name)
+        if row in self.muted:
+            del self.muted[row]
+        else:
+            listed = self.frames.latest(group, self.core.selection)
+            self.muted[row] = next((info for info in listed if info.name == name), None)
+        self.select(self.patterns)
 
     def unmute(self, group: str, name: str) -> None:
         """Read the row again, if it is muted, as the detail view opening on it tracks it."""
-        if (group, name) in self.selection.muted:
+        if (group, name) in self.muted:
             self.toggle_mute(group, name)
 
     def _edit_prompt(self, key: int) -> None:
@@ -410,7 +437,7 @@ class ZView:
             self.report(f"Error: {e}")
             return
 
-        self.core.select(selection)
+        self.select(selection)
         for notice in self.scraper.unmatched(selection):
             self.report(notice)
 

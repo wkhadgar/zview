@@ -195,7 +195,7 @@ class BaseStateView:
             for group, available in self.controller.scraper.available.items()
             if available and reads.reads_group(group) and not selection.reads_group(group)
         ]
-        muted = sum(1 for group, _ in selection.muted if reads.reads_group(group))
+        muted = sum(1 for group, _ in self.controller.muted if reads.reads_group(group))
         notes = [
             note
             for shown, note in (

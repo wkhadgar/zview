@@ -251,8 +251,8 @@ def test_a_reload_reads_the_muted_rows_again(reloading_app):
 
     reloading_app.attempt_reconnect()
 
-    assert reloading_app.selection.muted == frozenset()
-    assert reloading_app.scraper.selection.muted == frozenset()
+    assert reloading_app.muted == {}
+    assert reloading_app.core.selection.reads("semaphores", "s")
 
 
 def test_a_replayed_row_hidden_or_muted_shows_again_after_the_replay_ends(app):
@@ -263,11 +263,13 @@ def test_a_replayed_row_hidden_or_muted_shows_again_after_the_replay_ends(app):
         return Frame({"threads": [ThreadInfo(a, 0, size, n, None) for a, n in enumerate("abc", 1)]})
 
     _feed(app, frame(512))
-    app.core.select(Selection(exclude=((None, "b"),), muted=frozenset({("threads", "c")})))
+    app.toggle_mute("threads", "c")
+    app.select(Selection(exclude=((None, "b"),)))
     _feed(app, frame(1024))
     assert [(t.name, t.stack_size) for t in listed_threads(app)] == [("a", 1024), ("c", 512)]
 
-    app.core.select(Selection())
+    app.toggle_mute("threads", "c")
+    app.select(Selection())
     assert [t.stack_size for t in listed_threads(app)] == [1024, 1024, 1024]
 
 
@@ -297,6 +299,25 @@ def test_a_recording_from_before_the_snapshot_sums_no_window(app):
     assert app.core.usage_window == 8
 
 
+def test_a_muted_row_stays_as_last_read_and_only_where_the_patterns_read(app):
+    """A replay's frames still hold it, and the patterns decide whether it is listed."""
+
+    def frame(count: int) -> Frame:
+        gate, slots = (
+            SemaphoreInfo("gate", 0x10, count, 4, ()),
+            SemaphoreInfo("slots", 0x20, count, 4, ()),
+        )
+        return Frame({"semaphores": [gate, slots]})
+
+    _feed(app, frame(1))
+    app.toggle_mute("semaphores", "gate")
+    _feed(app, frame(2))
+    assert [(s.name, s.count) for s in app.rows("semaphores")] == [("slots", 2), ("gate", 1)]
+
+    app.select(Selection(include=(("semaphores", "slots"),)))
+    assert [s.name for s in app.rows("semaphores")] == ["slots"]
+
+
 def test_a_muted_object_opens_on_its_last_read(app):
     from zview.frontend.tui.views.base import ZViewTUIAttributes
     from zview.frontend.tui.views.semaphore_detail import SemaphoreDetailView
@@ -321,17 +342,18 @@ def test_a_muted_threads_detail_reads_it_again_once_it_opens(app):
         ZViewState.THREAD_DETAIL_VIEW: ThreadDetailView(app, theme),
     }
     app.scraper.rows = {"threads": {"worker": [1]}}
-    app.core.select(Selection(muted=frozenset({("threads", "worker"), ("threads", "gone")})))
+    app.toggle_mute("threads", "worker")
+    app.toggle_mute("threads", "gone")
 
     app.detailing_thread = "gone"
     app.transition_to(ZViewState.THREAD_DETAIL_VIEW)
     assert app.state is ZViewState.THREAD_LIST_VIEW
-    assert ("threads", "gone") in app.selection.muted
+    assert ("threads", "gone") in app.muted
 
     app.detailing_thread = "worker"
     app.transition_to(ZViewState.THREAD_DETAIL_VIEW)
     assert app.state is ZViewState.THREAD_DETAIL_VIEW
-    assert app.selection.muted == frozenset({("threads", "gone")})
+    assert set(app.muted) == {("threads", "gone")}
 
 
 def test_reload_onto_a_target_running_another_image_is_fatal(reloading_app):
