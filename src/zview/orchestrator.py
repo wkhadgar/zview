@@ -20,11 +20,8 @@ from zview.selection import Selection
 
 
 class ZScraper:
-    # What the session reads, and what the view on screen needs: a frame reads
-    # what both allow. The core sets ``view`` on a live target only, dump and
-    # record leave it reading everything.
+    # What a frame reads.
     selection: Selection = Selection()
-    view: Selection = Selection()
 
     def __init__(self, meta_scraper: AbstractScraper, elf_path):
         self._m_scraper: AbstractScraper = meta_scraper
@@ -189,17 +186,9 @@ class ZScraper:
             }
         )
 
-    def _reads_group(self, group: str) -> bool:
-        """Both the session's selection and the view's read ``group``."""
-        return self.selection.reads_group(group) and self.view.reads_group(group)
-
-    def _reads(self, group: str, name: str) -> bool:
-        """Both the session's selection and the view's read the row ``name``."""
-        return self.selection.reads(group, name) and self.view.reads(group, name)
-
     def _poll_groups(self) -> dict:
         """
-        Read every group the selection and the view read, in order. A failed
+        Read every group the selection reads, in order. A failed
         read raises, and the frame is dropped.
 
         Wait queues are walked only on the ``simple`` layout; otherwise
@@ -210,7 +199,7 @@ class ZScraper:
         for group in self.groups.values():
             if not self.available[group.key]:
                 continue
-            if not self._reads_group(group.key):
+            if not self.selection.reads_group(group.key):
                 # Read again, the group seeds its baselines afresh, not from before the gap.
                 group.reset()
                 continue
@@ -219,7 +208,7 @@ class ZScraper:
             selected = {
                 label: [address]
                 for label, address in label_instances(self.rows[group.key])
-                if self._reads(group.key, label)
+                if self.selection.reads(group.key, label)
             }
             frame[group.key] = list(group.walk(session, selected).values())
 

@@ -155,9 +155,9 @@ class BaseStateView:
         """View-specific bindings, ordered most-important first."""
         return []
 
-    def reads(self) -> Selection:
-        """What the view needs read from a live target, within the session's selection."""
-        return Selection()
+    def reads(self, patterns: Selection) -> Selection:
+        """What the view reads of the rows ``patterns`` read, as the core is told to."""
+        return patterns
 
     def can_open(self) -> bool:
         return True
@@ -188,7 +188,8 @@ class BaseStateView:
         view and the polls its CPU shares are summed over, cut to ``room`` columns.
         """
         selection = self.controller.selection
-        reads = self.reads()
+        # What the view reads of every row.
+        reads = self.reads(Selection())
         window = self.controller.core.usage_window
         off = [
             group

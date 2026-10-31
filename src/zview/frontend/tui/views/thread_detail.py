@@ -76,8 +76,9 @@ class ThreadDetailView(BaseStateView):
     def row(self) -> tuple[str, str] | None:
         return "threads", self.controller.detailing_thread
 
-    def reads(self) -> Selection:
-        # Every thread's cycles are still read, so the view names only the stack to scan.
+    def reads(self, patterns: Selection) -> Selection:
+        # The patterns read the thread for it to be listed. Every thread's cycles
+        # are still read, so the view names only the stack to scan.
         return Selection(
             groups=frozenset({"threads"}),
             include=(("threads", glob.escape(self.controller.detailing_thread)),),
@@ -198,7 +199,7 @@ class ThreadDetailView(BaseStateView):
         if key in BACK_CODES:
             return ZViewState.THREAD_LIST_VIEW
         elif key in (SpecialCode.WIDER, SpecialCode.NARROWER):
-            self.controller.core.scale_usage_window(key == SpecialCode.WIDER)
+            self.controller.scale_usage_window(key == SpecialCode.WIDER)
         elif key == SpecialCode.QUIT:
             self.controller.running = False
         return None

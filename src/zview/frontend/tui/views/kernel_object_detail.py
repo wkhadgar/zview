@@ -75,8 +75,8 @@ class KernelObjectDetailView(BaseStateView):
         self._info_boxes = [TUIBox(title, "", 0) for title, _ in self._INFO_TITLES]
         self._queue = TUIWaitQueue(theme.INACTIVE)
 
-    def reads(self) -> Selection:
-        return KernelObjectListView.OBJECTS
+    def reads(self, patterns: Selection) -> Selection:
+        return KernelObjectListView.objects(patterns)
 
     def row(self) -> tuple[str, str] | None:
         obj = self._target()
@@ -194,8 +194,8 @@ class ObjectDetailView(BaseStateView):
         detailing = self.controller.detailing
         return detailing is not None and detailing[0] in self._views
 
-    def reads(self) -> Selection:
-        return self._view().reads()
+    def reads(self, patterns: Selection) -> Selection:
+        return self._view().reads(patterns)
 
     def row(self) -> tuple[str, str] | None:
         return self._view().row()

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import curses
+from dataclasses import replace
 
 from zview.backend.base import ThreadInfo, ThreadRuntime
 from zview.frontend.tui.views.base import (
@@ -78,8 +79,13 @@ class ThreadListView(BaseStateView):
             self.COLLUM_WIDTHS[4],
         )
 
-    def reads(self) -> Selection:
-        return self.THREADS
+    def reads(self, patterns: Selection) -> Selection:
+        groups = (
+            self.THREADS.groups
+            if patterns.groups is None
+            else patterns.groups & self.THREADS.groups
+        )
+        return replace(patterns, groups=groups)
 
     def _compute_widths(self, terminal_width: int, threads: list[ThreadInfo]) -> list[int]:
         return compute_flex_widths(list(self.SCHEMA.values()), terminal_width, threads)
@@ -240,7 +246,7 @@ class ThreadListView(BaseStateView):
                 self._invert_sorting = not self._invert_sorting
 
             case SpecialCode.WIDER | SpecialCode.NARROWER:
-                self.controller.core.scale_usage_window(key == SpecialCode.WIDER)
+                self.controller.scale_usage_window(key == SpecialCode.WIDER)
 
             case SpecialCode.REFRESH:
                 if not self.controller.scraper.is_live:

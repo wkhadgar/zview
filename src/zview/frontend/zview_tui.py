@@ -174,7 +174,7 @@ class ZView:
         }
 
         # The opening view is the thread list.
-        self.core.view(self.views[self.state].reads())
+        self.select(self.patterns)
 
     def _init_curses(self) -> ZViewTUIAttributes:
         """
@@ -384,9 +384,12 @@ class ZView:
         return self.patterns
 
     def select(self, selection: Selection) -> None:
-        """Show what ``selection`` reads, and read that but the muted rows."""
+        """
+        Show what ``selection`` reads, and have the core read what the open
+        view reads of it, but the muted rows.
+        """
         self.patterns = selection
-        self.core.select(selection.excluding(self.muted))
+        self.core.select(self.views[self.state].reads(selection).excluding(self.muted))
 
     def rows(self, group: str) -> list:
         """The group's rows as read, then each muted row the patterns read, as last read."""
@@ -395,6 +398,11 @@ class ZView:
             *self.frames.latest(group, self.core.selection),
             *(info for (g, name), info in muted if g == group and self.patterns.reads(g, name)),
         ]
+
+    def scale_usage_window(self, wider: bool) -> None:
+        """Double the polls the CPU and load shares are summed over, or halve them."""
+        polls = self.core.usage_window
+        self.core.usage_window = polls * 2 if wider else polls // 2
 
     def toggle_mute(self, group: str, name: str) -> None:
         """
@@ -451,7 +459,7 @@ class ZView:
         )
 
     def transition_to(self, new_state: ZViewState):
-        """Open ``new_state``'s view, reading on a live target what the view declares."""
+        """Open ``new_state``'s view, reading what it reads of the patterns."""
         if new_state not in self.views:
             self.report(f"Warning: {new_state.name} is not yet implemented.")
             return
@@ -462,16 +470,12 @@ class ZView:
         if row := view.row():
             self.unmute(*row)
 
-        # Replay backends cannot absorb polling-shape mutations without drifting
-        # against the recording. Views still transition; the display filters
-        # from the full frame on its own.
         if self.scraper.is_live:
             self.views[self.state].closed()
-            self.core.view(view.reads())
             view.opened()
-        self.purge_queue()
-
         self.state = new_state
+        self.select(self.patterns)
+        self.purge_queue()
 
     def process_events(self):
         key = self.stdscr.getch()

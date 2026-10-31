@@ -81,11 +81,6 @@ class Core:
     def usage_window(self, polls: int) -> None:
         self.scraper.groups["threads"].usage_window = max(1, min(USAGE_WINDOW_MAX, polls))
 
-    def scale_usage_window(self, wider: bool) -> None:
-        """Double the polls the CPU and load shares are summed over, or halve them."""
-        polls = self.scraper.groups["threads"].usage_window
-        self.usage_window = polls * 2 if wider else polls // 2
-
     def poll(self, period: float | None = None, frames: int | None = None) -> None:
         """
         Read one frame and put it on ``events``. With ``period``, read one
@@ -158,6 +153,14 @@ class Core:
         except RuntimeError as e:
             self._publish(Notice(f"Unable to update available threads [{e}]"))
 
+    def detail(self, group: str, address: int | None) -> None:
+        """
+        Read the object at ``address`` in full, as a detail view shows it, or
+        no object of ``group`` in full. A heap's is its chunk map.
+        """
+        with self._reading:
+            self.scraper.groups[group].detailed = address
+
     def refresh(self) -> None:
         """Find the target's rows again, and clear the baselines the next frame seeds."""
         with self._reading:
@@ -175,14 +178,6 @@ class Core:
         self.scraper.reattach()
         self.refresh()
         self.status, self.last_fault = Status.IDLE, None
-
-    def view(self, reads: Selection) -> None:
-        """
-        Read from a live target only what the frontend's open view needs. A
-        replay keeps reading all its recording holds.
-        """
-        if self.scraper.is_live:
-            self.scraper.view = reads
 
     def _read(self) -> bool:
         """Read one frame and hand it out. False once the poll must end."""

@@ -178,7 +178,7 @@ def test_a_detail_view_shares_count_the_threads_it_does_not_scan(elf_path):
         before={_MAIN: 0, _WORKER: 0, _IDLE: 0},
         now={_MAIN: 10, _WORKER: 30, _IDLE: 60},
     )
-    scraper.view = Selection(include=((None, "main"), (None, "idle")))
+    scraper.selection = Selection(include=((None, "main"), (None, "idle")))
 
     runtimes = {t.name: t.runtime for t in _one_frame(scraper)["threads"]}
 
@@ -545,12 +545,12 @@ def test_reload_elf_rebuilds_features_and_keeps_tui_settings(elf_path):
     scraper = ZScraper(meta, elf_path=elf_path)
     has_heaps = scraper.available["heaps"]
     scraper.available["heaps"] = not has_heaps
-    scraper.view = Selection(groups=frozenset({"threads"}))
+    scraper.selection = Selection(groups=frozenset({"threads"}))
 
     scraper.reload_elf()
 
     assert scraper.available["heaps"] is has_heaps
-    assert scraper.view == Selection(groups=frozenset({"threads"}))
+    assert scraper.selection == Selection(groups=frozenset({"threads"}))
 
 
 def _serving(memory: dict[int, int], reply_cap: int | None = None):

@@ -31,10 +31,10 @@ class HeapDetailView(KernelObjectDetailView):
     def opened(self) -> None:
         # The detailed heap's chunk map is read while its view is open.
         _, address = self.controller.detailing
-        self.controller.scraper.groups["heaps"].detailed = address
+        self.controller.core.detail("heaps", address)
 
     def closed(self) -> None:
-        self.controller.scraper.groups["heaps"].detailed = None
+        self.controller.core.detail("heaps", None)
 
     def render(self, stdscr: curses.window, height: int, width: int) -> None:
         stdscr.erase()

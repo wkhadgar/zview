@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import curses
+from dataclasses import replace
 
 from zview.frontend.tui.views.base import (
     DETAIL_KEYS,
@@ -74,8 +75,13 @@ class KernelObjectListView(BaseStateView):
         # Column each sort key orders by, for the header indicator.
         self._sort_columns = (0, 1, 3, 2)
 
-    def reads(self) -> Selection:
-        return self.OBJECTS
+    def reads(self, patterns: Selection) -> Selection:
+        return self.objects(patterns)
+
+    @classmethod
+    def objects(cls, patterns: Selection) -> Selection:
+        """The kernel objects ``patterns`` read, as the objects views read them."""
+        return replace(patterns, skipped=patterns.skipped | cls.OBJECTS.skipped)
 
     def _only_kind(self) -> Kind | None:
         """The kind listed while it is the only one read and available, or ``None``."""

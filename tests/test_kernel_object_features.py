@@ -224,11 +224,11 @@ def test_a_build_with_only_heaps_still_has_objects_to_show():
     assert _objects_shown(_scraper(heaps=True))
 
 
-def test_a_view_without_a_group_skips_its_reads():
+def test_a_selection_without_a_group_skips_its_reads():
     from zview.selection import Selection
 
     s = _polling_scraper(msgqs={"msgq": [0x100]})
-    s.view = Selection(groups=frozenset({"semaphores"}))
+    s.selection = Selection(groups=frozenset({"semaphores"}))
 
     assert s._poll_groups() == {}
     assert not s._m_scraper.method_calls

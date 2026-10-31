@@ -27,6 +27,12 @@ def _feed(app: ZView, frame: Frame) -> None:
     app.process_data(app.data_queue.get_nowait())
 
 
+def _open_objects(app: ZView) -> None:
+    """Open the kernel objects view, so the core reads the objects."""
+    app.state = ZViewState.KERNEL_OBJECT_LIST_VIEW
+    app.select(app.patterns)
+
+
 def test_purge_queue_clears_pending_items(app):
     for i in range(5):
         app.data_queue.put({"i": i})
@@ -101,9 +107,9 @@ def test_a_thread_detail_scans_only_the_detailed_threads_stack(app):
 
     app.transition_to(ZViewState.THREAD_DETAIL_VIEW)
 
-    assert app.scraper.view.reads("threads", "main[0]")
-    assert not app.scraper.view.reads("threads", "main0")
-    assert not app.scraper.view.reads_group("semaphores")
+    assert app.scraper.selection.reads("threads", "main[0]")
+    assert not app.scraper.selection.reads("threads", "main0")
+    assert not app.scraper.selection.reads_group("semaphores")
 
 
 def test_process_data_heaps_payload_captured(app):
@@ -247,6 +253,7 @@ def test_reload_reports_its_stderr_and_restarts_polling(reloading_app):
 
 def test_a_reload_reads_the_muted_rows_again(reloading_app):
     """The history starts over, and a muted row would never be read into it."""
+    _open_objects(reloading_app)
     reloading_app.toggle_mute("semaphores", "s")
 
     reloading_app.attempt_reconnect()
@@ -274,17 +281,18 @@ def test_a_replayed_row_hidden_or_muted_shows_again_after_the_replay_ends(app):
 
 
 def test_the_usage_window_keys_double_and_halve_it_within_its_bounds(app):
+    app.scraper.parts = {"usage_snapshot"}
     threads = app.scraper.groups["threads"]
     threads.usage_window = 1
 
-    app.core.scale_usage_window(wider=False)
+    app.scale_usage_window(wider=False)
     assert threads.usage_window == 1
 
     for _ in range(8):
-        app.core.scale_usage_window(wider=True)
+        app.scale_usage_window(wider=True)
     assert threads.usage_window == 64
 
-    app.core.scale_usage_window(wider=False)
+    app.scale_usage_window(wider=False)
     assert threads.usage_window == 32
 
 
@@ -309,6 +317,7 @@ def test_a_muted_row_stays_as_last_read_and_only_where_the_patterns_read(app):
         )
         return Frame({"semaphores": [gate, slots]})
 
+    _open_objects(app)
     _feed(app, frame(1))
     app.toggle_mute("semaphores", "gate")
     _feed(app, frame(2))
@@ -323,6 +332,7 @@ def test_a_muted_object_opens_on_its_last_read(app):
     from zview.frontend.tui.views.semaphore_detail import SemaphoreDetailView
 
     sem = SemaphoreInfo("gate", 0x10, 1, 4, ())
+    _open_objects(app)
     _feed(app, Frame({"semaphores": [sem]}))
     app.toggle_mute("semaphores", "gate")
     _feed(app, Frame({"semaphores": []}))

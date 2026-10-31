@@ -63,6 +63,8 @@ def controller(app: ZView) -> ZView:
     c.waiters_unknown = False
     c.status_message = "Running"
     c.core.frames = FrameHistory()
+    c.state = ZViewState.KERNEL_OBJECT_LIST_VIEW
+    c.select(c.patterns)
     _put(
         c,
         semaphores=[
