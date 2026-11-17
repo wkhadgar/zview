@@ -295,6 +295,29 @@ class MutexInfo:
         return MutexState.CONTENDED if self.waiters else MutexState.LOCKED
 
 
+@dataclass(frozen=True)
+class TimerInfo:
+    """Snapshot of a Zephyr ``k_timer``."""
+
+    name: str
+    address: int
+    is_running: bool
+    period_ticks: int
+    status: int
+    expiry_fn: int | None
+    expiry_fn_symbol: str | None
+    stop_fn: int | None
+    stop_fn_symbol: str | None
+    waiters: tuple[str, ...] | None = None
+    decl_site: tuple[str, int] | None = None
+    expiry_fn_site: tuple[str, int] | None = None
+    stop_fn_site: tuple[str, int] | None = None
+
+    @property
+    def is_oneshot(self) -> bool:
+        return self.period_ticks == 0
+
+
 class AbstractScraper(ABC):
     """Common interface for memory-read backends (JLink, pyOCD, GDB RSP)."""
 
