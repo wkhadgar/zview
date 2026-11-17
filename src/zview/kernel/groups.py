@@ -11,6 +11,7 @@ from zview.kernel.msgqs import Msgqs
 from zview.kernel.mutexes import Mutexes
 from zview.kernel.semaphores import Semaphores
 from zview.kernel.threads import Threads
+from zview.kernel.timers import Timers
 from zview.kernel.workqs import Workqs
 
 # A recording holds the reads in this order, so a new group goes last.
@@ -22,4 +23,5 @@ GROUPS: tuple[type[Group], ...] = (
     Msgqs,
     MemSlabs,
     Workqs,
+    Timers,
 )
