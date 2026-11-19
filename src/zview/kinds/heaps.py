@@ -25,6 +25,6 @@ class Heaps(Kind):
     def dump(self, info: HeapInfo) -> str:
         return (
             f"heap {info.name:20s} free={info.free_bytes} "
-            f"alloc={info.allocated_bytes} max={info.max_allocated_bytes} "
+            f"alloc={info.allocated_bytes} watermark={info.max_allocated_bytes} "
             f"waiters={waiters_text(info.waiters)}"
         )

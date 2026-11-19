@@ -680,8 +680,8 @@ class TUIKernelObjectInfo:
         is_muted: bool = False,
     ) -> None:
         fill, label, waiters, attr = self.row_values(kind, obj)
-        # Only a slab carries a peak, and only where the build tracks it. A
-        # zero peak sits on the track's first cell.
+        # A slab carries a peak where the build tracks it, and a heap always
+        # does. A zero peak sits on the track's first cell.
         mark = getattr(obj, "peak_percent", None)
         if mark == 0:
             mark = None

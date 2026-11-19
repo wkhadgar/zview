@@ -222,11 +222,11 @@ A queue plots its depth against its capacity, with the threads parked on it: sen
 
 ![Message queue detail](docs/assets/msgq_detail.gif)
 
-A slab plots the blocks it has out against the blocks it owns, with its peak marked on the bar if the build sets `CONFIG_MEM_SLAB_TRACE_MAX_UTILIZATION`.
+A slab plots the blocks it has out against the blocks it owns, with its watermark marked on the bar if the build sets `CONFIG_MEM_SLAB_TRACE_MAX_UTILIZATION`.
 
 ![Memory slab detail](docs/assets/mem_slab_detail.gif)
 
-A heap plots the bytes it has out against the bytes it accounts for, and opens onto a map of its allocated chunks in address order, with the threads waiting for memory beside it.
+A heap plots the bytes it has out against the bytes it accounts for, with its watermark marked on the bar, and opens onto a map of its allocated chunks in address order, with the threads waiting for memory beside it.
 
 ![Heap detail](docs/assets/heap_detail.gif)
 
@@ -331,7 +331,7 @@ Only statically declared objects are listed. `K_SEM_DEFINE`, `K_MUTEX_DEFINE`, `
 
 ZView achieves a minimal footprint by avoiding on-target processing or UART/Shell output. It utilizes the debug probe's ability to read memory through the AHB-AP (a MEM-AP on the system bus) without halting the CPU. By parsing the ELF file, ZView identifies kernel object locations, performs analysis of stack watermarks, thread CPU usages, and executes a deterministic walk of physical heap chunks to map memory fragmentation.
 
-Every value is sampled at the polling period, so state that appears and disappears between two polls is never seen: a lock taken and released, a thread that starts and exits, an allocation made and freed. The high-water marks are the exception, since a stack watermark and a slab's peak usage hold their maximum between reads. Zephyr counts a thread's cycles only as it is switched out, so a poll alone shows each thread's run at its switch: a poll faster than the run reads it idle, then the whole run at once. `--usage-window` and **+ / -** sum the CPU and load shares over more polls.
+Every value is sampled at the polling period, so state that appears and disappears between two polls is never seen: a lock taken and released, a thread that starts and exits, an allocation made and freed. The high-water marks are the exception, since the watermarks of a stack, a slab and a heap hold their maximum between reads. Zephyr counts a thread's cycles only as it is switched out, so a poll alone shows each thread's run at its switch: a poll faster than the run reads it idle, then the whole run at once. `--usage-window` and **+ / -** sum the CPU and load shares over more polls.
 
 > **Note:** The `idle` thread is implicit and only expresses itself on the used CPU %, when available.
 
