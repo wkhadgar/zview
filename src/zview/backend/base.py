@@ -105,6 +105,13 @@ class HeapInfo:
         return self.allocated_bytes + self.free_bytes
 
     @property
+    def peak_percent(self) -> float | None:
+        """The most bytes ever allocated, over the heap's size."""
+        if not self.total_bytes:
+            return None
+        return self.max_allocated_bytes / self.total_bytes * 100.0
+
+    @property
     def is_exhausted(self) -> bool:
         return self.total_bytes > 0 and self.free_bytes == 0
 

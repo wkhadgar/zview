@@ -26,5 +26,5 @@ class MemSlabs(Kind):
         peak = "-" if info.max_used is None else info.max_used
         return (
             f"slab {info.name:20s} {info.num_used}/{info.num_blocks} x {info.block_size}B "
-            f"peak={peak} waiters={waiters_text(info.waiters)}"
+            f"watermark={peak} waiters={waiters_text(info.waiters)}"
         )

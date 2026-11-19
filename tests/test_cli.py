@@ -202,7 +202,7 @@ def test_dump_prints_every_group_it_polled(monkeypatch, capsys):
 
     assert rc == 0
     assert "msgq bench_q              8/8 x 4B waiters=-" in out
-    assert "slab bench_slab           6/8 x 64B peak=7 waiters=slab_id" in out
+    assert "slab bench_slab           6/8 x 64B watermark=7 waiters=slab_id" in out
     assert "waiters=heap_waiter_id" in out
     assert (
         "wkq  bench_workq          1 pending flags=started,busy thread=bench_workq "

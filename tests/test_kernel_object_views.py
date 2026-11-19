@@ -1296,8 +1296,8 @@ def test_a_heap_with_a_thread_waiting_for_memory_reads_busy(controller, theme):
     assert attr == view._info._busy_attr
 
 
-def test_a_heap_carries_no_peak_mark(controller, theme):
-    """``max_allocated_bytes`` peaks the allocated bytes; the bar is not drawn on that axis."""
+def test_a_heap_marks_its_most_bytes_out_on_the_bar(controller, theme):
+    """The bar is allocated over the heap's size, and so is its peak."""
     view = KernelObjectListView(controller, theme)
     view._info.set_field_widths(5, 24, 22, 30)
 
@@ -1308,7 +1308,8 @@ def test_a_heap_carries_no_peak_mark(controller, theme):
 
     view._info.draw(_StubWin(), 4, 0, HEAP, _heap())
 
-    assert marks == [None]
+    # 2816 of 4096 bytes at its peak.
+    assert marks == [pytest.approx(68.75)]
 
 
 def test_enter_on_a_heap_opens_its_own_view(controller, theme):
