@@ -17,6 +17,10 @@ from zview.kernel.wait_queues import resolve_waiter_names, walk_wait_queue
 # CONFIG_SYS_HEAP_RUNTIME_STATS. max_allocated_bytes exists from v3.1.0; on
 # v3.0 this group does not resolve.
 HEAP_FIELDS: FieldTable = {
+    "heap_z_heap": (
+        (("k_heap", "heap"), ("sys_heap", "heap")),
+        (("sys_heap", "heap"),),
+    ),
     "heap_free_bytes": ((("z_heap", "free_bytes"),),),
     "heap_allocated_bytes": ((("z_heap", "allocated_bytes"),),),
     "heap_max_allocated_bytes": ((("z_heap", "max_allocated_bytes"),),),
@@ -163,7 +167,7 @@ class Heaps(Group):
         heaps: dict[str, HeapInfo] = {}
         for label, address in label_instances(addresses):
             try:
-                heap_struct = scraper.read32(address)[0]
+                heap_struct = scraper.read32(address + layout.heap_z_heap)[0]
                 free = scraper.read32(heap_struct + layout.heap_free_bytes)[0]
                 allocated = scraper.read32(heap_struct + layout.heap_allocated_bytes)[0]
                 max_allocated = scraper.read32(heap_struct + layout.heap_max_allocated_bytes)[0]

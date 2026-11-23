@@ -201,6 +201,7 @@ def _heap_session(words: dict[int, int], *, wait_q: int | None, flavor: str = "s
     from zview.kernel.layout import KernelLayout
 
     layout = KernelLayout(
+        heap_z_heap=0,
         heap_free_bytes=4,
         heap_allocated_bytes=8,
         heap_max_allocated_bytes=12,

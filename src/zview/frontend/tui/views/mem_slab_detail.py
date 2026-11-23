@@ -21,7 +21,7 @@ class MemSlabDetailView(KernelObjectDetailView):
     kind = BY_KEY["mem_slabs"]
     # The title row already carries used over capacity and the waiters, so the
     # boxes add what it cannot show.
-    _INFO_TITLES = (("Location", 2), ("Block size", 1), ("Peak", 1))
+    _INFO_TITLES = (("Location", 2), ("Block size", 1), ("Watermark", 1))
     _GRAPH_ROW = KernelObjectDetailView._INFO_ROW + KernelObjectDetailView._INFO_BOX_HEIGHT
     _UNTRACKED = "not tracked"
 

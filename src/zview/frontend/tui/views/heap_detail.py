@@ -20,7 +20,7 @@ class HeapDetailView(KernelObjectDetailView):
     """
 
     kind = BY_KEY["heaps"]
-    _INFO_TITLES = (("Location", 2), ("Free", 1), ("Used", 1))
+    _INFO_TITLES = (("Location", 2), ("Free", 1), ("Used", 1), ("Watermark", 1))
     _MAP_ROW = KernelObjectDetailView._INFO_ROW + KernelObjectDetailView._INFO_BOX_HEIGHT
     _UNCAPTURED = "chunk map not captured for this frame"
 
@@ -52,7 +52,12 @@ class HeapDetailView(KernelObjectDetailView):
             stdscr,
             self._INFO_ROW,
             width,
-            [self._site(heap), f"{heap.free_bytes} B", f"{heap.allocated_bytes} B"],
+            [
+                self._site(heap),
+                f"{heap.free_bytes} B",
+                f"{heap.allocated_bytes} B",
+                f"{heap.max_allocated_bytes} B",
+            ],
         )
 
         panels = self._panels(height, width, self._MAP_ROW)

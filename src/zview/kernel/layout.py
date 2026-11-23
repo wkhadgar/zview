@@ -35,6 +35,7 @@ class KernelLayout:
     thread_entry: int | None = None  # k_thread.entry.pEntry (function pointer)
 
     # Optional: heap stats (CONFIG_SYS_HEAP_RUNTIME_STATS)
+    heap_z_heap: int | None = None
     heap_free_bytes: int | None = None
     heap_allocated_bytes: int | None = None
     heap_max_allocated_bytes: int | None = None
