@@ -17,6 +17,7 @@ from zview.backend.base import (
     MutexInfo,
     MutexState,
     SemaphoreInfo,
+    TimerInfo,
     WorkqInfo,
 )
 from zview.frames import Frame, FrameHistory
@@ -26,6 +27,7 @@ from zview.frontend.tui.views.mem_slab_detail import MemSlabDetailView
 from zview.frontend.tui.views.msgq_detail import MsgqDetailView
 from zview.frontend.tui.views.mutex_detail import MutexDetailView
 from zview.frontend.tui.views.semaphore_detail import SemaphoreDetailView
+from zview.frontend.tui.views.timer_detail import TimerDetailView
 from zview.frontend.tui.views.workq_detail import WorkqDetailView
 from zview.frontend.zview_tui import ZView
 from zview.kinds import BY_KEY
@@ -1375,3 +1377,17 @@ def test_a_detail_view_falls_back_to_the_address(controller, theme):
     win = _render(view)
 
     assert any(text.startswith("0x2000") for _, _, text in win.writes)
+
+
+def test_the_timer_strip_marks_each_frame_running_or_stopped(controller, theme):
+    if not hasattr(curses, "ACS_S3"):
+        curses.ACS_S3 = ord("-")
+
+    timer = TimerInfo("bench_oneshot", 0x7000, False, 0, 0, None, None, None, None, waiters=())
+    _feed(controller, "timers", timer, "is_running", [False, True, True, False])
+    controller.detailing = ("timers", 0x7000)
+
+    win = _render(TimerDetailView(controller, theme))
+
+    strip_row = TimerDetailView._STRIP_ROW + 1
+    assert (strip_row, 2, "·●●·") in win.writes

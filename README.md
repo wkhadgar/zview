@@ -264,6 +264,8 @@ A work queue plots its backlog beside the items waiting to run and the threads d
 
 ![Work queue detail](docs/assets/workq_detail.gif)
 
+A timer marks each frame running or stopped on a strip, as a mutex marks its contention, and plots its unread expiries below it, beside the thread waiting on it.
+
 </details>
 
 ## Offline workflows
