@@ -44,6 +44,8 @@ CONFIG_MEM_SLAB_TRACE_MAX_UTILIZATION=y    # Enables the memory slab peak
 
 ## Installation
 
+### Terminal UI only
+
 Add this snippet to your west manifest:
 
 ```yaml
@@ -56,11 +58,38 @@ manifest:
       west-commands: scripts/west-commands.yml
 ```
 
-Then fetch it with:
+Fetch only ZView, without updating the rest of your workspace:
 
-```
+```sh
 west update zview
 ```
+
+Run `west zview` to open the TUI. This setup does not download `zview-gui`.
+
+### Plugins
+
+<details>
+<summary><strong>ZView GUI</strong></summary>
+
+To enable the GUI, add this to the `zview` project entry in your
+workspace's west manifest:
+
+```yaml
+      import:
+        name-allowlist:
+          - zview-gui
+```
+
+Fetch the plugin and install its Python dependencies:
+
+```sh
+west update
+west packages pip --install
+```
+
+Run `west zview-gui` to open the GUI for your Zephyr build.
+
+</details>
 
 ## How to Use
 
