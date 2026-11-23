@@ -483,6 +483,17 @@ def test_build_dir_may_leave_the_target_unset(monkeypatch, capsys, tmp_path, run
     assert dispatched[0].runner_target is None
 
 
+def test_dump_takes_the_pyocd_fallback_without_a_target(monkeypatch, capsys, tmp_path):
+    """A zbook build names openocd and gives pyocd no target, as live accepts."""
+    _write_build(tmp_path, runners_yaml="flash-runner: openocd\n")
+    dispatched = _capture_dispatch(monkeypatch)
+
+    rc, _, _ = _invoke(monkeypatch, capsys, ["dump", "-d", str(tmp_path)])
+
+    assert rc == 0
+    assert (dispatched[0].runner, dispatched[0].runner_target) == ("pyocd", None)
+
+
 @pytest.mark.parametrize("runner", ["gdb", "jlink"])
 def test_runner_needing_a_target_rejects_an_unset_one(monkeypatch, capsys, tmp_path, runner):
     _write_build(tmp_path, runners_yaml="flash-runner: jlink\n")
