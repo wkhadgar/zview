@@ -6,7 +6,7 @@ manifest:
   projects:
     - name: zview-gui
       remote: zano-systems
-      revision: v0.5.1
+      revision: v0.5.2
       path: modules/tools/zview-gui
       groups: [zview-gui]
       west-commands: scripts/west-commands.yml
