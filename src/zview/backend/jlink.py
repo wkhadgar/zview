@@ -12,18 +12,22 @@ from zview.backend.base import AbstractScraper, ProbeConnectFailure
 
 
 class JLinkScraper(AbstractScraper):
-    def __init__(self, target_mcu: str | None, frequency: int | None = None):
+    DEFAULT_PORT = 19020
+    def __init__(self, target_mcu: str | None, frequency: int | None = None, ip: str | None = None):
         super().__init__(target_mcu)
         self.probe = JLink()
         # pylink takes the speed in kHz, and "auto" leaves it to the J-Link.
         self.speed = frequency // 1000 if frequency else "auto"
+        self.ip_addr = ip
+        if self.ip_addr and ":" not in self.ip_addr:
+            self.ip_addr = f"{self.ip_addr}:{self.DEFAULT_PORT}"
 
     def connect(self):
         if self._is_connected:
             return
 
         try:
-            self.probe.open()
+            self.probe.open(ip_addr=self.ip_addr) if self.ip_addr else self.probe.open()
         except JLinkException as e:
             raise ProbeConnectFailure(f"Unable to open JLink probe: {e}") from e
 

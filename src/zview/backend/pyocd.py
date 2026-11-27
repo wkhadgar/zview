@@ -25,7 +25,7 @@ DEFAULT_FREQUENCY = 4_000_000
 
 
 class PyOCDScraper(AbstractScraper):
-    def __init__(self, target_mcu: str | None, frequency: int | None = None):
+    def __init__(self, target_mcu: str | None, frequency: int | None = None, ip: str | None = None):
         super().__init__(target_mcu)
         self.session: Session | None = None
         self.target: Target | None = None
