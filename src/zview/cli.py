@@ -69,6 +69,14 @@ def _add_live_target(parser: argparse.ArgumentParser) -> None:
         help="MCU descriptor for the chosen runner.",
     )
     parser.add_argument(
+        "--jlink-ip",
+        dest="jlink_ip",
+        metavar="HOST[:PORT]",
+        default=None,
+        help="Connect to a J-Link over IP (J-Link Remote Server or a networked probe) "
+            "instead of USB. Only used with '-r jlink'.",
+    )
+    parser.add_argument(
         "--frequency",
         type=convert_frequency,
         default=None,
@@ -244,6 +252,7 @@ def fill_from_build_dir(args: argparse.Namespace, warn: Callable[[str], None]) -
         runner=args.runner,
         target=args.runner_target,
         frequency=args.frequency,
+        ip=args.jlink_ip,
         warn=warn,
     )
     args.elf_file, args.runner = probe.elf, probe.runner
@@ -326,7 +335,7 @@ def _warn(message: str) -> None:
 def _probe(args) -> Target:
     """The probe ``args`` name, with the ELF it is checked against."""
     return Target(
-        args.elf_file, runner=args.runner, target=args.runner_target, frequency=args.frequency
+        args.elf_file, runner=args.runner, target=args.runner_target, frequency=args.frequency, ip=args.jlink_ip,
     )
 
 

@@ -50,6 +50,7 @@ class Target:
     runner: str | None = None
     target: str | None = None
     frequency: int | None = None
+    ip: str | None = None
     recording: str | None = None
     is_paced: bool = True
 
@@ -63,6 +64,7 @@ class Target:
         runner: str | None = None,
         target: str | None = None,
         frequency: int | None = None,
+        ip: str | None = None,
         warn: Callable[[str], None] = logger.warning,
     ) -> "Target":
         """
@@ -74,7 +76,7 @@ class Target:
         image = image_dir(build_dir, domain)
         elf = elf or str(find_elf(image))
         if runner is not None and target is not None:
-            return cls(elf, runner=runner, target=target, frequency=frequency)
+            return cls(elf, runner=runner, target=target, frequency=frequency, ip=ip)
 
         yaml_path = runners_yaml_path(image)
         try:
@@ -107,7 +109,7 @@ class Target:
             frequency,
             yaml_path,
         )
-        return cls(elf, runner=runner, target=target, frequency=frequency)
+        return cls(elf, runner=runner, target=target, frequency=frequency, ip=ip)
 
     def backend(self) -> AbstractScraper:
         """The scraper that reads this target, not yet connected."""
@@ -116,7 +118,7 @@ class Target:
         runner = self.runner if self.runner in _SCRAPERS else "pyocd"
         cls = _SCRAPERS[runner]
         if runner in CLOCKED_RUNNERS:
-            return cls(self.target, self.frequency)
+            return cls(self.target, self.frequency, ip=self.ip)
         return cls(self.target)
 
     @contextlib.contextmanager
