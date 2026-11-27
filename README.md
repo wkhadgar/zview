@@ -140,7 +140,7 @@ ZView is invoked through one of four commands. Bare `zview` with no command runs
 
 Patterns follow two rules. Excludes always win: `threads:worker*, !worker_3` skips `worker_3`. A group's own includes replace the bare ones: `*, heaps:min_*` narrows only the heaps.
 
-The groups are `threads`, `heaps`, `semaphores`, `mutexes`, `msgqs`, `mem_slabs` and `workqs`. Reading fewer rows makes each frame shorter. A recording keeps the selection it was made with, and a replay reads the same rows. On `replay` and `dump -i` the line filters only what is shown, and `replay` starts from the recording's own line. A pattern that matches no row is reported, in the message log on `live` and `replay`, and on stderr otherwise.
+The groups are `threads`, `heaps`, `semaphores`, `mutexes`, `msgqs`, `mem_slabs`, `workqs` and `timers`. Reading fewer rows makes each frame shorter. A recording keeps the selection it was made with, and a replay reads the same rows. On `replay` and `dump -i` the line filters only what is shown, and `replay` starts from the recording's own line. A pattern that matches no row is reported, in the message log on `live` and `replay`, and on stderr otherwise.
 
 ### Command-specific arguments
 
@@ -198,7 +198,7 @@ ZView acts as a TUI. Navigate with **UP** and **DOWN** arrows from the default v
   The status row is reclaimed by the poll heartbeat, so this is where messages stay readable.
 * **ENTER**: Get details for the selected thread or kernel object (hit ENTER again, or **Esc**, to return).
 * **S / I**: Sort the data and invert the sorting order.
-* **k**: Access the **Kernel Objects** view listing semaphores, mutexes, message queues, memory slabs, heaps and work queues (hit k again to return).
+* **k**: Access the **Kernel Objects** view listing semaphores, mutexes, message queues, memory slabs, heaps, work queues and timers (hit k again to return).
 * **x**: Mute the selected thread or object. It stays listed, dimmed, with its last values, and is no longer read. A muted thread's usage counter still is, since each CPU share is of every thread's cycles. **ENTER** on a muted row unmutes it, so its detail view is tracked.
 * **/**: Edit the row patterns on the line `--match` takes: `GLOB`, `GROUP:GLOB`, or `!GLOB` and `GROUP:!GLOB` to exclude, comma separated. **ENTER** applies the line, **Esc** drops it.
 * **+ / -**: In the thread views, sum the CPU and load shares over twice or half the polls, from 1 up to 64. The bottom bar shows the count above 1.
@@ -226,9 +226,10 @@ A thread carries its CPU and load graphs, building up live as it is polled.
 ### Watch your kernel objects
 
 Press **k** for every statically declared `k_sem`, `k_mutex`, `k_msgq`, `k_mem_slab`,
-`k_heap` and `k_work_q`: semaphore counts with their waiter lists, mutexes with the thread
-that holds each lock, queues with their fill level, slabs and heaps with what they have
-handed out, and work queues with the work waiting to run. The aggregate row on top sums
+`k_heap`, `k_work_q` and `k_timer`: semaphore counts with their waiter lists, mutexes with
+the thread that holds each lock, queues with their fill level, slabs and heaps with what
+they have handed out, work queues with the work waiting to run, and timers with whether
+they run and how often. The aggregate row on top sums
 the objects listed, and takes a type's own wording when **/** leaves only that type read.
 
 ![Kernel objects list](docs/assets/kernel_objects.gif)
@@ -262,6 +263,8 @@ A heap plots the bytes it has out against the bytes it accounts for, with its wa
 A work queue plots its backlog beside the items waiting to run and the threads draining it.
 
 ![Work queue detail](docs/assets/workq_detail.gif)
+
+A timer marks each frame running or stopped on a strip, as a mutex marks its contention, and plots its unread expiries below it, beside the thread waiting on it.
 
 </details>
 

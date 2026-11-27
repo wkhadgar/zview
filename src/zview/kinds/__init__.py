@@ -11,6 +11,7 @@ from zview.kinds.msgqs import Msgqs
 from zview.kinds.mutexes import Mutexes
 from zview.kinds.semaphores import Semaphores
 from zview.kinds.threads import Threads
+from zview.kinds.timers import Timers
 from zview.kinds.workqs import Workqs
 
 KINDS: tuple[Kind, ...] = (
@@ -21,5 +22,6 @@ KINDS: tuple[Kind, ...] = (
     Msgqs(),
     MemSlabs(),
     Workqs(),
+    Timers(),
 )
 BY_KEY: dict[str, Kind] = {kind.key: kind for kind in KINDS}

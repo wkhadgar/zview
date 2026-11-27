@@ -31,6 +31,7 @@ from zview.frontend.tui.views.mutex_detail import MutexDetailView
 from zview.frontend.tui.views.semaphore_detail import SemaphoreDetailView
 from zview.frontend.tui.views.thread_detail import ThreadDetailView
 from zview.frontend.tui.views.thread_list import ThreadListView
+from zview.frontend.tui.views.timer_detail import TimerDetailView
 from zview.frontend.tui.views.workq_detail import WorkqDetailView
 from zview.frontend.tui.widgets import PopupRow, TUILineEdit, TUIPopup
 from zview.selection import Selection
@@ -165,6 +166,7 @@ class ZView:
                         MsgqDetailView,
                         MemSlabDetailView,
                         WorkqDetailView,
+                        TimerDetailView,
                     )
                 ],
             ),

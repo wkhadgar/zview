@@ -75,6 +75,13 @@ class KernelLayout:
     work_queue: int | None = None
     work_flags: int | None = None
 
+    timer_timeout_node: int | None = None
+    timer_wait_q: int | None = None
+    timer_expiry_fn: int | None = None
+    timer_stop_fn: int | None = None
+    timer_period: int | None = None
+    timer_status: int | None = None
+
     # _thread_base.qnode_dlist within k_thread: the link a queued thread is
     # threaded by.
     thread_qnode: int | None = None

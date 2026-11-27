@@ -255,11 +255,15 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     if args.elf_file is None:
         parser.error(f"{args.cmd}: requires --elf-file or --build-dir.")
 
-    probe_unset = args.cmd in PROBE_COMMANDS and (args.runner is None or args.runner_target is None)
+    wants_runner = _wants_runner(args)
+    probe_unset = wants_runner and (args.runner is None or args.runner_target is None)
     if probe_unset and args.build_dir is None:
-        parser.error(f"{args.cmd}: requires --runner and --runner-target, or --build-dir.")
+        recording = {"dump": "--input FILE, or "}.get(args.cmd, "")
+        parser.error(
+            f"{args.cmd}: requires {recording}--runner and --runner-target, or --build-dir."
+        )
 
-    target_needed = args.cmd in PROBE_COMMANDS and args.runner in RUNNERS_NEEDING_TARGET
+    target_needed = wants_runner and args.runner in RUNNERS_NEEDING_TARGET
     if target_needed and args.runner_target is None:
         parser.error(f"{args.cmd}: runner '{args.runner}' requires --runner-target.")
 
@@ -279,8 +283,6 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     if args.cmd == "dump":
         if args.input and (args.runner or args.runner_target):
             parser.error("dump: --input is mutually exclusive with --runner/--runner-target.")
-        if not args.input and not (args.runner and args.runner_target):
-            parser.error("dump: requires either --input FILE or both --runner and --runner-target.")
         if args.frame < 1:
             parser.error("dump: --frame must be >= 1.")
 
