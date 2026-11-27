@@ -1,0 +1,12 @@
+manifest:
+  group-filter: [+zview-plugins]
+  remotes:
+    - name: zano-systems
+      url-base: https://github.com/zano-systems
+  projects:
+    - name: zview-gui
+      remote: zano-systems
+      revision: v0.5.2
+      path: modules/tools/zview-gui
+      groups: [zview-plugins]
+      west-commands: scripts/west-commands.yml
